@@ -29,6 +29,9 @@ public class Portfolio {
     @Column(nullable = false, precision = 20, scale = 8)
     private BigDecimal balance;
 
+    @Column(nullable = false, precision = 20, scale = 8)
+    private BigDecimal locked;
+
     @Column(nullable = false)
     private LocalDateTime lastUpdated = LocalDateTime.now();
 }
