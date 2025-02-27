@@ -47,6 +47,8 @@ dependencies {
 		implementation 'org.json:json:20210307'
 		implementation 'commons-codec:commons-codec:1.16.1'
 
+		implementation 'org.bouncycastle:bcprov-jdk15on:1.70'
+
 		// Logging
 		implementation 'org.springframework.boot:spring-boot-starter-logging'
 

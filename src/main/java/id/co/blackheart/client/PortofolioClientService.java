@@ -1,109 +1,103 @@
 package id.co.blackheart.client;
 
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import id.co.blackheart.dto.AssetDto;
-import id.co.blackheart.exception.InvalidResponseException;
-import id.co.blackheart.exception.ServiceUnavailableException;
-import id.co.blackheart.util.MapperUtil;
-import id.co.blackheart.util.TokocryptoResponseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
-import org.apache.commons.codec.digest.HmacAlgorithms;
-import org.apache.commons.codec.digest.HmacUtils;
+import org.springframework.web.client.RestTemplate;
 
-
-import java.io.IOException;
-import java.net.URI;
-import java.util.Map;
-import java.util.regex.Pattern;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.stream.Collectors;
+import java.util.zip.GZIPInputStream;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class PortofolioClientService {
 
-    @Value("${client.tokocrypto.url}")
-    private String tokocryptoClientUrl;
+    private static final String BASE_URL = "https://www.tokocrypto.com";
+    private static final String API_KEY = "4D4a187D94638cCAeea4Dd89C923b769MZfR93vHMlDqp0gTVb1S3RY5ajToqgvK";
+    private static final String SECRET_KEY = "677160Cc9657F62B88c40055F029B18FfrqqZRruKoju6eX3P7MQAgpW8ZD3K5kc";
+    private static final RestTemplate restTemplate = new RestTemplate();
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
 
-    private final RestClient restClient;
-    private final ObjectMapper objectMapper;
+    public JsonNode getSingleAsset(String queryString ,String signature) throws Exception {
 
 
+        String finalUrl = BASE_URL + "/open/v1/account/spot/asset?" + queryString + "&signature=" + signature;
 
-    public AssetDto getSingleAsset() throws IOException {
-        String apiKey = "4D4a187D94638cCAeea4Dd89C923b769MZfR93vHMlDqp0gTVb1S3RY5ajToqgvK";
-        String secretKey = "677160Cc9657F62B88c40055F029B18FfrqqZRruKoju6eX3P7MQAgpW8ZD3K5kc";
-        long timestamp = System.currentTimeMillis();
-        String recvWindow = "5000";
-        String asset = "IDR";
+        //Set headers
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-MBX-APIKEY", API_KEY);
+        headers.set("Accept", "*/*");
+        headers.set("Accept-Encoding", "gzip, deflate, br");
+        headers.set("Connection", "keep-alive");
 
-        String queryString = String.format("asset=%s&timestamp=%d&recvWindow=%s", asset, timestamp, recvWindow);
-        String signature = new HmacUtils(HmacAlgorithms.HMAC_SHA_256, secretKey).hmacHex(queryString);
+        ResponseEntity<String> response = restTemplate.getForEntity(finalUrl, String.class);
+        log.info("response : " + response.getBody());
 
-        Map<String, String> queryParams = Map.of(
-                "asset", asset,
-                "timestamp", String.valueOf(timestamp),
-                "recvWindow", recvWindow,
-                "signature", signature
-        );
-        TokocryptoResponseService responseService =  executeGet("https://www.tokocrypto.com", "/open/v1/account/spot/asset", queryParams, apiKey);
-        Map<String, Object> responseMap = MapperUtil.toMap(responseService.getData());
-        log.info("responseMap: {}", responseMap);
-        return  null;
+        return objectMapper.readTree(response.getBody());
     }
 
+    private JsonNode decodeResponse(ResponseEntity<byte[]> response) throws Exception {
+        byte[] responseBody = response.getBody();
 
-    private TokocryptoResponseService executeGet(String baseUrl, String path, Map<String, String> queryParams, String apiKey) throws IOException {
-        try {
-            ResponseEntity<String> response = restClient.get()
-                    .uri(uriBuilder -> {
-                        uriBuilder.scheme("https")
-                                .host("www.tokocrypto.com")
-                                .path(path);
-                        queryParams.forEach(uriBuilder::queryParam);
-                        return uriBuilder.build();
-                    })
-                    .header("X-MBX-APIKEY", apiKey)
-                    .header("Accept-Encoding", "gzip, deflate, br")
-                    .retrieve()
-                    .toEntity(String.class);
+        if (responseBody == null || responseBody.length == 0) {
+            throw new Exception("❌ Empty response from API");
+        }
 
-            return decodeResponse(response);
-        } catch (Exception e) {
-            throw new ServiceUnavailableException(" - Service Unavailable");
+        String responseString;
+        String contentEncoding = response.getHeaders().getFirst(HttpHeaders.CONTENT_ENCODING);
+
+        if ("gzip".equalsIgnoreCase(contentEncoding)) {
+            log.info("✅ Response is GZIP compressed. Attempting decompression...");
+            responseString = decompressGzip(responseBody);
+        } else {
+            responseString = new String(responseBody, StandardCharsets.UTF_8);
+        }
+
+        // ✅ Print API Response for Debugging
+        log.info("🔍 Decoded JSON Response: {}", responseString);
+
+        // ✅ Parse JSON using Jackson
+        return objectMapper.readTree(responseString);
+    }
+
+    private String decompressGzip(byte[] compressedData) throws Exception {
+        try (ByteArrayInputStream byteStream = new ByteArrayInputStream(compressedData);
+             GZIPInputStream gis = new GZIPInputStream(byteStream);
+             InputStreamReader reader = new InputStreamReader(gis, StandardCharsets.UTF_8);
+             BufferedReader bufferedReader = new BufferedReader(reader)) {
+
+            return bufferedReader.lines().collect(Collectors.joining());
         }
     }
 
-
-
-    private TokocryptoResponseService decodeResponse(ResponseEntity<String> response) throws IOException {
-        TokocryptoResponseService responseService = objectMapper.readValue(response.getBody(), TokocryptoResponseService.class);
-        String message = "";
-
-        if (responseService == null || !"0".equals(responseService.getCode())) {
-
-            String jsonString = response.getBody();
-            Pattern leadingPattern = Pattern.compile("^[\"']+");
-            Pattern trailingPattern = Pattern.compile("[\"']+$");
-            jsonString = leadingPattern.matcher(jsonString).replaceAll("");
-            jsonString = trailingPattern.matcher(jsonString).replaceAll("");
-
-            JsonNode jsonNode = objectMapper.readTree(jsonString);  // JSON parsing attempt
-            message = jsonNode.path("responseDesc").asText("No Valid Response");
-
-            throw new InvalidResponseException(" - " + message + " - Parameter Service");
-        }
-
-        return responseService;
+    /**
+     * ✅ Correct HMAC SHA256 Signature Generation (Same as Postman)
+     */
+    private String generateSignature(String secretKey, String queryString) throws Exception {
+        Mac sha256Hmac = Mac.getInstance("HmacSHA256");
+        SecretKeySpec secretKeySpec = new SecretKeySpec(secretKey.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        sha256Hmac.init(secretKeySpec);
+        byte[] hash = sha256Hmac.doFinal(queryString.getBytes(StandardCharsets.UTF_8));
+        return bytesToHex(hash);
     }
 
-
-
+    private static String bytesToHex(byte[] hash) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : hash) {
+            hexString.append(String.format("%02x", b));
+        }
+        return hexString.toString();
+    }
 }
