@@ -397,15 +397,5 @@ public class TechnicalIndicatorService {
         BigDecimal variance = varianceSum.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
         return BigDecimal.valueOf(Math.sqrt(variance.doubleValue()));
     }
-
-
-
-
-
-
-
-
-
-
 }
 
