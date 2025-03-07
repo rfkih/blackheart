@@ -107,9 +107,8 @@ public class BinanceWebSocketClient {
 
                featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime);
 
-               action = tradingService.determineTradeAction(marketData,featureStore);
+               tradingService.determineTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),1L,"BTCUSDT");
 
-                log.info("Price Action : " + action );
             }
 
         } catch (Exception e) {
