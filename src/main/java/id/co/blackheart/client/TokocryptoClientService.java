@@ -26,14 +26,15 @@ public class TokocryptoClientService {
         this.restTemplate = restTemplate;
     }
 
-    public TokocryptoResponse getAssetDetails(String asset, int recvWindow) {
+    public TokocryptoResponse getAssetDetails(String asset, int recvWindow, String apiKey, String apiSecret) {
         String url = UriComponentsBuilder.fromHttpUrl(BASE_URL)
                 .queryParam("asset", asset)
                 .queryParam("recvWindow", recvWindow)
+                .queryParam("apiKey", apiKey)
+                .queryParam("apiSecret", apiSecret)
                 .toUriString();
 
         HttpHeaders headers = new HttpHeaders();
-        headers.set("X-MBX-APIKEY", API_KEY);
         headers.set("Accept", "application/json");
         headers.set("Accept-Encoding", "gzip, deflate, br");
         headers.set("Connection", "keep-alive");

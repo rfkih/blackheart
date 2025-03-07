@@ -85,7 +85,6 @@ public class FeatureStore {
     @Column(name = "bollinger_middle", precision = 20, scale = 8)
     private BigDecimal bollingerMiddle;
 
-    //ADX (Average Directional Index)
     @Column(name = "adx", precision = 20, scale = 8)
     private BigDecimal adx;
 

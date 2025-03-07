@@ -19,6 +19,9 @@ public class Users {
     @Column(nullable = false, unique = true, length = 50)
     private String username;
 
+    @Column(nullable = false, length = 1)
+    private String isActive;
+
     @Column(nullable = false)
     private String apiKey;
 
@@ -27,4 +30,7 @@ public class Users {
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    @Column
+    private LocalDateTime updatedAt;
 }

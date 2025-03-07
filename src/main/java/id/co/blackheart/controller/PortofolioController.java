@@ -2,7 +2,7 @@ package id.co.blackheart.controller;
 
 
 import id.co.blackheart.dto.ResponseDto;
-import id.co.blackheart.service.PortofolioService;
+import id.co.blackheart.service.PortfolioService;
 import id.co.blackheart.util.ResponseCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,7 +21,7 @@ public class PortofolioController {
     private static final String RELOAD_SUCCESS = "Update Portofolio Success";
 
     @Autowired
-    private PortofolioService portofolioService;
+    private PortfolioService portofolioService;
 
     @GetMapping("/reload")
     public ResponseEntity<ResponseDto> portofolioUpdate() throws Exception {
