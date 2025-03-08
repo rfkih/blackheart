@@ -1,15 +1,14 @@
 package id.co.blackheart.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import id.co.blackheart.client.TokocryptoClientService;
 import id.co.blackheart.dto.MarketOrder;
+import id.co.blackheart.dto.MarketOrderResponse;
+import id.co.blackheart.dto.TokocryptoResponse;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
-import java.math.BigDecimal;
-import java.util.HashMap;
-import java.util.Map;
 
 
 @Service
@@ -17,31 +16,25 @@ import java.util.Map;
 @AllArgsConstructor
 public class TradeExecutionService {
 
+    TokocryptoClientService tokocryptoClientService;
 
-    private final String BASE_URL = "http://localhost:3000/api/place-market-order";
+    public MarketOrderResponse placeMarketOrder(MarketOrder marketOrder) {
 
-    public String placeMarketOrder(MarketOrder marketOrder) {
         try {
-            Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("symbol", marketOrder.getSymbol());
-            requestBody.put("side", marketOrder.getSide());
-            requestBody.put("amount", marketOrder.getAmount());
-            requestBody.put("isQuoteQty", marketOrder.isQuoteQty());
-            requestBody.put("apiKey", marketOrder.getApiKey());
-            requestBody.put("apiSecret", marketOrder.getApiSecret());
+            TokocryptoResponse response = tokocryptoClientService.placeMarketOrder(marketOrder);
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
+            if (response == null || response.getData() == null) {
+                log.warn("⚠No data received for Asset: {}", marketOrder.getSymbol());
+            }
 
-            // Send HTTP request
-            RestTemplate restTemplate = new RestTemplate();
-            HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
-            ResponseEntity<String> response = restTemplate.exchange(BASE_URL, HttpMethod.POST, request, String.class);
+            ObjectMapper objectMapper = new ObjectMapper();
+            MarketOrderResponse marketOrderResponse = objectMapper.treeToValue(response.getData(), MarketOrderResponse.class);
 
-            return response.getBody();
-        } catch (Exception e) {
-            e.printStackTrace();
-            return "❌ Error placing market order: " + e.getMessage();
+            log.info(" marketOrder : " + marketOrderResponse);
+
+            return marketOrderResponse;
+        }catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 }

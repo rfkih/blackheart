@@ -1,35 +1,31 @@
 package id.co.blackheart.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 
-@JsonIgnoreProperties(ignoreUnknown = true)
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
 public class TokocryptoResponse {
+
+    @JsonProperty("code")
     private int code;
+
+    @JsonProperty("msg")
     private String msg;
-    private AssetData data;
+
+    @JsonProperty("data")
+    private JsonNode data;
+
+    @JsonProperty("timestamp")
     private long timestamp;
-
-    // Getters and Setters
-    public int getCode() { return code; }
-    public void setCode(int code) { this.code = code; }
-    public String getMsg() { return msg; }
-    public void setMsg(String msg) { this.msg = msg; }
-    public AssetData getData() { return data; }
-    public void setData(AssetData data) { this.data = data; }
-    public long getTimestamp() { return timestamp; }
-    public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
-
-    @Override
-    public String toString() {
-        return "TokocryptoResponse{" +
-                "code=" + code +
-                ", msg='" + msg + '\'' +
-                ", data=" + data +
-                ", timestamp=" + timestamp +
-                '}';
-    }
 }
+
 
 
 

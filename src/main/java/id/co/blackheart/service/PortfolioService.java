@@ -1,6 +1,8 @@
 package id.co.blackheart.service;
 
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.client.TokocryptoClientService;
 import id.co.blackheart.dto.AssetData;
 import id.co.blackheart.dto.TokocryptoResponse;
@@ -33,7 +35,7 @@ public class PortfolioService {
         log.info("Updating portfolio...");
 
         String recvWindow = "5000";
-        String assets = "IDR,BTC"; // Comma-separated asset list
+        String assets = "IDR,BTC,USDT"; // Comma-separated asset list
 
         List<Users> userList = usersRepository.findByIsActive("1");
 
@@ -54,7 +56,8 @@ public class PortfolioService {
                         continue;
                     }
 
-                    AssetData assetData = response.getData();
+                    ObjectMapper objectMapper = new ObjectMapper();
+                    AssetData assetData = objectMapper.treeToValue(response.getData(), AssetData.class);
                     BigDecimal freeBalance = new BigDecimal(assetData.getFree());
                     BigDecimal lockedBalance = new BigDecimal(assetData.getLocked());
 

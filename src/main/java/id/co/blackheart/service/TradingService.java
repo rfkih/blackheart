@@ -152,6 +152,7 @@ public class TradingService {
             Trades newTrade = new Trades();
             newTrade.setUserId(userId);
             newTrade.setAsset(asset);
+            newTrade.setOrderId(1234L);
             newTrade.setAction("BUY");
             newTrade.setEntryPrice(marketData.getClosePrice());
             newTrade.setPositionSize(decision.getPositionSize());
