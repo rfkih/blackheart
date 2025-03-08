@@ -2,7 +2,8 @@ package id.co.blackheart.client;
 
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import id.co.blackheart.dto.MarketOrder;
+import id.co.blackheart.dto.MarketOrderRequest;
+import id.co.blackheart.dto.OrderDetailRequest;
 import id.co.blackheart.dto.TokocryptoResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -23,6 +24,7 @@ public class TokocryptoClientService {
     private static final String BASE_URL_GET_ASSET = "http://localhost:3000/api/get-asset";
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final String BASE_URL_ORDER = "http://localhost:3000/api/place-market-order";
+    private static final String BASE_URL_ORDER_DETAIL = "http://localhost:3000/api/order-detail";
 
 
     public TokocryptoClientService(RestTemplate restTemplate) {
@@ -68,7 +70,7 @@ public class TokocryptoClientService {
     }
 
 
-    public TokocryptoResponse placeMarketOrder(MarketOrder marketOrder) {
+    public TokocryptoResponse placeMarketOrder(MarketOrderRequest marketOrder) {
 
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("symbol", marketOrder.getSymbol());
@@ -92,6 +94,29 @@ public class TokocryptoClientService {
 
         return decodeResponse(response);
 
+    }
+
+    /**
+     * Sends a POST request to Tokocrypto API with the request body.
+     */
+    public TokocryptoResponse orderDetail(OrderDetailRequest orderDetailRequest) {
+        try {
+            // Set headers
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("X-MBX-APIKEY", orderDetailRequest.getApiKey());
+
+            // Create HTTP request with body
+            HttpEntity<OrderDetailRequest> requestEntity = new HttpEntity<>(orderDetailRequest, headers);
+
+            // Send HTTP POST request
+            ResponseEntity<String> response = restTemplate.exchange(BASE_URL_ORDER_DETAIL, HttpMethod.POST, requestEntity, String.class);
+
+            // Deserialize response
+            return decodeResponse(response);
+        } catch (Exception e) {
+            throw new RuntimeException("❌ Error fetching order details: " + e.getMessage(), e);
+        }
     }
 }
 

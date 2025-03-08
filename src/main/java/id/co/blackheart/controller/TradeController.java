@@ -1,9 +1,7 @@
 package id.co.blackheart.controller;
 
 
-import id.co.blackheart.dto.MarketOrder;
-import id.co.blackheart.dto.MarketOrderResponse;
-import id.co.blackheart.dto.ResponseDto;
+import id.co.blackheart.dto.*;
 import id.co.blackheart.service.TradeExecutionService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -26,8 +24,17 @@ public class TradeController {
     private TradeExecutionService tradeExecutionService;
 
     @PostMapping("/place-market-order")
-    public ResponseEntity<ResponseDto> placeMarketOrder(@RequestBody MarketOrder marketOrder) {
+    public ResponseEntity<ResponseDto> placeMarketOrder(@RequestBody MarketOrderRequest marketOrder) {
         MarketOrderResponse response = tradeExecutionService.placeMarketOrder(marketOrder);
+        return ResponseEntity.ok().body(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(response)
+                .build());
+    }
+
+    @PostMapping("/order-detail")
+    public ResponseEntity<ResponseDto> orderDetail(@RequestBody OrderDetailRequest orderDetailRequest) {
+        OrderDetailResponse response = tradeExecutionService.getOrderDetail(orderDetailRequest);
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(response)

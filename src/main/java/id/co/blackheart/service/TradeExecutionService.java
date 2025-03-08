@@ -2,9 +2,7 @@ package id.co.blackheart.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.client.TokocryptoClientService;
-import id.co.blackheart.dto.MarketOrder;
-import id.co.blackheart.dto.MarketOrderResponse;
-import id.co.blackheart.dto.TokocryptoResponse;
+import id.co.blackheart.dto.*;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,7 +16,7 @@ public class TradeExecutionService {
 
     TokocryptoClientService tokocryptoClientService;
 
-    public MarketOrderResponse placeMarketOrder(MarketOrder marketOrder) {
+    public MarketOrderResponse placeMarketOrder(MarketOrderRequest marketOrder) {
 
         try {
             TokocryptoResponse response = tokocryptoClientService.placeMarketOrder(marketOrder);
@@ -30,9 +28,25 @@ public class TradeExecutionService {
             ObjectMapper objectMapper = new ObjectMapper();
             MarketOrderResponse marketOrderResponse = objectMapper.treeToValue(response.getData(), MarketOrderResponse.class);
 
-            log.info(" marketOrder : " + marketOrderResponse);
-
             return marketOrderResponse;
+        }catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public OrderDetailResponse getOrderDetail(OrderDetailRequest orderDetailRequest) {
+        try {
+            TokocryptoResponse response = tokocryptoClientService.orderDetail(orderDetailRequest);
+
+            log.info("orderDetail : " + response);
+
+            if (response == null || response.getData() == null) {
+                log.warn("⚠No data received for ID Detail : {}", orderDetailRequest.getOrderId());
+            }
+
+            ObjectMapper objectMapper = new ObjectMapper();
+            OrderDetailResponse orderDetailResponse = objectMapper.treeToValue(response.getData(), OrderDetailResponse.class);
+            return orderDetailResponse;
         }catch (Exception e) {
             throw new RuntimeException(e);
         }
