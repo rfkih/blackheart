@@ -46,7 +46,8 @@ public class TechnicalIndicatorService {
         featureData.setTimestamp(timestamp);
         featureData.setPrice(price);
 
-        featureData.setSma(calculateSMA(historicalData, 14));
+        featureData.setSma14(calculateSMA(historicalData, 14));
+        featureData.setSma50(calculateSMA(historicalData, 50));
         featureData.setWma(calculateWMA(historicalData, 14));
         featureData.setMomentum(calculateMomentum(historicalData, 10));
         featureData.setStochK(calculateStochasticK(historicalData, 14));

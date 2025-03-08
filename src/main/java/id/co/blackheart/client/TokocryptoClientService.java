@@ -17,8 +17,7 @@ import java.io.IOException;
 public class TokocryptoClientService {
 
     private final RestTemplate restTemplate;
-    private static final String BASE_URL = "http://localhost:3000/get-asset";
-    private static final String API_KEY = "your_api_key_here";
+    private static final String BASE_URL = "http://localhost:3000/api/get-asset";
     private final ObjectMapper objectMapper = new ObjectMapper();
 
 

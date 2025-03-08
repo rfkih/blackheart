@@ -10,12 +10,10 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
-import reactor.core.publisher.Mono;
 import org.json.JSONObject;
 
 import java.math.BigDecimal;
 import java.net.URI;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -88,8 +86,6 @@ public class BinanceWebSocketClient {
             boolean isFinal = kline.getBoolean("x");
 
             if (isFinal) {
-
-
                 marketData.setSymbol(symbol);
                 marketData.setInterval("1m");
                 marketData.setStartTime(LocalDateTime.ofInstant(startTime, ZoneId.of("UTC")));
@@ -100,17 +96,12 @@ public class BinanceWebSocketClient {
                 marketData.setLowPrice(BigDecimal.valueOf(lowPrice));
                 marketData.setVolume(BigDecimal.valueOf(volume));
                 marketData.setTradeCount(tradeCount);
-
                 marketDataRepository.save(marketData);
                 log.info("Saved finalized candlestick: {}", marketData);
 
-
                featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime);
-
-               tradingService.determineTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),1L,"BTCUSDT");
-
+               tradingService.trendFollwoingTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),1L,"BTCUSDT");
             }
-
         } catch (Exception e) {
             log.error("Error parsing WebSocket message: {}", message, e);
         }

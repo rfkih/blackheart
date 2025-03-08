@@ -23,27 +23,36 @@ public class Trades {
     private Long userId; // Link to the user making the trade
 
     @Column(nullable = false)
+    private Long orderId;
+
+    @Column(nullable = false)
     private String asset; // BTC, ETH, etc.
 
     @Column(nullable = false)
     private String action; // BUY or SELL
 
-    @Column(nullable = false, precision = 20, scale = 8)
-    private BigDecimal positionSize; // Amount traded
+    @Column(nullable = false, precision = 20, scale = 12)
+    private BigDecimal positionSize;
 
-    @Column(nullable = false, precision = 20, scale = 8)
+    @Column(nullable = false, precision = 20, scale = 12)
     private BigDecimal entryPrice; // Price at trade execution
 
-    @Column(nullable = false, precision = 20, scale = 8)
+    @Column(precision = 20, scale = 12)
+    private BigDecimal exitPrice; // Price at exit trade
+
+    @Column(nullable = false, precision = 20, scale = 12)
     private BigDecimal stopLossPrice; // Stop-loss level
 
-    @Column(nullable = false, precision = 20, scale = 8)
+    @Column(nullable = false, precision = 20, scale = 12)
     private BigDecimal takeProfitPrice; // Take-profit level
 
     @Column(nullable = false)
-    private LocalDateTime tradeTime; // Timestamp when trade was executed
+    private String isActive; // Indicates if trade is still open
 
     @Column(nullable = false)
-    private String isActive; // Indicates if trade is still open
+    private LocalDateTime entryTime; // Timestamp when trade was executed
+
+    @Column
+    private LocalDateTime exitTime; // Timestamp when trade was ended
 }
 
