@@ -36,17 +36,17 @@ public class TradeExecutionService {
 
     public OrderDetailResponse getOrderDetail(OrderDetailRequest orderDetailRequest) {
         try {
+            ObjectMapper objectMapper = new ObjectMapper();
             TokocryptoResponse response = tokocryptoClientService.orderDetail(orderDetailRequest);
 
             log.info("orderDetail : " + response);
 
             if (response == null || response.getData() == null) {
                 log.warn("⚠No data received for ID Detail : {}", orderDetailRequest.getOrderId());
+                throw new Exception("No data Received for ID Detail :" + orderDetailRequest.getOrderId());
             }
 
-            ObjectMapper objectMapper = new ObjectMapper();
-            OrderDetailResponse orderDetailResponse = objectMapper.treeToValue(response.getData(), OrderDetailResponse.class);
-            return orderDetailResponse;
+            return objectMapper.treeToValue(response.getData(), OrderDetailResponse.class);
         }catch (Exception e) {
             throw new RuntimeException(e);
         }
