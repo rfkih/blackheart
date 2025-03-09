@@ -106,7 +106,8 @@ public class BinanceWebSocketClient {
                 List<Users> userList = usersRepository.findByIsActive("1");
 
                 for (Users user : userList) {
-                    tradingService.trendFollwoingTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
+                    tradingService.trendFollwoingLongTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
+                    tradingService.trendFollowingShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
                 }
 
             }

@@ -23,6 +23,9 @@ public class Trades {
     private Long userId; // Link to the user making the trade
 
     @Column(nullable = false)
+    private String tradePlan; // Trade Plan
+
+    @Column(nullable = false)
     private Long entryOrderId;
 
     @Column
