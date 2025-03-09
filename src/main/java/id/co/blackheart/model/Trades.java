@@ -23,7 +23,10 @@ public class Trades {
     private Long userId; // Link to the user making the trade
 
     @Column(nullable = false)
-    private Long orderId;
+    private Long entryOrderId;
+
+    @Column
+    private Long exitOrderId;
 
     @Column(nullable = false)
     private String asset; // BTC, ETH, etc.
@@ -32,7 +35,16 @@ public class Trades {
     private String action; // BUY or SELL
 
     @Column(nullable = false, precision = 20, scale = 12)
-    private BigDecimal positionSize;
+    private BigDecimal entryExecutedQty;
+
+    @Column(nullable = false, precision = 20, scale = 12)
+    private BigDecimal entryExecutedQuoteQty;
+
+    @Column(precision = 20, scale = 12)
+    private BigDecimal exitExecutedQty;
+
+    @Column(precision = 20, scale = 12)
+    private BigDecimal exitExecutedQuoteQty;
 
     @Column(nullable = false, precision = 20, scale = 12)
     private BigDecimal entryPrice; // Price at trade execution

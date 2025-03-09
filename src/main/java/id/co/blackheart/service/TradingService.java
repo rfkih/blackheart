@@ -1,10 +1,9 @@
 package id.co.blackheart.service;
 
 
-import id.co.blackheart.dto.TradeDecision;
-import id.co.blackheart.model.FeatureStore;
-import id.co.blackheart.model.MarketData;
-import id.co.blackheart.model.Trades;
+import id.co.blackheart.dto.*;
+import id.co.blackheart.model.*;
+import id.co.blackheart.repository.PortfolioRepository;
 import id.co.blackheart.repository.TradesRepository;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,13 +19,15 @@ import java.util.Optional;
 @AllArgsConstructor
 public class TradingService {
     private final TradesRepository tradesRepository;
+    private final PortfolioRepository portfolioRepository;
+    private final TradeExecutionService tradeExecutionService;
 
     /**
      * Determines trade action based on market data and strategy.
      */
     public void vWapTradeAction(MarketData marketData, FeatureStore featureStore,
                                 BigDecimal accountBalance, BigDecimal riskPercentage,
-                                Long userId, String asset) {
+                                Users user, String asset) {
 
         if (marketData == null || featureStore == null) {
             log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
@@ -36,26 +37,72 @@ public class TradingService {
         BigDecimal closePrice = marketData.getClosePrice();
 
         // Fetch Active Trade (if any)
-        Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActive(userId, asset, "1");
+        Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActive(user.getId(), asset, "1");
 
         TradeDecision decision = vWapTradeDecision(closePrice, featureStore, accountBalance, riskPercentage,
                 marketData.getHighPrice(), activeTradeOpt, asset);
 
         // Execute Trade Action
         if ("BUY".equals(decision.getAction())) {
+            MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
+                    .symbol("BTC_USDT")
+                    .side(0)
+                    .amount(BigDecimal.valueOf(7))
+                    .isQuoteQty(true)
+                    .apiKey(user.getApiKey())
+                    .apiSecret(user.getApiSecret())
+                    .build();
+
+            MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
+            OrderDetailRequest orderDetailRequest= OrderDetailRequest.builder()
+                    .orderId(String.valueOf(marketOrderResponse.getOrderId()))
+                    .recvWindow(5000)
+                    .apiKey(user.getApiKey())
+                    .apiSecret(user.getApiSecret()).build();
+
+            OrderDetailResponse orderDetailResponse= tradeExecutionService.getOrderDetail(orderDetailRequest);
+
             Trades newTrade = new Trades();
-             newTrade.setUserId(userId);
-             newTrade.setAsset(asset);
-             newTrade.setAction("BUY");
-             newTrade.setPositionSize(decision.getPositionSize());
-             newTrade.setStopLossPrice(decision.getStopLossPrice());
-             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-             newTrade.setIsActive("1");
+            newTrade.setUserId(user.getId());
+            newTrade.setAsset(asset);
+            newTrade.setEntryOrderId(marketOrderResponse.getOrderId());
+            newTrade.setAction("BUY");
+            newTrade.setEntryPrice(new BigDecimal(orderDetailResponse.getExecutedPrice()));
+            newTrade.setEntryExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
+            newTrade.setEntryExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
+            newTrade.setStopLossPrice(decision.getStopLossPrice());
+            newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
+            newTrade.setIsActive("1");
+            newTrade.setEntryTime(LocalDateTime.now());
             tradesRepository.save(newTrade);
             log.info("✅ BUY order placed for {} at {}", asset, closePrice);
         } else if ("SELL".equals(decision.getAction())) {
             activeTradeOpt.ifPresent(trade -> {
+                MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
+                        .symbol("BTC_USDT")
+                        .side(1)
+                        .amount(trade.getEntryExecutedQty())
+                        .isQuoteQty(false)
+                        .apiKey(user.getApiKey())
+                        .apiSecret(user.getApiSecret())
+                        .build();
+
+                MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
+
+                OrderDetailRequest orderDetailRequest= OrderDetailRequest.builder()
+                        .orderId(String.valueOf(marketOrderResponse.getOrderId()))
+                        .recvWindow(5000)
+                        .apiKey(user.getApiKey())
+                        .apiSecret(user.getApiSecret()).build();
+
+                OrderDetailResponse orderDetailResponse= tradeExecutionService.getOrderDetail(orderDetailRequest);
+
+                trade.setExitOrderId(marketOrderResponse.getOrderId());
+                trade.setExitExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
+                trade.setExitExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
                 trade.setIsActive("0");
+                trade.setExitTime(LocalDateTime.now());
+                trade.setExitPrice(marketData.getClosePrice());
                 tradesRepository.save(trade);
                 log.info("❌ SELL order executed. Trade closed for {} at {}", asset, closePrice);
             });
@@ -73,9 +120,9 @@ public class TradingService {
                                             String asset) {
 
         // Risk Parameters
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.02);  // 2% stop-loss
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.05); // 5% take-profit
-        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.02); // 2% trailing stop
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.01);  // 2% stop-loss
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.03); // 5% take-profit
+        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.01); // 2% trailing stop
 
         // Compute Stop-Loss and Take-Profit Levels
         BigDecimal stopLossPrice = closePrice.multiply(BigDecimal.ONE.subtract(stopLossThreshold));
@@ -104,7 +151,7 @@ public class TradingService {
                     closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0) {
                 return TradeDecision.builder()
                         .action("SELL")
-                        .positionSize(activeTrade.getPositionSize())
+                        .positionSize(activeTrade.getEntryExecutedQty())
                         .stopLossPrice(activeTrade.getStopLossPrice())
                         .takeProfitPrice(activeTrade.getTakeProfitPrice())
                         .build();
@@ -132,30 +179,53 @@ public class TradingService {
 
     public void trendFollwoingTradeAction(MarketData marketData, FeatureStore featureStore,
                                           BigDecimal accountBalance, BigDecimal riskPercentage,
-                                          Long userId, String asset) {
+                                          Users user, String asset) {
 
         if (marketData == null || featureStore == null) {
             log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
             return;
         }
 
+        Optional<Portfolio> usdAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "USDT");
+
+        if (!usdAsset.isPresent() || usdAsset.get().getBalance().compareTo(BigDecimal.ZERO) <= 0) {
+            log.info("No USDT Asset Found, cannot making trade action.");
+        }
+
         BigDecimal closePrice = marketData.getClosePrice();
 
-        // Fetch Active Trade (if any)
-        Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActive(userId, asset, "1");
+        Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActive(user.getId(), asset, "1");
 
         TradeDecision decision = trendFollowingTradeDecision(marketData, featureStore, accountBalance, riskPercentage,
                 activeTradeOpt, asset);
 
-        // Execute Trade Action
         if ("BUY".equals(decision.getAction())) {
+            MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
+                    .symbol("BTC_USDT")
+                    .side(0)
+                    .amount(BigDecimal.valueOf(7))
+                    .isQuoteQty(true)
+                    .apiKey(user.getApiKey())
+                    .apiSecret(user.getApiSecret())
+                    .build();
+
+            MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
+            OrderDetailRequest orderDetailRequest= OrderDetailRequest.builder()
+                    .orderId(String.valueOf(marketOrderResponse.getOrderId()))
+                    .recvWindow(5000)
+                    .apiKey(user.getApiKey())
+                    .apiSecret(user.getApiSecret()).build();
+
+            OrderDetailResponse orderDetailResponse= tradeExecutionService.getOrderDetail(orderDetailRequest);
+
             Trades newTrade = new Trades();
-            newTrade.setUserId(userId);
+            newTrade.setUserId(user.getId());
             newTrade.setAsset(asset);
-            newTrade.setOrderId(1234L);
+            newTrade.setEntryOrderId(marketOrderResponse.getOrderId());
             newTrade.setAction("BUY");
-            newTrade.setEntryPrice(marketData.getClosePrice());
-            newTrade.setPositionSize(decision.getPositionSize());
+            newTrade.setEntryPrice(new BigDecimal(orderDetailResponse.getExecutedPrice()));
+            newTrade.setEntryExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
+            newTrade.setEntryExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
             newTrade.setStopLossPrice(decision.getStopLossPrice());
             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
             newTrade.setIsActive("1");
@@ -163,7 +233,30 @@ public class TradingService {
             tradesRepository.save(newTrade);
             log.info("✅ BUY order placed for {} at {}", asset, closePrice);
         } else if ("SELL".equals(decision.getAction())) {
+
             activeTradeOpt.ifPresent(trade -> {
+                MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
+                        .symbol("BTC_USDT")
+                        .side(1)
+                        .amount(trade.getEntryExecutedQty())
+                        .isQuoteQty(false)
+                        .apiKey(user.getApiKey())
+                        .apiSecret(user.getApiSecret())
+                        .build();
+
+                MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
+
+                OrderDetailRequest orderDetailRequest= OrderDetailRequest.builder()
+                        .orderId(String.valueOf(marketOrderResponse.getOrderId()))
+                        .recvWindow(5000)
+                        .apiKey(user.getApiKey())
+                        .apiSecret(user.getApiSecret()).build();
+
+                OrderDetailResponse orderDetailResponse= tradeExecutionService.getOrderDetail(orderDetailRequest);
+
+                trade.setExitOrderId(marketOrderResponse.getOrderId());
+                trade.setExitExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
+                trade.setExitExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
                 trade.setIsActive("0");
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(marketData.getClosePrice());
@@ -188,9 +281,9 @@ public class TradingService {
         BigDecimal sma50 = featureStore.getSma50();
 
         // Risk Parameters
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.02);  // 2% stop-loss
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.04); // 4% take-profit
-        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.02); // 2% trailing stop
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.01);  // 1% stop-loss
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.02); // 2% take-profit
+        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.01); // 1% trailing stop
 
         // Compute Stop-Loss and Take-Profit Levels
         BigDecimal stopLossPrice = closePrice.multiply(BigDecimal.ONE.subtract(stopLossThreshold));
@@ -218,7 +311,7 @@ public class TradingService {
                     closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0) {
                 return TradeDecision.builder()
                         .action("SELL")
-                        .positionSize(activeTrade.getPositionSize())
+                        .positionSize(activeTrade.getEntryExecutedQty())
                         .stopLossPrice(activeTrade.getStopLossPrice())
                         .takeProfitPrice(activeTrade.getTakeProfitPrice())
                         .build();

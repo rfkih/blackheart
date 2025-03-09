@@ -1,6 +1,7 @@
 package id.co.blackheart.dto;
 
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -9,6 +10,7 @@ import java.io.Serializable;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
+@Builder
 public class OrderDetailRequest implements Serializable {
     private String orderId;
     private Integer recvWindow;

@@ -3,7 +3,9 @@ package id.co.blackheart.stream;
 
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
+import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.TechnicalIndicatorService;
 import id.co.blackheart.service.TradingService;
 import lombok.AllArgsConstructor;
@@ -17,6 +19,7 @@ import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -30,6 +33,7 @@ public class BinanceWebSocketClient {
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final TechnicalIndicatorService technicalIndicatorService;
     private final TradingService tradingService;
+    private final UsersRepository usersRepository;
 
 
     public void connect() {
@@ -67,9 +71,8 @@ public class BinanceWebSocketClient {
             String symbol = "BTCUSDT";
             JSONObject json = new JSONObject(message);
             JSONObject kline = json.getJSONObject("k");
-            FeatureStore featureStore = new FeatureStore();
+            FeatureStore featureStore;
             MarketData marketData = new MarketData();
-            String action = "";
 
             Instant startTime = Instant.ofEpochMilli(kline.getLong("t"));  // Kline start time
             Instant endTime = Instant.ofEpochMilli(kline.getLong("T"));    // Kline end time
@@ -100,7 +103,12 @@ public class BinanceWebSocketClient {
                 log.info("Saved finalized candlestick: {}", marketData);
 
                featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime);
-               tradingService.trendFollwoingTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),1L,"BTCUSDT");
+                List<Users> userList = usersRepository.findByIsActive("1");
+
+                for (Users user : userList) {
+                    tradingService.trendFollwoingTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
+                }
+
             }
         } catch (Exception e) {
             log.error("Error parsing WebSocket message: {}", message, e);
