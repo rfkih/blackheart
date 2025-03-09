@@ -26,10 +26,10 @@ public class TradingService {
     /**
      * Determines trade action based on market data and strategy.
      */
-    public void vWapTradeAction(MarketData marketData, FeatureStore featureStore,
+    public void vWapLongTradeAction(MarketData marketData, FeatureStore featureStore,
                                 BigDecimal accountBalance, BigDecimal riskPercentage,
                                 Users user, String asset) {
-        String tradePlan = "vWap";
+        String tradePlan = "vWapLong";
         if (marketData == null || featureStore == null) {
             log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
             return;
@@ -40,7 +40,7 @@ public class TradingService {
         // Fetch Active Trade (if any)
         Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActiveAndTradePlanAndAction(user.getId(), asset, "1", tradePlan, "LONG");
 
-        TradeDecision decision = vWapTradeDecision(closePrice, featureStore, accountBalance, riskPercentage,
+        TradeDecision decision = vWapLongTradeDecision(closePrice, featureStore, accountBalance, riskPercentage,
                 marketData.getHighPrice(), activeTradeOpt, asset);
 
         // Execute Trade Action
@@ -56,15 +56,15 @@ public class TradingService {
     /**
      * Determines whether to BUY, SELL, or HOLD.
      */
-    private TradeDecision vWapTradeDecision(BigDecimal closePrice, FeatureStore featureStore,
-                                            BigDecimal accountBalance, BigDecimal riskPercentage,
-                                            BigDecimal lastHighestPrice, Optional<Trades> activeTradeOpt,
-                                            String asset) {
+    private TradeDecision vWapLongTradeDecision(BigDecimal closePrice, FeatureStore featureStore,
+                                                BigDecimal accountBalance, BigDecimal riskPercentage,
+                                                BigDecimal lastHighestPrice, Optional<Trades> activeTradeOpt,
+                                                String asset) {
 
         // Risk Parameters
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.002);  // 2% stop-loss
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.003); // 5% take-profit
-        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.002); // 2% trailing stop
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.002);
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.003);
+        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.002);
 
         // Compute Stop-Loss and Take-Profit Levels
         BigDecimal stopLossPrice = closePrice.multiply(BigDecimal.ONE.subtract(stopLossThreshold));
@@ -117,6 +117,97 @@ public class TradingService {
                 .takeProfitPrice(null)
                 .build();
     }
+
+    public void vwapShortTradeAction(MarketData marketData, FeatureStore featureStore,
+                                     BigDecimal accountBalance, BigDecimal riskPercentage,
+                                     Users user, String asset) {
+        String tradePlan = "vWapShort";
+        if (marketData == null || featureStore == null) {
+            log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
+            return;
+        }
+
+        BigDecimal closePrice = marketData.getClosePrice();
+
+        // Fetch Active Trade (if any)
+        Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActiveAndTradePlanAndAction(
+                user.getId(), asset, "1", tradePlan, "SHORT");
+
+        TradeDecision decision = vwapShortTradeDecision(closePrice, featureStore, accountBalance, riskPercentage,
+                marketData.getLowPrice(), activeTradeOpt, asset);
+
+        // Execute Trade Action
+        if ("SELL".equals(decision.getAction())) {
+            tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan);
+        } else if ("BUY".equals(decision.getAction())) {
+            tradeUtil.closeShortMarketOrder(user, activeTradeOpt, marketData, asset);
+        } else {
+            log.info("⏳ HOLD: No trade action needed for {} at {}", asset, closePrice);
+        }
+    }
+
+    public TradeDecision vwapShortTradeDecision(BigDecimal closePrice, FeatureStore featureStore,
+                                                BigDecimal accountBalance, BigDecimal riskPercentage,
+                                                BigDecimal lastLowestPrice, Optional<Trades> activeTradeOpt,
+                                                String asset) {
+
+        // Risk Parameters
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.002);
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.003);
+        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.002);
+
+        // Compute Stop-Loss and Take-Profit Levels
+        BigDecimal stopLossPrice = closePrice.multiply(BigDecimal.ONE.add(stopLossThreshold));
+        BigDecimal takeProfitPrice = closePrice.multiply(BigDecimal.ONE.subtract(takeProfitThreshold));
+
+        // Compute Position Size based on Risk
+        BigDecimal riskAmount = accountBalance.multiply(riskPercentage)
+                .divide(BigDecimal.valueOf(100), RoundingMode.HALF_UP);
+        BigDecimal positionSize = riskAmount.divide(stopLossPrice.subtract(closePrice), RoundingMode.HALF_UP);
+
+        // Check if there is an active trade
+        if (activeTradeOpt.isPresent()) {
+            Trades activeTrade = activeTradeOpt.get();
+
+            // Adjust Trailing Stop if Price Decreases
+            if (closePrice.compareTo(lastLowestPrice) < 0) {
+                lastLowestPrice = closePrice;
+                BigDecimal newStopLoss = lastLowestPrice.multiply(BigDecimal.ONE.add(trailingStopThreshold));
+                activeTrade.setStopLossPrice(newStopLoss);
+                tradesRepository.save(activeTrade);
+                log.info("🔄 Trailing Stop Updated for {} to {}", asset, newStopLoss);
+            }
+
+            // Check if Stop-Loss or Take-Profit is Hit
+            if (closePrice.compareTo(activeTrade.getStopLossPrice()) >= 0 ||
+                    closePrice.compareTo(activeTrade.getTakeProfitPrice()) <= 0) {
+                return TradeDecision.builder()
+                        .action("BUY")
+                        .positionSize(activeTrade.getEntryExecutedQty())
+                        .stopLossPrice(activeTrade.getStopLossPrice())
+                        .takeProfitPrice(activeTrade.getTakeProfitPrice())
+                        .build();
+            }
+        } else {
+            // Selling Condition (Only if there's no active trade)
+            if (closePrice.compareTo(featureStore.getVwap()) < 0) {
+                log.info("✅ SELL signal detected for {}", asset);
+                return TradeDecision.builder()
+                        .action("SELL")
+                        .positionSize(positionSize)
+                        .stopLossPrice(stopLossPrice)
+                        .takeProfitPrice(takeProfitPrice)
+                        .build();
+            }
+        }
+        return TradeDecision.builder()
+                .action("HOLD")
+                .positionSize(BigDecimal.ZERO)
+                .stopLossPrice(null)
+                .takeProfitPrice(null)
+                .build();
+    }
+
 
 
     public void trendFollwoingLongTradeAction(MarketData marketData, FeatureStore featureStore,

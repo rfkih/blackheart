@@ -155,7 +155,7 @@ public class TradeUtil {
                 MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
                         .symbol("BTC_USDT")
                         .side(0)
-                        .amount(trade.getEntryExecutedQty())
+                        .amount(trade.getEntryExecutedQuoteQty())
                         .isQuoteQty(true)
                         .apiKey(user.getApiKey())
                         .apiSecret(user.getApiSecret())
