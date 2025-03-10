@@ -55,6 +55,12 @@ public class Trades {
     @Column(precision = 20, scale = 12)
     private BigDecimal exitPrice; // Price at exit trade
 
+    @Column(precision = 5, scale = 2)
+    private BigDecimal plPercent;
+
+    @Column(precision = 20, scale = 12)
+    private BigDecimal plAmount;
+
     @Column(nullable = false, precision = 20, scale = 12)
     private BigDecimal stopLossPrice; // Stop-loss level
 

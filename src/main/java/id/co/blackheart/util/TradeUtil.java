@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
@@ -21,6 +22,10 @@ import java.util.Optional;
 public class TradeUtil {
     TradesRepository tradesRepository;
     TradeExecutionService tradeExecutionService;
+
+    public enum TradeType {
+        LONG, SHORT
+    }
 
 
     public void openLongMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan) {
@@ -96,6 +101,8 @@ public class TradeUtil {
                 trade.setIsActive("0");
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(marketData.getClosePrice());
+                trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), trade.getExitPrice(), trade.getEntryExecutedQty(), TradeType.LONG));
+                trade.setPlPercent(calculatePLPercentage(trade.getEntryPrice(), trade.getExitPrice() ,TradeType.LONG));
 
                 tradesRepository.save(trade);
                 log.info("❌ Long order executed. Long Trade closed for {} at {}", asset, orderDetailResponse.getExecutedPrice());
@@ -155,8 +162,8 @@ public class TradeUtil {
                 MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
                         .symbol("BTC_USDT")
                         .side(0)
-                        .amount(trade.getEntryExecutedQuoteQty())
-                        .isQuoteQty(true)
+                        .amount(trade.getEntryExecutedQty())
+                        .isQuoteQty(false)
                         .apiKey(user.getApiKey())
                         .apiSecret(user.getApiSecret())
                         .build();
@@ -176,8 +183,11 @@ public class TradeUtil {
                 trade.setExitExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
                 trade.setExitExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
                 trade.setIsActive("0");
+
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(marketData.getClosePrice());
+                trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), trade.getExitPrice(), trade.getEntryExecutedQty(), TradeType.SHORT));
+                trade.setPlPercent(calculatePLPercentage(trade.getEntryPrice(), trade.getExitPrice() ,TradeType.SHORT));
 
                 tradesRepository.save(trade);
                 log.info("❌ Short order executed. Short Trade closed for {} at {}", asset, orderDetailResponse.getExecutedPrice());
@@ -185,6 +195,34 @@ public class TradeUtil {
                 log.error("❌ Error closing market order: ", e);
             }
         });
+    }
+
+    public static BigDecimal calculatePLAmount(BigDecimal entryPrice, BigDecimal exitPrice, BigDecimal quantity, TradeType tradeType) {
+        BigDecimal profitLoss;
+
+        if (tradeType == TradeType.LONG) {
+            // Long trade: (exitPrice - entryPrice) * quantity
+            profitLoss = exitPrice.subtract(entryPrice);
+        } else {
+            // Short trade: (entryPrice - exitPrice) * quantity
+            profitLoss = entryPrice.subtract(exitPrice);
+        }
+
+        return profitLoss.multiply(quantity).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    public static BigDecimal calculatePLPercentage(BigDecimal entryPrice, BigDecimal exitPrice, TradeType tradeType) {
+        BigDecimal profitLoss;
+
+        if (tradeType == TradeType.LONG) {
+            // Long trade: (exitPrice - entryPrice) / entryPrice * 100
+            profitLoss = exitPrice.subtract(entryPrice).divide(entryPrice, 10, RoundingMode.HALF_UP);
+        } else {
+            // Short trade: (entryPrice - exitPrice) / entryPrice * 100
+            profitLoss = entryPrice.subtract(exitPrice).divide(entryPrice, 10, RoundingMode.HALF_UP);
+        }
+
+        return profitLoss.multiply(BigDecimal.valueOf(100)).setScale(4, RoundingMode.HALF_UP);
     }
 
 }
