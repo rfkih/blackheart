@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.Optional;
 
 @Service
@@ -22,6 +24,117 @@ public class TradingService {
     private final PortfolioRepository portfolioRepository;
     private final TradeExecutionService tradeExecutionService;
     private final TradeUtil tradeUtil;
+
+
+    public void vwapMacdLongTradeAction(MarketData marketData, FeatureStore featureStore,
+                                        BigDecimal accountBalance, BigDecimal riskPercentage,
+                                        Users user, String asset) {
+        String tradePlan = "vwapMacdLong";
+
+        if (marketData == null || featureStore == null) {
+            log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
+            return;
+        }
+
+        Optional<Portfolio> usdAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "USDT");
+
+        if (!usdAsset.isPresent() || usdAsset.get().getBalance().compareTo(BigDecimal.ZERO) <= 0) {
+            log.info("No USDT Asset Found, cannot making trade action.");
+            return;
+        }
+
+        BigDecimal closePrice = marketData.getClosePrice();
+
+        Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActiveAndTradePlanAndAction(user.getId(), asset, "1", tradePlan, "LONG");
+
+        TradeDecision decision = vwapMacdTradeDecision(marketData, featureStore, accountBalance, riskPercentage, activeTradeOpt, asset);
+
+        if ("BUY".equals(decision.getAction())) {
+            LocalTime now = LocalTime.now(ZoneId.of("Asia/Jakarta"));
+            log.info("now : " +now);
+            log.info("getHour : " + now.getHour());
+            if (now.getHour() >= 5) {
+                log.info("🚫 Trading is disabled from 5 AM (Jakarta Time) until midnight. Skipping trade action.");
+                return;
+            }
+
+
+            tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan);
+        } else if ("SELL".equals(decision.getAction())) {
+            tradeUtil.closeLongMarketOrder(user, activeTradeOpt, marketData, asset);
+        } else {
+            log.info("⏳ HOLD: No Long trade action needed for {} at {}", asset, closePrice);
+        }
+    }
+
+    /**
+     * Determines whether to BUY, SELL, or HOLD based on VWAP and MACD strategy.
+     */
+    private TradeDecision vwapMacdTradeDecision(MarketData marketData, FeatureStore featureStore,
+                                                BigDecimal accountBalance, BigDecimal riskPercentage,
+                                                Optional<Trades> activeTradeOpt, String asset) {
+
+        BigDecimal closePrice = marketData.getClosePrice();
+        BigDecimal vwap = featureStore.getVwap();
+        BigDecimal macd = featureStore.getMacd();
+        BigDecimal macdSignal = featureStore.getMacdSignal();
+
+        // Risk Parameters
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.003); // 0.3% Stop Loss
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.006); // 0.6% Take Profit
+        BigDecimal trailingStopThreshold = BigDecimal.valueOf(0.002); // 0.2% Trailing Stop
+
+        // Compute Stop-Loss and Take-Profit Levels
+        BigDecimal stopLossPrice = closePrice.multiply(BigDecimal.ONE.subtract(stopLossThreshold));
+        BigDecimal takeProfitPrice = closePrice.multiply(BigDecimal.ONE.add(takeProfitThreshold));
+
+        // Compute Position Size based on Risk
+        BigDecimal riskAmount = accountBalance.multiply(riskPercentage)
+                .divide(BigDecimal.valueOf(100), RoundingMode.HALF_UP);
+        BigDecimal positionSize = riskAmount.divide(closePrice.subtract(stopLossPrice), RoundingMode.HALF_UP);
+
+        // Check if there is an active trade
+        if (activeTradeOpt.isPresent()) {
+            Trades activeTrade = activeTradeOpt.get();
+
+            // Adjust Trailing Stop if Price Increases
+            if (closePrice.compareTo(activeTrade.getTakeProfitPrice()) > 0) {
+                BigDecimal newStopLoss = closePrice.multiply(BigDecimal.ONE.subtract(trailingStopThreshold));
+                activeTrade.setStopLossPrice(newStopLoss);
+                tradesRepository.save(activeTrade);
+                log.info("🔄 Trailing Stop Updated for {} to {}", asset, newStopLoss);
+            }
+
+            // Check if Stop-Loss or Take-Profit is Hit
+            if (closePrice.compareTo(activeTrade.getStopLossPrice()) <= 0 ||
+                    closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0) {
+                return TradeDecision.builder()
+                        .action("SELL")
+                        .positionSize(activeTrade.getEntryExecutedQty())
+                        .stopLossPrice(activeTrade.getStopLossPrice())
+                        .takeProfitPrice(activeTrade.getTakeProfitPrice())
+                        .build();
+            }
+        } else {
+            // Buy Condition (No active trade)
+            if (closePrice.compareTo(vwap) > 0 && macd.compareTo(macdSignal) > 0) {
+                log.info("✅ BUY signal detected for {} size {}", asset, positionSize);
+                return TradeDecision.builder()
+                        .action("BUY")
+                        .positionSize(positionSize)
+                        .stopLossPrice(stopLossPrice)
+                        .takeProfitPrice(takeProfitPrice)
+                        .build();
+            }
+        }
+
+        return TradeDecision.builder()
+                .action("HOLD")
+                .positionSize(BigDecimal.ZERO)
+                .stopLossPrice(null)
+                .takeProfitPrice(null)
+                .build();
+    }
 
     /**
      * Determines trade action based on market data and strategy.

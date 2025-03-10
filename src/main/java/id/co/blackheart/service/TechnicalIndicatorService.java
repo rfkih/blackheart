@@ -17,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -28,7 +29,7 @@ public class TechnicalIndicatorService {
 
 
     public FeatureStore computeIndicatorsAndStore(String symbol, Instant instantTimestamp) {
-        List<MarketData> historicalData = marketDataRepository.findLast50BySymbolAndInterval(symbol, "1m");
+        List<MarketData> historicalData = marketDataRepository.findLast100BySymbolAndInterval(symbol, "1m");
 
         FeatureStore featureStore = new FeatureStore();
         if (historicalData.size() < 50) {
@@ -52,9 +53,9 @@ public class TechnicalIndicatorService {
         featureData.setMomentum(calculateMomentum(historicalData, 10));
         featureData.setStochK(calculateStochasticK(historicalData, 14));
         featureData.setStochD(calculateStochasticD(historicalData, 3));
-        featureData.setMacd(calculateMACD(historicalData, 12, 26));
-        featureData.setMacdSignal(calculateMACDSignal(historicalData, 9));
-        featureData.setMacdHistogram(featureData.getMacd().subtract(featureData.getMacdSignal()));
+        featureData.setMacd(calculateMACD(historicalData, 8, 21));  // Faster reaction time 1m trade
+        featureData.setMacdSignal(calculateMACDSignal(historicalData, 5)); // Quick crossovers 1m trade
+        featureData.setMacdHistogram(featureData.getMacd().subtract(featureData.getMacdSignal()));  // MACD Histogram  1m trade
         featureData.setRsi(calculateRSI(historicalData, 14));
         featureData.setWilliamsR(calculateWilliamsR(historicalData, 14));
         featureData.setCci(calculateCCI(historicalData, 20));
@@ -77,6 +78,8 @@ public class TechnicalIndicatorService {
 
         return featureData;
     }
+
+
 
     private BigDecimal calculateSMA(List<MarketData> data, int period) {
         return data.stream().limit(period).map(MarketData::getClosePrice)
@@ -113,18 +116,31 @@ public class TechnicalIndicatorService {
         return calculateSMA(data, period);
     }
 
-    private BigDecimal calculateMACD(List<MarketData> data, int shortPeriod, int longPeriod) {
-        return calculateEMA(data, shortPeriod).subtract(calculateEMA(data, longPeriod));
+    // Compute MACD Line (Fast EMA - Slow EMA)
+    public BigDecimal calculateMACD(List<MarketData> data, int shortPeriod, int longPeriod) {
+        BigDecimal fastEMA = calculateEMA(data, shortPeriod);
+        BigDecimal slowEMA = calculateEMA(data, longPeriod);
+        return fastEMA.subtract(slowEMA);
     }
 
-    private BigDecimal calculateMACDSignal(List<MarketData> data, int period) {
-        return calculateEMA(data, period);
+    // Compute MACD Signal Line (9-period EMA of MACD)
+    public BigDecimal calculateMACDSignal(List<MarketData> data, int period) {
+        if (data == null || data.size() < period) return BigDecimal.ZERO;
+
+        // Step 1: Compute MACD values for each closing price
+        List<BigDecimal> macdValues = data.stream()
+                .map(m -> calculateMACD(data, 8, 21)) // Compute MACD per closing price
+                .collect(Collectors.toList());
+
+        // Step 2: Apply EMA to MACD values (not closing prices)
+        return calculateEMAFromValues(macdValues, period);
     }
 
+    // Compute EMA for closing prices (original function)
     private BigDecimal calculateEMA(List<MarketData> data, int period) {
         if (data == null || data.size() < period) return BigDecimal.ZERO;
 
-        // Compute initial SMA for the first 'period' data points
+        // Compute initial SMA for first 'period' data points
         BigDecimal sum = BigDecimal.ZERO;
         for (int i = 0; i < period; i++) {
             sum = sum.add(data.get(i).getClosePrice());
@@ -134,10 +150,35 @@ public class TechnicalIndicatorService {
         // Compute the EMA using the smoothing multiplier
         BigDecimal multiplier = BigDecimal.valueOf(2.0 / (period + 1.0));
 
-        // Apply EMA formula for remaining data points
+        // Apply EMA formula recursively for remaining data points
         for (int i = period; i < data.size(); i++) {
             BigDecimal closePrice = data.get(i).getClosePrice();
-            ema = closePrice.multiply(multiplier).add(ema.multiply(BigDecimal.ONE.subtract(multiplier)));
+            ema = closePrice.multiply(multiplier).add(ema.multiply(BigDecimal.ONE.subtract(multiplier)))
+                    .setScale(8, RoundingMode.HALF_UP); // Ensure precision
+        }
+
+        return ema;
+    }
+
+    // Compute EMA from a list of values (for MACD Signal Line)
+    private BigDecimal calculateEMAFromValues(List<BigDecimal> values, int period) {
+        if (values.size() < period) return BigDecimal.ZERO;  // Not enough data
+
+        // Compute Initial SMA for the first 'period' values
+        BigDecimal sum = BigDecimal.ZERO;
+        for (int i = 0; i < period; i++) {
+            sum = sum.add(values.get(i));
+        }
+        BigDecimal ema = sum.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
+
+        // Compute the EMA using the smoothing multiplier
+        BigDecimal multiplier = BigDecimal.valueOf(2.0 / (period + 1.0));
+
+        // Apply EMA formula recursively for remaining values
+        for (int i = period; i < values.size(); i++) {
+            BigDecimal currentValue = values.get(i);
+            ema = currentValue.multiply(multiplier).add(ema.multiply(BigDecimal.ONE.subtract(multiplier)))
+                    .setScale(8, RoundingMode.HALF_UP); // Ensure precision
         }
 
         return ema;
@@ -219,14 +260,10 @@ public class TechnicalIndicatorService {
     private BigDecimal calculateVWAP(List<MarketData> data) {
         if (data == null || data.isEmpty()) return BigDecimal.ZERO;
 
-        // Limit data to last 50 candles
-        int windowSize = Math.min(50, data.size());
-        List<MarketData> recentData = data.subList(data.size() - windowSize, data.size());
-
         BigDecimal cumulativeVolume = BigDecimal.ZERO;
         BigDecimal cumulativePriceVolume = BigDecimal.ZERO;
 
-        for (MarketData entry : recentData) {
+        for (MarketData entry : data) { // No window limit, use all data
             BigDecimal high = entry.getHighPrice();
             BigDecimal low = entry.getLowPrice();
             BigDecimal close = entry.getClosePrice();
@@ -244,13 +281,11 @@ public class TechnicalIndicatorService {
         }
 
         // Avoid division by zero
-        if (cumulativeVolume.compareTo(BigDecimal.ZERO) == 0) {
-            return BigDecimal.ZERO;
-        }
-
-        // Compute VWAP
-        return cumulativePriceVolume.divide(cumulativeVolume, 8, RoundingMode.HALF_UP);
+        return (cumulativeVolume.compareTo(BigDecimal.ZERO) == 0)
+                ? BigDecimal.ZERO
+                : cumulativePriceVolume.divide(cumulativeVolume, 8, RoundingMode.HALF_UP);
     }
+
 
 
     private BigDecimal calculateATR(List<MarketData> data, int period) {
