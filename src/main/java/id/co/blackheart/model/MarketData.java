@@ -4,8 +4,10 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @AllArgsConstructor
@@ -48,4 +50,9 @@ public class MarketData {
 
     @Column(name = "trade_count", nullable = false)
     private Long tradeCount;
+
+    @Column(name = "timestamp", nullable = false, updatable = false)
+    @Temporal(TemporalType.TIMESTAMP)
+    @CreationTimestamp // Automatically sets current time
+    private Instant timestamp;
 }

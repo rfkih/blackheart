@@ -7,8 +7,22 @@ import id.co.blackheart.repository.MarketDataRepository;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import org.ta4j.core.*;
+import org.ta4j.core.indicators.*;
+import org.ta4j.core.indicators.adx.ADXIndicator;
+import org.ta4j.core.indicators.adx.MinusDIIndicator;
+import org.ta4j.core.indicators.adx.PlusDIIndicator;
+import org.ta4j.core.indicators.bollinger.*;
+import org.ta4j.core.indicators.helpers.*;
+import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
+import org.ta4j.core.indicators.volume.*;
+import org.ta4j.core.num.Num;
+
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 
@@ -47,391 +61,132 @@ public class TechnicalIndicatorService {
         featureData.setTimestamp(timestamp);
         featureData.setPrice(price);
 
-        featureData.setSma14(calculateSMA(historicalData, 14));
-        featureData.setSma50(calculateSMA(historicalData, 50));
-        featureData.setWma(calculateWMA(historicalData, 14));
-        featureData.setMomentum(calculateMomentum(historicalData, 10));
-        featureData.setStochK(calculateStochasticK(historicalData, 14));
-        featureData.setStochD(calculateStochasticD(historicalData, 3));
-        featureData.setMacd(calculateMACD(historicalData, 8, 21));  // Faster reaction time 1m trade
-        featureData.setMacdSignal(calculateMACDSignal(historicalData, 5)); // Quick crossovers 1m trade
-        featureData.setMacdHistogram(featureData.getMacd().subtract(featureData.getMacdSignal()));  // MACD Histogram  1m trade
-        featureData.setRsi(calculateRSI(historicalData, 14));
-        featureData.setWilliamsR(calculateWilliamsR(historicalData, 14));
-        featureData.setCci(calculateCCI(historicalData, 20));
-        featureData.setAdOscillator(calculateADOSC(historicalData));
-        featureData.setVwap(calculateVWAP(historicalData));
-        featureData.setAtr(calculateATR(historicalData, 14));
-        featureData.setAdx(calculateADX(historicalData, 14));
-        featureData.setPlusDI(calculatePlusDI(historicalData, 14));
-        featureData.setMinusDI(calculateMinusDI(historicalData, 14));
-        featureData.setEma9(calculateEMA(historicalData, 9));
-        featureData.setEma14(calculateEMA(historicalData, 14));
-        featureData.setEma21(calculateEMA(historicalData, 21));
-        featureData.setEma50(calculateEMA(historicalData, 50));
-        featureData.setBollingerMiddle(calculateBollingerMiddle(historicalData, 20));
-        featureData.setBollingerUpper(calculateBollingerUpper(historicalData, 20));
-        featureData.setBollingerLower(calculateBollingerLower(historicalData, 20));
+        // ✅ Convert MarketData to TA4J BarSeries
+        BarSeries series = convertToBarSeries(historicalData);
+
+        // ✅ Use TA4J Indicators
+        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+
+        featureData.setSma14(new BigDecimal(new SMAIndicator(closePrice, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+        featureData.setSma50(new BigDecimal(new SMAIndicator(closePrice, 50)
+                .getValue(series.getEndIndex()).toString()));
+
+        featureData.setWma(new BigDecimal(new WMAIndicator(closePrice, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+        featureData.setMomentum(new BigDecimal( new ROCIndicator(closePrice, 10).getValue(series.getEndIndex()).toString()));
+
+        StochasticOscillatorKIndicator stochK = new StochasticOscillatorKIndicator(series, 14);
+        featureData.setStochK(new BigDecimal(stochK.getValue(series.getEndIndex()).toString()));
+
+        StochasticOscillatorDIndicator stochD = new StochasticOscillatorDIndicator(stochK);
+        featureData.setStochD(new BigDecimal(stochD.getValue(series.getEndIndex()).toString()));
+
+// ✅ Compute MACD (8, 21) and Signal Line (5)
+        MACDIndicator macd = new MACDIndicator(closePrice, 8, 21);
+        EMAIndicator macdSignal = new EMAIndicator(macd, 5);
+        featureData.setMacd(new BigDecimal(macd.getValue(series.getEndIndex()).toString()));
+        featureData.setMacdSignal(new BigDecimal(macdSignal.getValue(series.getEndIndex()).toString()));
+        featureData.setMacdHistogram(new BigDecimal(macd.getValue(series.getEndIndex())
+                .minus(macdSignal.getValue(series.getEndIndex())).toString()));
+
+// ✅ RSI (14)
+        featureData.setRsi(new BigDecimal(new RSIIndicator(closePrice, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+// ✅ Williams %R (14)
+        featureData.setWilliamsR(new BigDecimal(new WilliamsRIndicator(series, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+// ✅ CCI (20)
+        featureData.setCci(new BigDecimal(new CCIIndicator(series, 20)
+                .getValue(series.getEndIndex()).toString()));
+
+// ✅ AD Oscillator
+        featureData.setAdOscillator(new BigDecimal(new AccumulationDistributionIndicator(series)
+                .getValue(series.getEndIndex()).toString()));
+
+// ✅ VWAP
+        featureData.setVwap(new BigDecimal(new VWAPIndicator(series, 14).getValue(series.getEndIndex()).toString()));
+
+
+
+
+// ✅ ATR (14)
+        featureData.setAtr(new BigDecimal(new ATRIndicator(series, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+// ✅ ADX (14)
+        ADXIndicator adx = new ADXIndicator(series, 14);
+        featureData.setAdx(new BigDecimal(adx.getValue(series.getEndIndex()).toString()));
+
+// ✅ +DI and -DI (14)
+        featureData.setPlusDI(new BigDecimal(new PlusDIIndicator(series, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+        featureData.setMinusDI(new BigDecimal(new MinusDIIndicator(series, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+
+        // ✅ EMA
+        featureData.setEma9(new BigDecimal(new EMAIndicator(closePrice, 9)
+                .getValue(series.getEndIndex()).toString()));
+
+        featureData.setEma14(new BigDecimal(new EMAIndicator(closePrice, 14)
+                .getValue(series.getEndIndex()).toString()));
+
+        featureData.setEma21(new BigDecimal(new EMAIndicator(closePrice, 21)
+                .getValue(series.getEndIndex()).toString()));
+
+        featureData.setEma50(new BigDecimal(new EMAIndicator(closePrice, 50)
+                .getValue(series.getEndIndex()).toString()));
+
+
+        // ✅ Bollinger Bands (20)
+        BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(new SMAIndicator(closePrice, 20));
+        BollingerBandsUpperIndicator bbu = new BollingerBandsUpperIndicator(bbm, new StandardDeviationIndicator(closePrice, 20));
+        BollingerBandsLowerIndicator bbl = new BollingerBandsLowerIndicator(bbm, new StandardDeviationIndicator(closePrice, 20));
+        featureData.setBollingerMiddle(new BigDecimal(bbm.getValue(series.getEndIndex()).toString()));
+        featureData.setBollingerUpper(new BigDecimal(bbu.getValue(series.getEndIndex()).toString()));
+        featureData.setBollingerLower(new BigDecimal(bbl.getValue(series.getEndIndex()).toString()));
 
 
         featureStoreRepository.save(featureData);
-
         return featureData;
     }
 
+    private BarSeries convertToBarSeries(List<MarketData> historicalData) {
+        BarSeries series = new BaseBarSeries();
 
+        Collections.reverse(historicalData);
 
-    private BigDecimal calculateSMA(List<MarketData> data, int period) {
-        return data.stream().limit(period).map(MarketData::getClosePrice)
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(period), RoundingMode.HALF_UP);
-    }
+        for (MarketData data : historicalData) {
+            // ✅ Handle missing timestamp by generating one dynamically
+            Instant barTimestamp = (data.getTimestamp() != null) ? data.getTimestamp() : Instant.now();
 
+            // ✅ Convert BigDecimal to Num using default Num.valueOf()
+            Num openPrice = series.numOf(data.getOpenPrice());
+            Num highPrice = series.numOf(data.getHighPrice());
+            Num lowPrice = series.numOf(data.getLowPrice());
+            Num closePrice = series.numOf(data.getClosePrice());
+            Num volume = series.numOf(data.getVolume());
 
+            // ✅ Use BaseBar.Builder with Num values
+            BaseBar bar = BaseBar.builder()
+                    .timePeriod(Duration.ofMinutes(1))  // 1-minute bars
+                    .endTime(barTimestamp.atZone(ZoneId.of("UTC")))  // Correct timestamp handling
+                    .openPrice(openPrice)
+                    .highPrice(highPrice)
+                    .lowPrice(lowPrice)
+                    .closePrice(closePrice)
+                    .volume(volume)
+                    .build();
 
-    private BigDecimal calculateWMA(List<MarketData> data, int period) {
-        BigDecimal weightedSum = BigDecimal.ZERO;
-        BigDecimal denominator = BigDecimal.ZERO;
-        for (int i = 0; i < period; i++) {
-            BigDecimal weight = BigDecimal.valueOf(period - i);
-            weightedSum = weightedSum.add(data.get(i).getClosePrice().multiply(weight));
-            denominator = denominator.add(weight);
+            series.addBar(bar);
         }
-        return weightedSum.divide(denominator, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculateMomentum(List<MarketData> data, int period) {
-        return data.getFirst().getClosePrice().subtract(data.get(period - 1).getClosePrice());
-    }
-
-    private BigDecimal calculateStochasticK(List<MarketData> data, int period) {
-        BigDecimal highestHigh = data.stream().limit(period).map(MarketData::getHighPrice).max(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
-        BigDecimal lowestLow = data.stream().limit(period).map(MarketData::getLowPrice).min(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
-        return (data.getFirst().getClosePrice().subtract(lowestLow))
-                .divide(highestHigh.subtract(lowestLow), RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(100));
-    }
-
-    private BigDecimal calculateStochasticD(List<MarketData> data, int period) {
-        return calculateSMA(data, period);
-    }
-
-    // Compute MACD Line (Fast EMA - Slow EMA)
-    public BigDecimal calculateMACD(List<MarketData> data, int shortPeriod, int longPeriod) {
-        BigDecimal fastEMA = calculateEMA(data, shortPeriod);
-        BigDecimal slowEMA = calculateEMA(data, longPeriod);
-        return fastEMA.subtract(slowEMA);
-    }
-
-    // Compute MACD Signal Line (9-period EMA of MACD)
-    public BigDecimal calculateMACDSignal(List<MarketData> data, int period) {
-        if (data == null || data.size() < period) return BigDecimal.ZERO;
-
-        // Step 1: Compute MACD values for each closing price
-        List<BigDecimal> macdValues = data.stream()
-                .map(m -> calculateMACD(data, 8, 21)) // Compute MACD per closing price
-                .collect(Collectors.toList());
-
-        // Step 2: Apply EMA to MACD values (not closing prices)
-        return calculateEMAFromValues(macdValues, period);
-    }
-
-    // Compute EMA for closing prices (original function)
-    private BigDecimal calculateEMA(List<MarketData> data, int period) {
-        if (data == null || data.size() < period) return BigDecimal.ZERO;
-
-        // Compute initial SMA for first 'period' data points
-        BigDecimal sum = BigDecimal.ZERO;
-        for (int i = 0; i < period; i++) {
-            sum = sum.add(data.get(i).getClosePrice());
-        }
-        BigDecimal ema = sum.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
-
-        // Compute the EMA using the smoothing multiplier
-        BigDecimal multiplier = BigDecimal.valueOf(2.0 / (period + 1.0));
-
-        // Apply EMA formula recursively for remaining data points
-        for (int i = period; i < data.size(); i++) {
-            BigDecimal closePrice = data.get(i).getClosePrice();
-            ema = closePrice.multiply(multiplier).add(ema.multiply(BigDecimal.ONE.subtract(multiplier)))
-                    .setScale(8, RoundingMode.HALF_UP); // Ensure precision
-        }
-
-        return ema;
-    }
-
-    // Compute EMA from a list of values (for MACD Signal Line)
-    private BigDecimal calculateEMAFromValues(List<BigDecimal> values, int period) {
-        if (values.size() < period) return BigDecimal.ZERO;  // Not enough data
-
-        // Compute Initial SMA for the first 'period' values
-        BigDecimal sum = BigDecimal.ZERO;
-        for (int i = 0; i < period; i++) {
-            sum = sum.add(values.get(i));
-        }
-        BigDecimal ema = sum.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
-
-        // Compute the EMA using the smoothing multiplier
-        BigDecimal multiplier = BigDecimal.valueOf(2.0 / (period + 1.0));
-
-        // Apply EMA formula recursively for remaining values
-        for (int i = period; i < values.size(); i++) {
-            BigDecimal currentValue = values.get(i);
-            ema = currentValue.multiply(multiplier).add(ema.multiply(BigDecimal.ONE.subtract(multiplier)))
-                    .setScale(8, RoundingMode.HALF_UP); // Ensure precision
-        }
-
-        return ema;
-    }
-
-
-    private BigDecimal calculateRSI(List<MarketData> data, int period) {
-        BigDecimal gains = BigDecimal.ZERO;
-        BigDecimal losses = BigDecimal.ZERO;
-        for (int i = 1; i < period; i++) {
-            BigDecimal change = data.get(i).getClosePrice().subtract(data.get(i - 1).getClosePrice());
-            if (change.compareTo(BigDecimal.ZERO) > 0) {
-                gains = gains.add(change);
-            } else {
-                losses = losses.add(change.abs());
-            }
-        }
-        BigDecimal avgGain = gains.divide(BigDecimal.valueOf(period), RoundingMode.HALF_UP);
-        BigDecimal avgLoss = losses.divide(BigDecimal.valueOf(period), RoundingMode.HALF_UP);
-        if (avgLoss.equals(BigDecimal.ZERO)) return BigDecimal.valueOf(100);
-        BigDecimal rs = avgGain.divide(avgLoss, RoundingMode.HALF_UP);
-        return BigDecimal.valueOf(100).subtract(BigDecimal.valueOf(100).divide(rs.add(BigDecimal.ONE), RoundingMode.HALF_UP));
-    }
-
-    private BigDecimal calculateWilliamsR(List<MarketData> data, int period) {
-        BigDecimal highestHigh = data.stream().limit(period).map(MarketData::getHighPrice).max(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
-        BigDecimal lowestLow = data.stream().limit(period).map(MarketData::getLowPrice).min(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
-
-        if (highestHigh.equals(lowestLow)) return BigDecimal.ZERO; // Avoid division by zero
-
-        return (highestHigh.subtract(data.get(0).getClosePrice()))
-                .divide(highestHigh.subtract(lowestLow), RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(-100)); // Reverse sign
-    }
-
-    private BigDecimal calculateCCI(List<MarketData> data, int period) {
-        BigDecimal typicalPrice = data.stream().limit(period)
-                .map(d -> (d.getHighPrice().add(d.getLowPrice()).add(d.getClosePrice())).divide(BigDecimal.valueOf(3), RoundingMode.HALF_UP))
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(period), RoundingMode.HALF_UP);
-
-        BigDecimal sma = calculateSMA(data, period);
-        BigDecimal meanDeviation = data.stream().limit(period)
-                .map(d -> d.getClosePrice().subtract(sma).abs())
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(period), RoundingMode.HALF_UP);
-
-        return (typicalPrice.subtract(sma))
-                .divide(meanDeviation.multiply(BigDecimal.valueOf(0.015)), RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculateADOSC(List<MarketData> data) {
-        List<BigDecimal> moneyFlowVolumes = data.stream().map(d ->
-                ((d.getClosePrice().subtract(d.getLowPrice()))
-                        .subtract(d.getHighPrice().subtract(d.getClosePrice())))
-                        .divide(d.getHighPrice().subtract(d.getLowPrice()), RoundingMode.HALF_UP)
-                        .multiply(d.getVolume())
-        ).toList();
-
-        BigDecimal fastEMA = calculateEMAPrice(moneyFlowVolumes, 3);
-        BigDecimal slowEMA = calculateEMAPrice(moneyFlowVolumes, 10);
-        return fastEMA.subtract(slowEMA);
-    }
-
-
-    private BigDecimal calculateEMAPrice(List<BigDecimal> prices, int period) {
-        if (prices.size() < period) {
-            return BigDecimal.ZERO;
-        }
-        BigDecimal multiplier = BigDecimal.valueOf(2.0 / (period + 1.0));
-        BigDecimal ema = prices.get(prices.size() - period);
-        for (int i = prices.size() - period + 1; i < prices.size(); i++) {
-            ema = prices.get(i).multiply(multiplier).add(
-                    ema.multiply(BigDecimal.ONE.subtract(multiplier)));
-        }
-        return ema;
-    }
-
-    private BigDecimal calculateVWAP(List<MarketData> data) {
-        if (data == null || data.isEmpty()) return BigDecimal.ZERO;
-
-        BigDecimal cumulativeVolume = BigDecimal.ZERO;
-        BigDecimal cumulativePriceVolume = BigDecimal.ZERO;
-
-        for (MarketData entry : data) { // No window limit, use all data
-            BigDecimal high = entry.getHighPrice();
-            BigDecimal low = entry.getLowPrice();
-            BigDecimal close = entry.getClosePrice();
-            BigDecimal volume = entry.getVolume();
-
-            // Calculate typical price: (High + Low + Close) / 3
-            BigDecimal typicalPrice = high.add(low).add(close).divide(BigDecimal.valueOf(3), 8, RoundingMode.HALF_UP);
-
-            // Multiply by volume
-            BigDecimal priceVolume = typicalPrice.multiply(volume);
-
-            // Sum up price * volume and total volume
-            cumulativePriceVolume = cumulativePriceVolume.add(priceVolume);
-            cumulativeVolume = cumulativeVolume.add(volume);
-        }
-
-        // Avoid division by zero
-        return (cumulativeVolume.compareTo(BigDecimal.ZERO) == 0)
-                ? BigDecimal.ZERO
-                : cumulativePriceVolume.divide(cumulativeVolume, 8, RoundingMode.HALF_UP);
-    }
-
-
-
-    private BigDecimal calculateATR(List<MarketData> data, int period) {
-        if (data == null || data.size() < period) return BigDecimal.ZERO;
-
-        BigDecimal sumTrueRange = BigDecimal.ZERO;
-        BigDecimal prevATR = BigDecimal.ZERO;
-
-        // Calculate initial ATR as the simple average of True Ranges
-        for (int i = 1; i <= period; i++) {
-            BigDecimal highLow = data.get(i).getHighPrice().subtract(data.get(i).getLowPrice());
-            BigDecimal highClosePrev = data.get(i).getHighPrice().subtract(data.get(i - 1).getClosePrice()).abs();
-            BigDecimal lowClosePrev = data.get(i).getLowPrice().subtract(data.get(i - 1).getClosePrice()).abs();
-
-            BigDecimal trueRange = highLow.max(highClosePrev).max(lowClosePrev);
-            sumTrueRange = sumTrueRange.add(trueRange);
-        }
-
-        // First ATR (Simple Moving Average of True Ranges)
-        prevATR = sumTrueRange.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
-
-        // Calculate subsequent ATRs using Wilder's smoothing method
-        for (int i = period; i < data.size(); i++) {
-            BigDecimal highLow = data.get(i).getHighPrice().subtract(data.get(i).getLowPrice());
-            BigDecimal highClosePrev = data.get(i).getHighPrice().subtract(data.get(i - 1).getClosePrice()).abs();
-            BigDecimal lowClosePrev = data.get(i).getLowPrice().subtract(data.get(i - 1).getClosePrice()).abs();
-
-            BigDecimal trueRange = highLow.max(highClosePrev).max(lowClosePrev);
-
-            // Wilder's ATR Formula: ATR_t = (ATR_(t-1) * (period - 1) + TR_t) / period
-            prevATR = prevATR.multiply(BigDecimal.valueOf(period - 1))
-                    .add(trueRange)
-                    .divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
-        }
-
-        return prevATR;
-    }
-
-
-    private BigDecimal calculateADX(List<MarketData> data, int period) {
-        if (data.size() < period) return BigDecimal.ZERO;
-
-        BigDecimal sumDX = BigDecimal.ZERO;
-        BigDecimal prevADX = BigDecimal.ZERO;
-
-        for (int i = period; i < data.size(); i++) {
-            BigDecimal plusDI = calculatePlusDI(data.subList(i - period, i), period);
-            BigDecimal minusDI = calculateMinusDI(data.subList(i - period, i), period);
-
-            BigDecimal denominator = plusDI.add(minusDI);
-            if (denominator.compareTo(BigDecimal.ZERO) == 0) {
-                continue;  // Avoid division by zero
-            }
-
-            BigDecimal dx = plusDI.subtract(minusDI).abs()
-                    .divide(denominator, 8, RoundingMode.HALF_UP)
-                    .multiply(BigDecimal.valueOf(100));
-
-            sumDX = sumDX.add(dx);
-        }
-
-        return sumDX.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculatePlusDI(List<MarketData> data, int period) {
-        BigDecimal sumDMPlus = BigDecimal.ZERO;
-        BigDecimal sumTR = BigDecimal.ZERO;
-
-        for (int i = 1; i < period; i++) {
-            BigDecimal highDiff = data.get(i).getHighPrice().subtract(data.get(i - 1).getHighPrice());
-            BigDecimal lowDiff = data.get(i - 1).getLowPrice().subtract(data.get(i).getLowPrice());
-
-            BigDecimal dmPlus = highDiff.compareTo(lowDiff) > 0 && highDiff.compareTo(BigDecimal.ZERO) > 0 ? highDiff : BigDecimal.ZERO;
-
-            BigDecimal trueRange = calculateTrueRange(data.get(i), data.get(i - 1));
-
-            sumDMPlus = sumDMPlus.add(dmPlus);
-            sumTR = sumTR.add(trueRange);
-        }
-
-        if (sumTR.compareTo(BigDecimal.ZERO) == 0) return BigDecimal.ZERO; // Avoid division by zero
-
-        return sumDMPlus.divide(sumTR, 8, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-    }
-
-    private BigDecimal calculateMinusDI(List<MarketData> data, int period) {
-        BigDecimal sumDMMinus = BigDecimal.ZERO;
-        BigDecimal sumTR = BigDecimal.ZERO;
-
-        for (int i = 1; i < period; i++) {
-            BigDecimal highDiff = data.get(i).getHighPrice().subtract(data.get(i - 1).getHighPrice());
-            BigDecimal lowDiff = data.get(i - 1).getLowPrice().subtract(data.get(i).getLowPrice());
-
-            BigDecimal dmMinus = lowDiff.compareTo(highDiff) > 0 && lowDiff.compareTo(BigDecimal.ZERO) > 0 ? lowDiff : BigDecimal.ZERO;
-
-            BigDecimal trueRange = calculateTrueRange(data.get(i), data.get(i - 1));
-
-            sumDMMinus = sumDMMinus.add(dmMinus);
-            sumTR = sumTR.add(trueRange);
-        }
-
-        if (sumTR.compareTo(BigDecimal.ZERO) == 0) return BigDecimal.ZERO; // Avoid division by zero
-
-        return sumDMMinus.divide(sumTR, 8, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100));
-    }
-
-
-    private BigDecimal calculateTrueRange(MarketData current, MarketData previous) {
-        BigDecimal highLow = current.getHighPrice().subtract(current.getLowPrice());
-        BigDecimal highClosePrev = current.getHighPrice().subtract(previous.getClosePrice()).abs();
-        BigDecimal lowClosePrev = current.getLowPrice().subtract(previous.getClosePrice()).abs();
-        return highLow.max(highClosePrev).max(lowClosePrev);
-    }
-
-
-    private BigDecimal calculateBollingerMiddle(List<MarketData> data, int period) {
-        if (data.size() < period) return BigDecimal.ZERO;
-        BigDecimal sum = BigDecimal.ZERO;
-        for (int i = data.size() - period; i < data.size(); i++) {
-            sum = sum.add(data.get(i).getClosePrice());
-        }
-        return sum.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculateBollingerUpper(List<MarketData> data, int period) {
-        BigDecimal middle = calculateBollingerMiddle(data, period);
-        BigDecimal standardDeviation = calculateStandardDeviation(data, period);
-        return middle.add(standardDeviation.multiply(BigDecimal.valueOf(2)));
-    }
-
-    private BigDecimal calculateBollingerLower(List<MarketData> data, int period) {
-        BigDecimal middle = calculateBollingerMiddle(data, period);
-        BigDecimal standardDeviation = calculateStandardDeviation(data, period);
-        return middle.subtract(standardDeviation.multiply(BigDecimal.valueOf(2)));
-    }
-
-    private BigDecimal calculateStandardDeviation(List<MarketData> data, int period) {
-        if (data.size() < period) return BigDecimal.ZERO;
-        BigDecimal mean = calculateBollingerMiddle(data, period);
-        BigDecimal varianceSum = BigDecimal.ZERO;
-        for (int i = data.size() - period; i < data.size(); i++) {
-            BigDecimal diff = data.get(i).getClosePrice().subtract(mean);
-            varianceSum = varianceSum.add(diff.multiply(diff));
-        }
-        BigDecimal variance = varianceSum.divide(BigDecimal.valueOf(period), 8, RoundingMode.HALF_UP);
-        return BigDecimal.valueOf(Math.sqrt(variance.doubleValue()));
+        return series;
     }
 }
 

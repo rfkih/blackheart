@@ -35,7 +35,7 @@ public class FeatureStore {
     @Column(name = "sma_14", precision = 20, scale = 8)
     private BigDecimal sma14;
 
-    @Column(name = "sma_50)", precision = 20, scale = 8)
+    @Column(name = "sma_50", precision = 20, scale = 8)
     private BigDecimal sma50;
 
     @Column(name = "wma", precision = 20, scale = 8)
