@@ -21,7 +21,6 @@ import org.ta4j.core.num.Num;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -29,9 +28,7 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -84,7 +81,7 @@ public class TechnicalIndicatorService {
         StochasticOscillatorDIndicator stochD = new StochasticOscillatorDIndicator(stochK);
         featureData.setStochD(new BigDecimal(stochD.getValue(series.getEndIndex()).toString()));
 
-// ✅ Compute MACD (8, 21) and Signal Line (5)
+        // ✅ Compute MACD (8, 21) and Signal Line (5)
         MACDIndicator macd = new MACDIndicator(closePrice, 8, 21);
         EMAIndicator macdSignal = new EMAIndicator(macd, 5);
         featureData.setMacd(new BigDecimal(macd.getValue(series.getEndIndex()).toString()));
@@ -92,37 +89,35 @@ public class TechnicalIndicatorService {
         featureData.setMacdHistogram(new BigDecimal(macd.getValue(series.getEndIndex())
                 .minus(macdSignal.getValue(series.getEndIndex())).toString()));
 
-// ✅ RSI (14)
+        // ✅ RSI (14)
         featureData.setRsi(new BigDecimal(new RSIIndicator(closePrice, 14)
                 .getValue(series.getEndIndex()).toString()));
 
-// ✅ Williams %R (14)
+        // ✅ Williams %R (14)
         featureData.setWilliamsR(new BigDecimal(new WilliamsRIndicator(series, 14)
                 .getValue(series.getEndIndex()).toString()));
 
-// ✅ CCI (20)
+        // ✅ CCI (20)
         featureData.setCci(new BigDecimal(new CCIIndicator(series, 20)
                 .getValue(series.getEndIndex()).toString()));
 
-// ✅ AD Oscillator
+        // ✅ AD Oscillator
         featureData.setAdOscillator(new BigDecimal(new AccumulationDistributionIndicator(series)
                 .getValue(series.getEndIndex()).toString()));
 
-// ✅ VWAP
+        // ✅ VWAP
         featureData.setVwap(new BigDecimal(new VWAPIndicator(series, 14).getValue(series.getEndIndex()).toString()));
 
 
-
-
-// ✅ ATR (14)
+        // ✅ ATR (14)
         featureData.setAtr(new BigDecimal(new ATRIndicator(series, 14)
                 .getValue(series.getEndIndex()).toString()));
 
-// ✅ ADX (14)
+        // ✅ ADX (14)
         ADXIndicator adx = new ADXIndicator(series, 14);
         featureData.setAdx(new BigDecimal(adx.getValue(series.getEndIndex()).toString()));
 
-// ✅ +DI and -DI (14)
+        // ✅ +DI and -DI (14)
         featureData.setPlusDI(new BigDecimal(new PlusDIIndicator(series, 14)
                 .getValue(series.getEndIndex()).toString()));
 
