@@ -1,5 +1,6 @@
 package id.co.blackheart.service;
 
+import id.co.blackheart.dto.PredictionResponse;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
@@ -39,7 +40,7 @@ public class TechnicalIndicatorService {
     private final FeatureStoreRepository featureStoreRepository;
 
 
-    public FeatureStore computeIndicatorsAndStore(String symbol, Instant instantTimestamp) {
+    public FeatureStore computeIndicatorsAndStore(String symbol, Instant instantTimestamp, PredictionResponse predictionResponse) {
         List<MarketData> historicalData = marketDataRepository.findLast100BySymbolAndInterval(symbol, "1m");
 
         FeatureStore featureStore = new FeatureStore();
@@ -55,6 +56,9 @@ public class TechnicalIndicatorService {
         FeatureStore featureData = new FeatureStore();
         featureData.setIdMarketData(latestMarketData.getId());
         featureData.setSymbol(symbol);
+        featureData.setSignal(predictionResponse.getSignal());
+        featureData.setConfidence(predictionResponse.getConfidence());
+        featureData.setModel(predictionResponse.getModel());
         featureData.setTimestamp(timestamp);
         featureData.setPrice(price);
 

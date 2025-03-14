@@ -26,10 +26,10 @@ public class TradingService {
     private final TradeUtil tradeUtil;
 
 
-    public void vwapMacdLongTradeAction(MarketData marketData, FeatureStore featureStore,
+    public void vWapMacdLongTradeAction(MarketData marketData, FeatureStore featureStore,
                                         BigDecimal accountBalance, BigDecimal riskPercentage,
                                         Users user, String asset) {
-        String tradePlan = "vwapMacdLong";
+        String tradePlan = "vWapMacdLong";
 
         if (marketData == null || featureStore == null) {
             log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
@@ -47,7 +47,7 @@ public class TradingService {
 
         Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActiveAndTradePlanAndAction(user.getId(), asset, "1", tradePlan, "LONG");
 
-        TradeDecision decision = vwapMacdTradeDecision(marketData, featureStore, accountBalance, riskPercentage, activeTradeOpt, asset);
+        TradeDecision decision = vWapMacdTradeDecision(marketData, featureStore, accountBalance, riskPercentage, activeTradeOpt, asset);
 
         if ("BUY".equals(decision.getAction())) {
             LocalTime now = LocalTime.now(ZoneId.of("Asia/Jakarta"));
@@ -57,8 +57,6 @@ public class TradingService {
                 log.info("🚫 Trading is disabled from 5 AM (Jakarta Time) until midnight. Skipping trade action.");
                 return;
             }
-
-
             tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan);
         } else if ("SELL".equals(decision.getAction())) {
             tradeUtil.closeLongMarketOrder(user, activeTradeOpt, marketData, asset);
@@ -70,7 +68,7 @@ public class TradingService {
     /**
      * Determines whether to BUY, SELL, or HOLD based on VWAP and MACD strategy.
      */
-    private TradeDecision vwapMacdTradeDecision(MarketData marketData, FeatureStore featureStore,
+    private TradeDecision vWapMacdTradeDecision(MarketData marketData, FeatureStore featureStore,
                                                 BigDecimal accountBalance, BigDecimal riskPercentage,
                                                 Optional<Trades> activeTradeOpt, String asset) {
 
@@ -117,6 +115,7 @@ public class TradingService {
             }
         } else {
             // Buy Condition (No active trade)
+            log.info("close Price {} : vwap {} : macd {} : macdSignal {} ", closePrice, vwap, macd, macdSignal );
             if (closePrice.compareTo(vwap) > 0 && macd.compareTo(macdSignal) > 0) {
                 log.info("✅ BUY signal detected for {} size {}", asset, positionSize);
                 return TradeDecision.builder()

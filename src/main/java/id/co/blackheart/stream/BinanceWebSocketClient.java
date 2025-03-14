@@ -1,6 +1,8 @@
 package id.co.blackheart.stream;
 
 
+import id.co.blackheart.client.PredictionClientService;
+import id.co.blackheart.dto.PredictionResponse;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Users;
@@ -28,11 +30,12 @@ import java.util.concurrent.Executors;
 @AllArgsConstructor
 public class BinanceWebSocketClient {
 
-    private static final String BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@kline_1m";
+    private static final String BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@kline_5m";
     private final MarketDataRepository marketDataRepository;
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final TechnicalIndicatorService technicalIndicatorService;
     private final TradingService tradingService;
+    private final PredictionClientService predictionClientService;
     private final UsersRepository usersRepository;
 
 
@@ -87,10 +90,10 @@ public class BinanceWebSocketClient {
             long tradeCount = kline.getLong("n");
 
             boolean isFinal = kline.getBoolean("x");
-
+            log.info("message : " + message);
             if (isFinal) {
                 marketData.setSymbol(symbol);
-                marketData.setInterval("1m");
+                marketData.setInterval("5m");
                 marketData.setStartTime(LocalDateTime.ofInstant(startTime, ZoneId.of("UTC")));
                 marketData.setEndTime(LocalDateTime.ofInstant(endTime, ZoneId.of("UTC")));
                 marketData.setOpenPrice(BigDecimal.valueOf(openPrice));
@@ -102,11 +105,16 @@ public class BinanceWebSocketClient {
                 marketDataRepository.save(marketData);
                 log.info("Saved finalized candlestick: {}", marketData);
 
-               featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime);
+                PredictionResponse predictionResponse = predictionClientService.sendPredictionRequest();
+
+                log.info("PredictionResponse : " + predictionResponse);
+
+               featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, predictionResponse);
                 List<Users> userList = usersRepository.findByIsActive("1");
 
+
                 for (Users user : userList) {
-//                    tradingService.vwapMacdLongTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
+//                    tradingService.vWapMacdLongTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
 //                    tradingService.trendFollowingShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
 //                    tradingService.vWapLongTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
 //                    tradingService.vwapShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");

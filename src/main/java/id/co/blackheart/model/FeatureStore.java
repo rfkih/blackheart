@@ -25,6 +25,15 @@ public class FeatureStore {
     @Column(name = "symbol", length = 20, nullable = false)
     private String symbol;
 
+    @Column(name = "signal", length = 10)
+    private String signal;
+
+    @Column(name = "confidence", precision = 20, scale = 8)
+    private BigDecimal confidence;
+
+    @Column(name = "model", length = 30)
+    private String model;
+
     @Column(name = "timestamp", nullable = false)
     private LocalDateTime timestamp;
 
