@@ -163,7 +163,7 @@ public class TechnicalIndicatorService {
 
         for (MarketData data : historicalData) {
             // ✅ Handle missing timestamp by generating one dynamically
-            Instant barTimestamp = (data.getTimestamp() != null) ? data.getTimestamp() : Instant.now();
+            Instant barTimestamp = data.getEndTime().atZone(ZoneId.of("UTC")).toInstant();
 
             // ✅ Convert BigDecimal to Num using default Num.valueOf()
             Num openPrice = series.numOf(data.getOpenPrice());

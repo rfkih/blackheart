@@ -8,6 +8,7 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.service.MarketDataService;
 import id.co.blackheart.service.TechnicalIndicatorService;
 import id.co.blackheart.service.TradingService;
 import lombok.AllArgsConstructor;
@@ -31,12 +32,14 @@ import java.util.concurrent.Executors;
 public class BinanceWebSocketClient {
 
     private static final String BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@kline_5m";
+    private static final String INTERVAL = "5m";
     private final MarketDataRepository marketDataRepository;
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final TechnicalIndicatorService technicalIndicatorService;
     private final TradingService tradingService;
     private final PredictionClientService predictionClientService;
     private final UsersRepository usersRepository;
+    private final MarketDataService marketDataService;
 
 
     public void connect() {
@@ -92,8 +95,9 @@ public class BinanceWebSocketClient {
             boolean isFinal = kline.getBoolean("x");
             tradingService.activeTradeListener(symbol, BigDecimal.valueOf(closePrice));
             if (isFinal) {
+
                 marketData.setSymbol(symbol);
-                marketData.setInterval("5m");
+                marketData.setInterval(INTERVAL);
                 marketData.setStartTime(LocalDateTime.ofInstant(startTime, ZoneId.of("UTC")));
                 marketData.setEndTime(LocalDateTime.ofInstant(endTime, ZoneId.of("UTC")));
                 marketData.setOpenPrice(BigDecimal.valueOf(openPrice));
@@ -103,8 +107,13 @@ public class BinanceWebSocketClient {
                 marketData.setVolume(BigDecimal.valueOf(volume));
                 marketData.setTradeCount(tradeCount);
                 marketData.setTimestamp(eventTime);
-                marketDataRepository.save(marketData);
-                log.info("Saved finalized candlestick: {}", marketData);
+
+                if (!marketDataService.checkAndFetchMissingCandles(symbol, endTime, INTERVAL)){
+                    marketDataRepository.save(marketData);
+                    log.info("Saved finalized candlestick: {}", marketData);
+                }
+
+
 
                 PredictionResponse predictionResponse = predictionClientService.sendPredictionRequest();
 
@@ -116,9 +125,6 @@ public class BinanceWebSocketClient {
 
                 for (Users user : userList) {
                     tradingService.cnnTransformerLongShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
-//                    tradingService.trendFollowingShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
-//                    tradingService.vWapLongTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
-//                    tradingService.vwapShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
                 }
 
             }
