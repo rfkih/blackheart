@@ -90,7 +90,7 @@ public class BinanceWebSocketClient {
             long tradeCount = kline.getLong("n");
 
             boolean isFinal = kline.getBoolean("x");
-            log.info("message : " + message);
+            tradingService.activeTradeListener(symbol, BigDecimal.valueOf(closePrice));
             if (isFinal) {
                 marketData.setSymbol(symbol);
                 marketData.setInterval("5m");
@@ -102,6 +102,7 @@ public class BinanceWebSocketClient {
                 marketData.setLowPrice(BigDecimal.valueOf(lowPrice));
                 marketData.setVolume(BigDecimal.valueOf(volume));
                 marketData.setTradeCount(tradeCount);
+                marketData.setTimestamp(eventTime);
                 marketDataRepository.save(marketData);
                 log.info("Saved finalized candlestick: {}", marketData);
 
@@ -114,7 +115,7 @@ public class BinanceWebSocketClient {
 
 
                 for (Users user : userList) {
-//                    tradingService.vWapMacdLongTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
+                    tradingService.cnnTransformerLongShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
 //                    tradingService.trendFollowingShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
 //                    tradingService.vWapLongTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
 //                    tradingService.vwapShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");

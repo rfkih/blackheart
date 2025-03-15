@@ -157,6 +157,11 @@ public class TradeUtil {
     }
 
     public void closeShortMarketOrder(Users user, Optional<Trades> activeTradeOpt, MarketData marketData, String asset) {
+
+        if (user == null){
+            log.info("User Data is Null!");
+            return;
+        }
         activeTradeOpt.ifPresent(trade -> {
             try {
                 MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
@@ -223,6 +228,15 @@ public class TradeUtil {
         }
 
         return profitLoss.multiply(BigDecimal.valueOf(100)).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    public TradeDecision createTradeDecision(String action, BigDecimal positionSize, BigDecimal stopLoss, BigDecimal takeProfit) {
+        return TradeDecision.builder()
+                .action(action)
+                .positionSize(positionSize)
+                .stopLossPrice(stopLoss)
+                .takeProfitPrice(takeProfit)
+                .build();
     }
 
 }

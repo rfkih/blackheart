@@ -5,6 +5,7 @@ import id.co.blackheart.dto.*;
 import id.co.blackheart.model.*;
 import id.co.blackheart.repository.PortfolioRepository;
 import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.util.TradeUtil;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -22,6 +24,7 @@ public class TradingService {
     private final PortfolioRepository portfolioRepository;
     private final TradeExecutionService tradeExecutionService;
     private final TradeUtil tradeUtil;
+    private final UsersRepository usersRepository;
 
 
     public void cnnTransformeLongTradeAction(MarketData marketData, FeatureStore featureStore,
@@ -144,6 +147,46 @@ public class TradingService {
         }
     }
 
+    public void activeTradeListener(String asset, BigDecimal closePrice){
+
+        List<Trades> activeTradeList = tradesRepository.findByAssetAndIsActive( asset, "1");
+
+        for (Trades activeTrade : activeTradeList) {
+
+            TradeDecision decision = activeTradeDecision(activeTrade, closePrice);
+
+            Optional<Users> user = usersRepository.findById(activeTrade.getUserId());
+
+            MarketData marketData = new MarketData();
+            marketData.setClosePrice(closePrice);
+
+            Optional<Trades> optionalActiveTrade = Optional.ofNullable(activeTrade);
+            // Execute Trade Action
+            if ("SELL".equals(decision.getAction())) {
+                tradeUtil.closeLongMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+            } else if ("BUY".equals(decision.getAction())) {
+                tradeUtil.closeShortMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+            } else {
+                log.info("⏳ HOLD: No trade action needed for {} at {}", asset, closePrice);
+            }
+        }
+    }
+
+
+    public TradeDecision activeTradeDecision(Trades activeTrade, BigDecimal closePrice) {
+        boolean stopLossHit = closePrice.compareTo(activeTrade.getStopLossPrice()) <= 0;
+        boolean takeProfitHit = closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0;
+
+        if (activeTrade.getAction().equals("LONG") && (stopLossHit || takeProfitHit)) {
+            return tradeUtil.createTradeDecision("SELL", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
+        }
+        if (activeTrade.getAction().equals("SHORT") && (!stopLossHit || !takeProfitHit)) {
+            return tradeUtil.createTradeDecision("BUY", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
+        }
+
+        return tradeUtil.createTradeDecision("HOLD", BigDecimal.ZERO, null, null);
+    }
+
     public TradeDecision cnnTransformerShortTradeDecision(BigDecimal closePrice, FeatureStore featureStore,
                                                           BigDecimal accountBalance, BigDecimal riskPercentage,
                                                           BigDecimal lastLowestPrice, Optional<Trades> activeTradeOpt,
@@ -179,7 +222,7 @@ public class TradingService {
         } else {
             // Selling Condition (Only if there's no active trade)
             if (featureStore.getSignal().equals("SELL") && featureStore.getConfidence().compareTo(BigDecimal.valueOf(0.6)) >= 0) {
-                log.info("✅ SELL signal detected for {} with confidence {}", asset, featureStore.getConfidence());
+                log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal() , asset, featureStore.getConfidence());
                 return TradeDecision.builder()
                         .action("SELL")
                         .positionSize(positionSize)
@@ -275,60 +318,36 @@ public class TradingService {
             boolean stopLossHit = closePrice.compareTo(activeTrade.getStopLossPrice()) <= 0;
             boolean takeProfitHit = closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0;
 
-            if (activeTrade.getAction().equals("BUY") && (stopLossHit || takeProfitHit)) {
-                return createTradeDecision("SELL", activeTrade);
+            if (activeTrade.getAction().equals("LONG") && (stopLossHit || takeProfitHit)) {
+                return tradeUtil.createTradeDecision("SELL", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
             }
-            if (activeTrade.getAction().equals("SELL") && (!stopLossHit || !takeProfitHit)) {
-                return createTradeDecision("BUY", activeTrade);
+            if (activeTrade.getAction().equals("SHORT") && (!stopLossHit || !takeProfitHit)) {
+                return tradeUtil.createTradeDecision("BUY", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
             }
         } else {
             // No Active Trade, Look for New Entry Signals
-            if (shouldEnterTrade(featureStore)) {
-                String action = featureStore.getSignal().equals("BUY") ? "BUY" : "SELL";
-                BigDecimal stopLoss = action.equals("BUY") ? stopLossPriceLong : stopLossPriceShort;
-                BigDecimal takeProfit = action.equals("BUY") ? takeProfitPriceLong : takeProfitPriceShort;
+            if (featureStore.getConfidence().compareTo(BigDecimal.valueOf(0.6)) >= 0) {
+                String signal = featureStore.getSignal();  // Get model prediction (BUY, SELL, or HOLD)
+                BigDecimal stopLoss = null;
+                BigDecimal takeProfit = null;
 
-                log.info("✅ {} signal detected for {} with confidence {}", action, asset, featureStore.getConfidence());
-                return createTradeDecision(action, BigDecimal.ONE, stopLoss, takeProfit);
+                if ("BUY".equals(signal)) {
+                    stopLoss = stopLossPriceLong;
+                    takeProfit = takeProfitPriceLong;
+                } else if ("SELL".equals(signal)) {
+                    stopLoss = stopLossPriceShort;
+                    takeProfit = takeProfitPriceShort;
+                } else {
+                    log.info("⏳ HOLD signal detected for {}. No action taken.", asset);
+                    return tradeUtil.createTradeDecision("HOLD", BigDecimal.ZERO, null, null);
+                }
+
+                log.info("✅ {} signal detected for {} with confidence {}", signal, asset, featureStore.getConfidence());
+                return tradeUtil.createTradeDecision(signal, BigDecimal.ONE, stopLoss, takeProfit);
             }
         }
 
-        return createTradeDecision("HOLD", BigDecimal.ZERO, null, null);
+        return tradeUtil.createTradeDecision("HOLD", BigDecimal.ZERO, null, null);
     }
-
-    /**
-     * Checks if trade conditions are met based on confidence level.
-     */
-    private boolean shouldEnterTrade(FeatureStore featureStore) {
-        return featureStore.getConfidence().compareTo(BigDecimal.valueOf(0.6)) >= 0;
-    }
-
-    /**
-     * Helper method to create a TradeDecision object.
-     */
-    private TradeDecision createTradeDecision(String action, Trades trade) {
-        return TradeDecision.builder()
-                .action(action)
-                .positionSize(trade.getEntryExecutedQty())
-                .stopLossPrice(trade.getStopLossPrice())
-                .takeProfitPrice(trade.getTakeProfitPrice())
-                .build();
-    }
-
-    /**
-     * Overloaded method for new trade entries.
-     */
-    private TradeDecision createTradeDecision(String action, BigDecimal positionSize, BigDecimal stopLoss, BigDecimal takeProfit) {
-        return TradeDecision.builder()
-                .action(action)
-                .positionSize(positionSize)
-                .stopLossPrice(stopLoss)
-                .takeProfitPrice(takeProfit)
-                .build();
-    }
-
-
-
-
 
 }
