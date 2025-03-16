@@ -3,7 +3,6 @@ package id.co.blackheart.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.PredictionResponse;
-import id.co.blackheart.dto.TokocryptoResponse;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -18,7 +17,7 @@ import java.io.IOException;
 @Slf4j
 @Service
 @AllArgsConstructor
-public class PredictionClientService {
+public class DeepLearningClientService {
     private static final String PREDICT_URL = "http://127.0.0.1:8000/predict";
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();

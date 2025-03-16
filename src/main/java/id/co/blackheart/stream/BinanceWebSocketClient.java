@@ -1,7 +1,7 @@
 package id.co.blackheart.stream;
 
 
-import id.co.blackheart.client.PredictionClientService;
+import id.co.blackheart.client.DeepLearningClientService;
 import id.co.blackheart.dto.PredictionResponse;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
@@ -37,7 +37,7 @@ public class BinanceWebSocketClient {
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final TechnicalIndicatorService technicalIndicatorService;
     private final TradingService tradingService;
-    private final PredictionClientService predictionClientService;
+    private final DeepLearningClientService deepLearningClientService;
     private final UsersRepository usersRepository;
     private final MarketDataService marketDataService;
 
@@ -113,11 +113,7 @@ public class BinanceWebSocketClient {
                     log.info("Saved finalized candlestick: {}", marketData);
                 }
 
-
-
-                PredictionResponse predictionResponse = predictionClientService.sendPredictionRequest();
-
-                log.info("PredictionResponse : " + predictionResponse);
+                PredictionResponse predictionResponse = deepLearningClientService.sendPredictionRequest();
 
                featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, predictionResponse);
                 List<Users> userList = usersRepository.findByIsActive("1");

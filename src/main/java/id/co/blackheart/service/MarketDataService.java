@@ -3,6 +3,8 @@ package id.co.blackheart.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import id.co.blackheart.client.DeepLearningClientService;
+import id.co.blackheart.dto.PredictionResponse;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.MarketDataRepository;
 import lombok.AllArgsConstructor;
@@ -23,6 +25,8 @@ import java.util.List;
 @AllArgsConstructor
 public class MarketDataService {
     MarketDataRepository marketDataRepository;
+    DeepLearningClientService deepLearningClientService;
+    TechnicalIndicatorService technicalIndicatorService;
 
 
     public boolean checkAndFetchMissingCandles(String symbol, Instant latestKlineEndTime, String interval) {
@@ -43,7 +47,6 @@ public class MarketDataService {
             fetchMissingCandles(symbol, latestKlineEndTime.minusSeconds(3600).toEpochMilli(), latestKlineEndTime.toEpochMilli());
             return true;
         }
-
         return false;
     }
 
@@ -76,6 +79,9 @@ public class MarketDataService {
                     marketData.setTimestamp(Instant.ofEpochMilli((Long) kline[6]));
 
                     marketDataRepository.save(marketData);
+                    PredictionResponse predictionResponse = deepLearningClientService.sendPredictionRequest();
+
+                    technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", Instant.ofEpochSecond(System.currentTimeMillis()), predictionResponse);
                     log.info("✅ Inserted missing candlestick: {}", marketData);
                 }
             }

@@ -1,7 +1,7 @@
 package id.co.blackheart.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import id.co.blackheart.client.PredictionClientService;
+import id.co.blackheart.client.DeepLearningClientService;
 import id.co.blackheart.client.TokocryptoClientService;
 import id.co.blackheart.dto.*;
 import lombok.AllArgsConstructor;
@@ -16,7 +16,7 @@ import org.springframework.stereotype.Service;
 public class TradeExecutionService {
 
     TokocryptoClientService tokocryptoClientService;
-    PredictionClientService predictionClientService;
+    DeepLearningClientService deepLearningClientService;
 
     public MarketOrderResponse placeMarketOrder(MarketOrderRequest marketOrder) {
 
@@ -54,20 +54,5 @@ public class TradeExecutionService {
         }
     }
 
-    public PredictionResponse getPrediction(PredictionRequest predictionRequest) {
-        try {
-            PredictionResponse response = predictionClientService.sendPredictionRequest();
 
-            log.info("prediction Response : " + response);
-
-            if (response == null) {
-                log.warn("⚠No data received for ID Detail : {}", predictionRequest.getPair());
-                throw new Exception("No data Received for ID Detail :" + predictionRequest.getPair());
-            }
-
-            return response;
-        }catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
 }

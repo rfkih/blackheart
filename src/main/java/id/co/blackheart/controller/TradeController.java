@@ -40,14 +40,4 @@ public class TradeController {
                 .data(response)
                 .build());
     }
-
-
-    @PostMapping("/predict")
-    public ResponseEntity<ResponseDto> predict(@RequestBody PredictionRequest predictionRequest) {
-        PredictionResponse response = tradeExecutionService.getPrediction(predictionRequest);
-        return ResponseEntity.ok().body(ResponseDto.builder()
-                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(response)
-                .build());
-    }
 }

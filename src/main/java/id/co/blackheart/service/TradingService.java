@@ -166,8 +166,6 @@ public class TradingService {
                 tradeUtil.closeLongMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
             } else if ("BUY".equals(decision.getAction())) {
                 tradeUtil.closeShortMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
-            } else {
-                log.info("⏳ HOLD: No trade action needed for {} at {}", asset, closePrice);
             }
         }
     }
