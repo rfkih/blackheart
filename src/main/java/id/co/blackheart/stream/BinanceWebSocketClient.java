@@ -120,7 +120,7 @@ public class BinanceWebSocketClient {
 
 
                 for (Users user : userList) {
-                    tradingService.cnnTransformerLongShortTradeAction(marketData,featureStore,BigDecimal.valueOf(0.02),BigDecimal.valueOf(2L),user,"BTCUSDT");
+                    tradingService.cnnTransformerLongShortTradeAction(marketData,featureStore,user,"BTCUSDT");
                 }
 
             }

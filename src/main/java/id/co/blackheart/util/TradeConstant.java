@@ -16,4 +16,19 @@ public final class TradeConstant {
             this.description=description;
         }
     }
+
+
+    @Getter
+    public enum JOB_TYPE{
+        TRAIN_MODEL("train_model","1 Minutes Interval"),
+        UPDATE_ACCOUNT_BALANCE("update_balance","5 Minutes Interval");
+
+        private final String code;
+        private final String description;
+        JOB_TYPE(String code,String description){
+            this.code=code;
+            this.description=description;
+        }
+    }
+
 }

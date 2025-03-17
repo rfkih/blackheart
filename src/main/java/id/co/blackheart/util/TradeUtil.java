@@ -30,6 +30,7 @@ public class TradeUtil {
 
     public void openLongMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
         try {
+            log.info("trade amount : " +  tradeAmount);
             MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
                     .symbol("BTC_USDT")
                     .side(0)

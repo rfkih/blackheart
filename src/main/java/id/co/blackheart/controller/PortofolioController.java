@@ -20,8 +20,11 @@ public class PortofolioController {
 
     private static final String RELOAD_SUCCESS = "Update Portofolio Success";
 
-    @Autowired
     private PortfolioService portofolioService;
+
+    public PortofolioController(PortfolioService portofolioService) {
+        this.portofolioService = portofolioService;
+    }
 
     @GetMapping("/reload")
     public ResponseEntity<ResponseDto> portofolioUpdate() throws Exception {

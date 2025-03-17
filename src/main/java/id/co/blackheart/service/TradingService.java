@@ -1,6 +1,7 @@
 package id.co.blackheart.service;
 
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import id.co.blackheart.dto.*;
 import id.co.blackheart.model.*;
 import id.co.blackheart.repository.PortfolioRepository;
@@ -24,11 +25,12 @@ public class TradingService {
     private final PortfolioRepository portfolioRepository;
     private final TradeUtil tradeUtil;
     private final UsersRepository usersRepository;
+    private final PortfolioService portfolioService;
 
 
     public void cnnTransformeLongTradeAction(MarketData marketData, FeatureStore featureStore,
                                         BigDecimal accountBalance, BigDecimal riskPercentage,
-                                        Users user, String asset) {
+                                        Users user, String asset) throws JsonProcessingException {
         String tradePlan = "cnn_transformer_long";
 
         if (marketData == null || featureStore == null) {
@@ -44,13 +46,14 @@ public class TradingService {
         TradeDecision decision = cnnTransformerLongTradeDecision(marketData, featureStore, accountBalance, riskPercentage, activeTradeOpt, asset);
 
         if ("BUY".equals(decision.getAction())) {
-            Optional<Portfolio> usdAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "USDT");
-            BigDecimal tradeAmount = usdAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+            log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal(), asset, featureStore.getConfidence());
+            Portfolio usdAsset = portfolioService.updateAndGetAssetBalance("USDT", user, "5000");
+            BigDecimal tradeAmount = usdAsset.getBalance().multiply(user.getRiskAmount()).setScale(0, RoundingMode.DOWN);;
             if (tradeAmount.compareTo(BigDecimal.valueOf(7)) <= 0) {
                 tradeAmount = BigDecimal.valueOf(7);// minimum Trade Amount
             }
-            if (usdAsset.isPresent() && usdAsset.get().getBalance().compareTo(tradeAmount) < 0) {
-                log.info("Insufficient USDT Balance : {}, cannot making trade action.", usdAsset.get().getBalance());
+            if (usdAsset.getBalance().compareTo(tradeAmount) < 0) {
+                log.info("Insufficient USDT Balance : {}, cannot making trade action.", usdAsset.getBalance());
                 return;
             }
             tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan, BigDecimal.ONE);
@@ -123,7 +126,7 @@ public class TradingService {
 
     public void cnnTransformerShortTradeAction(MarketData marketData, FeatureStore featureStore,
                                      BigDecimal accountBalance, BigDecimal riskPercentage,
-                                     Users user, String asset) {
+                                     Users user, String asset) throws JsonProcessingException {
         String tradePlan = "cnn_transformer_short";
         if (marketData == null || featureStore == null) {
             log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
@@ -141,13 +144,13 @@ public class TradingService {
 
         // Execute Trade Action
         if ("SELL".equals(decision.getAction())) {
-            Optional<Portfolio> btcAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "BTC");
-            BigDecimal tradeAmount = btcAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+            Portfolio btcAsset = portfolioService.updateAndGetAssetBalance("BTC", user, "5000");
+            BigDecimal tradeAmount = btcAsset.getBalance().multiply(user.getRiskAmount()).setScale(5, RoundingMode.DOWN);
             if (tradeAmount.compareTo(new BigDecimal("0.00008")) <= 0) {
                 tradeAmount = new BigDecimal("0.00008");// minimum Trade Amount
             }
-            if (btcAsset.isPresent() && btcAsset.get().getBalance().compareTo(tradeAmount) < 0) {
-                log.info("Insufficient Btc Balance : {}, cannot making trade action.", btcAsset.get().getBalance());
+            if (btcAsset.getBalance().compareTo(tradeAmount) < 0) {
+                log.info("Insufficient Btc Balance : {}, cannot making trade action.", btcAsset.getBalance());
                 return;
             }
             tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
@@ -185,11 +188,10 @@ public class TradingService {
     public TradeDecision activeTradeDecision(Trades activeTrade, BigDecimal closePrice) {
         boolean stopLossHit = closePrice.compareTo(activeTrade.getStopLossPrice()) <= 0;
         boolean takeProfitHit = closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0;
-
         if (activeTrade.getAction().equals("LONG") && (stopLossHit || takeProfitHit)) {
             return tradeUtil.createTradeDecision("SELL", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
         }
-        if (activeTrade.getAction().equals("SHORT") && (!stopLossHit || !takeProfitHit)) {
+        if (activeTrade.getAction().equals("SHORT") && (stopLossHit || takeProfitHit)) {
             return tradeUtil.createTradeDecision("BUY", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
         }
 
@@ -202,8 +204,8 @@ public class TradingService {
                                                           String asset) {
 
         // Risk Parameters
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.006); // 0.2% Take Profit
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.003); // 0.1% Stop Loss
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.012); // 0.2% Take Profit
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.005); // 0.1% Stop Loss
 
 
         // Compute Stop-Loss and Take-Profit Levels
@@ -253,16 +255,13 @@ public class TradingService {
      * Determines trade action based on market data and strategy.
      */
     public void cnnTransformerLongShortTradeAction(MarketData marketData, FeatureStore featureStore,
-                                                   BigDecimal accountBalance, BigDecimal riskPercentage,
-                                                   Users user, String asset) {
+                                                   Users user, String asset) throws JsonProcessingException {
         String tradePlan = "cnn_transformer_long_short";
 
         if (marketData == null || featureStore == null) {
             log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
             return;
         }
-
-        BigDecimal closePrice = marketData.getClosePrice();
 
         // Fetch Active Trade (if any)
         Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActiveAndTradePlan(
@@ -279,19 +278,19 @@ public class TradingService {
      * Executes the trade action based on the trade decision.
      */
     private void executeTradeAction(Users user, String asset, TradeDecision decision,
-                                    String tradePlan, Optional<Trades> activeTradeOpt, FeatureStore featureStore, MarketData marketData) {
-        String signal = featureStore.getSignal();
+                                    String tradePlan, Optional<Trades> activeTradeOpt, FeatureStore featureStore, MarketData marketData) throws JsonProcessingException {
 
         switch (decision.getAction()) {
             case "BUY":
-                if ("BUY".equals(signal)) {
-                    Optional<Portfolio> usdAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "USDT");
-                    BigDecimal tradeAmount = usdAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+                if ("BUY".equals(featureStore.getSignal()) && activeTradeOpt.isEmpty()) {
+                    log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal(), asset, featureStore.getConfidence());
+                    Portfolio usdAsset = portfolioService.updateAndGetAssetBalance("USDT", user, "5000");
+                    BigDecimal tradeAmount = usdAsset.getBalance().multiply(user.getRiskAmount()).setScale(0, RoundingMode.DOWN);;
                     if (tradeAmount.compareTo(BigDecimal.valueOf(7)) <= 0) {
                         tradeAmount = BigDecimal.valueOf(7);// minimum Trade Amount
                     }
-                    if (usdAsset.isPresent() && usdAsset.get().getBalance().compareTo(tradeAmount) < 0) {
-                        log.info("Insufficient USDT Balance : {}, cannot making trade action.", usdAsset.get().getBalance());
+                    if (usdAsset.getBalance().compareTo(tradeAmount) < 0) {
+                        log.info("Insufficient USDT Balance : {}, cannot making trade action.", usdAsset.getBalance());
                         return;
                     }
                     tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan, tradeAmount);
@@ -300,14 +299,14 @@ public class TradingService {
                 }
                 break;
             case "SELL":
-                if ("SELL".equals(signal)) {
-                    Optional<Portfolio> btcAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "BTC");
-                    BigDecimal tradeAmount = btcAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+                if ("SELL".equals(featureStore.getSignal()) && activeTradeOpt.isEmpty()) {
+                    Portfolio btcAsset = portfolioService.updateAndGetAssetBalance("BTC", user, "5000");
+                    BigDecimal tradeAmount = btcAsset.getBalance().multiply(user.getRiskAmount()).setScale(5, RoundingMode.DOWN);
                     if (tradeAmount.compareTo(new BigDecimal("0.00008")) <= 0) {
                         tradeAmount = new BigDecimal("0.00008");// minimum Trade Amount
                     }
-                    if (btcAsset.isPresent() && btcAsset.get().getBalance().compareTo(tradeAmount) < 0) {
-                        log.info("Insufficient Btc Balance : {}, cannot making trade action.", btcAsset.get().getBalance());
+                    if (btcAsset.getBalance().compareTo(tradeAmount) < 0) {
+                        log.info("Insufficient Btc Balance : {}, cannot making trade action.", btcAsset.getBalance());
                         return;
                     }
                     tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
