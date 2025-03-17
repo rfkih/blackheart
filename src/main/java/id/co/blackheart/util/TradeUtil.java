@@ -28,12 +28,12 @@ public class TradeUtil {
     }
 
 
-    public void openLongMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan) {
+    public void openLongMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
         try {
             MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
                     .symbol("BTC_USDT")
                     .side(0)
-                    .amount(BigDecimal.valueOf(7))
+                    .amount(tradeAmount)
                     .isQuoteQty(true)
                     .apiKey(user.getApiKey())
                     .apiSecret(user.getApiSecret())
@@ -112,12 +112,12 @@ public class TradeUtil {
         });
     }
 
-    public void openShortMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan) {
+    public void openShortMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
         try {
             MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
                     .symbol("BTC_USDT")
                     .side(1)
-                    .amount(new BigDecimal("0.00008"))
+                    .amount(tradeAmount)
                     .isQuoteQty(false)
                     .apiKey(user.getApiKey())
                     .apiSecret(user.getApiSecret())

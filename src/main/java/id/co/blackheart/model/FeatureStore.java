@@ -125,6 +125,4 @@ public class FeatureStore {
     @Column(name = "ema_100", precision = 20, scale = 8)
     private BigDecimal ema100;
 
-
-
 }

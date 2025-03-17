@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import jakarta.persistence.*;
+
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -21,6 +23,9 @@ public class Users {
 
     @Column(nullable = false, length = 1)
     private String isActive;
+
+    @Column(precision = 5, scale = 2)
+    private BigDecimal riskAmount;
 
     @Column(nullable = false)
     private String apiKey;

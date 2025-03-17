@@ -22,7 +22,6 @@ import java.util.Optional;
 public class TradingService {
     private final TradesRepository tradesRepository;
     private final PortfolioRepository portfolioRepository;
-    private final TradeExecutionService tradeExecutionService;
     private final TradeUtil tradeUtil;
     private final UsersRepository usersRepository;
 
@@ -33,16 +32,10 @@ public class TradingService {
         String tradePlan = "cnn_transformer_long";
 
         if (marketData == null || featureStore == null) {
-            log.warn("❌ Market data or feature store is null. Cannot determine trade action.");
+            log.warn("❌ Market data or feature store is null.");
             return;
         }
 
-        Optional<Portfolio> usdAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "USDT");
-
-        if (!usdAsset.isPresent() || usdAsset.get().getBalance().compareTo(BigDecimal.ZERO) <= 0) {
-            log.info("No USDT Asset Found, cannot making trade action.");
-            return;
-        }
 
         BigDecimal closePrice = marketData.getClosePrice();
 
@@ -51,7 +44,16 @@ public class TradingService {
         TradeDecision decision = cnnTransformerLongTradeDecision(marketData, featureStore, accountBalance, riskPercentage, activeTradeOpt, asset);
 
         if ("BUY".equals(decision.getAction())) {
-            tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan);
+            Optional<Portfolio> usdAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "USDT");
+            BigDecimal tradeAmount = usdAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+            if (tradeAmount.compareTo(BigDecimal.valueOf(7)) <= 0) {
+                tradeAmount = BigDecimal.valueOf(7);// minimum Trade Amount
+            }
+            if (usdAsset.isPresent() && usdAsset.get().getBalance().compareTo(tradeAmount) < 0) {
+                log.info("Insufficient USDT Balance : {}, cannot making trade action.", usdAsset.get().getBalance());
+                return;
+            }
+            tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan, BigDecimal.ONE);
         } else if ("SELL".equals(decision.getAction())) {
             tradeUtil.closeLongMarketOrder(user, activeTradeOpt, marketData, asset);
         } else {
@@ -71,8 +73,8 @@ public class TradingService {
         BigDecimal confidence = featureStore.getConfidence();
 
         // Risk Parameters
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.005); // 0.5% Stop Loss
         BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.01); // 1% Take Profit
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.005); // 0.5% Stop Loss
 
         // Compute Stop-Loss and Take-Profit Levels
         BigDecimal stopLossPrice = closePrice.subtract(closePrice.multiply(stopLossThreshold));
@@ -139,7 +141,16 @@ public class TradingService {
 
         // Execute Trade Action
         if ("SELL".equals(decision.getAction())) {
-            tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan);
+            Optional<Portfolio> btcAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "BTC");
+            BigDecimal tradeAmount = btcAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+            if (tradeAmount.compareTo(new BigDecimal("0.00008")) <= 0) {
+                tradeAmount = new BigDecimal("0.00008");// minimum Trade Amount
+            }
+            if (btcAsset.isPresent() && btcAsset.get().getBalance().compareTo(tradeAmount) < 0) {
+                log.info("Insufficient Btc Balance : {}, cannot making trade action.", btcAsset.get().getBalance());
+                return;
+            }
+            tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
         } else if ("BUY".equals(decision.getAction())) {
             tradeUtil.closeShortMarketOrder(user, activeTradeOpt, marketData, asset);
         } else {
@@ -191,8 +202,9 @@ public class TradingService {
                                                           String asset) {
 
         // Risk Parameters
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.005); // 0.5% Stop Loss
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.01); // 1% Take Profit
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.006); // 0.2% Take Profit
+        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.003); // 0.1% Stop Loss
+
 
         // Compute Stop-Loss and Take-Profit Levels
         BigDecimal stopLossPrice = closePrice.add(closePrice.multiply(stopLossThreshold));
@@ -257,8 +269,7 @@ public class TradingService {
                 user.getId(), asset, "1", tradePlan);
 
         // Determine Trade Decision
-        TradeDecision decision = cnnTransformerLongShortTradeDecision(
-                closePrice, featureStore, accountBalance, riskPercentage, marketData.getHighPrice(), activeTradeOpt, asset);
+        TradeDecision decision = cnnTransformerLongShortTradeDecision(marketData, featureStore, activeTradeOpt, asset);
 
         // Execute Trade Action
         executeTradeAction(user, asset, decision, tradePlan, activeTradeOpt, featureStore, marketData);
@@ -274,14 +285,32 @@ public class TradingService {
         switch (decision.getAction()) {
             case "BUY":
                 if ("BUY".equals(signal)) {
-                    tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan);
+                    Optional<Portfolio> usdAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "USDT");
+                    BigDecimal tradeAmount = usdAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+                    if (tradeAmount.compareTo(BigDecimal.valueOf(7)) <= 0) {
+                        tradeAmount = BigDecimal.valueOf(7);// minimum Trade Amount
+                    }
+                    if (usdAsset.isPresent() && usdAsset.get().getBalance().compareTo(tradeAmount) < 0) {
+                        log.info("Insufficient USDT Balance : {}, cannot making trade action.", usdAsset.get().getBalance());
+                        return;
+                    }
+                    tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan, tradeAmount);
                 } else {
                     tradeUtil.closeShortMarketOrder(user, activeTradeOpt, marketData, asset);
                 }
                 break;
             case "SELL":
                 if ("SELL".equals(signal)) {
-                    tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan);
+                    Optional<Portfolio> btcAsset = portfolioRepository.findByUserIdAndAsset(user.getId(), "BTC");
+                    BigDecimal tradeAmount = btcAsset.map(portfolio -> portfolio.getBalance().multiply(user.getRiskAmount())).orElse(BigDecimal.ZERO);
+                    if (tradeAmount.compareTo(new BigDecimal("0.00008")) <= 0) {
+                        tradeAmount = new BigDecimal("0.00008");// minimum Trade Amount
+                    }
+                    if (btcAsset.isPresent() && btcAsset.get().getBalance().compareTo(tradeAmount) < 0) {
+                        log.info("Insufficient Btc Balance : {}, cannot making trade action.", btcAsset.get().getBalance());
+                        return;
+                    }
+                    tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
                 } else {
                     tradeUtil.closeLongMarketOrder(user, activeTradeOpt, marketData, asset);
                 }
@@ -295,26 +324,24 @@ public class TradingService {
     /**
      * Determines whether to BUY, SELL, or HOLD.
      */
-    private TradeDecision cnnTransformerLongShortTradeDecision(BigDecimal closePrice, FeatureStore featureStore,
-                                                               BigDecimal accountBalance, BigDecimal riskPercentage,
-                                                               BigDecimal lastHighestPrice, Optional<Trades> activeTradeOpt,
+    private TradeDecision cnnTransformerLongShortTradeDecision(MarketData marketData, FeatureStore featureStore, Optional<Trades> activeTradeOpt,
                                                                String asset) {
         // Risk Parameters
-        final BigDecimal STOP_LOSS_THRESHOLD = BigDecimal.valueOf(0.005);  // 0.5% Stop Loss
         final BigDecimal TAKE_PROFIT_THRESHOLD = BigDecimal.valueOf(0.01); // 1% Take Profit
+        final BigDecimal STOP_LOSS_THRESHOLD = BigDecimal.valueOf(0.005);  // 0.5% Stop Loss
 
         // Compute Stop-Loss and Take-Profit Levels
-        BigDecimal stopLossPriceShort = closePrice.multiply(BigDecimal.ONE.add(STOP_LOSS_THRESHOLD));
-        BigDecimal takeProfitPriceShort = closePrice.multiply(BigDecimal.ONE.subtract(TAKE_PROFIT_THRESHOLD));
-        BigDecimal stopLossPriceLong = closePrice.multiply(BigDecimal.ONE.subtract(STOP_LOSS_THRESHOLD));
-        BigDecimal takeProfitPriceLong = closePrice.multiply(BigDecimal.ONE.add(TAKE_PROFIT_THRESHOLD));
+        BigDecimal stopLossPriceShort = marketData.getClosePrice().multiply(BigDecimal.ONE.add(STOP_LOSS_THRESHOLD));
+        BigDecimal takeProfitPriceShort = marketData.getClosePrice().multiply(BigDecimal.ONE.subtract(TAKE_PROFIT_THRESHOLD));
+        BigDecimal stopLossPriceLong = marketData.getClosePrice().multiply(BigDecimal.ONE.subtract(STOP_LOSS_THRESHOLD));
+        BigDecimal takeProfitPriceLong = marketData.getClosePrice().multiply(BigDecimal.ONE.add(TAKE_PROFIT_THRESHOLD));
 
         // If an active trade exists, check for stop-loss/take-profit conditions
         if (activeTradeOpt.isPresent()) {
             Trades activeTrade = activeTradeOpt.get();
 
-            boolean stopLossHit = closePrice.compareTo(activeTrade.getStopLossPrice()) <= 0;
-            boolean takeProfitHit = closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0;
+            boolean stopLossHit = marketData.getClosePrice().compareTo(activeTrade.getStopLossPrice()) <= 0;
+            boolean takeProfitHit = marketData.getClosePrice().compareTo(activeTrade.getTakeProfitPrice()) >= 0;
 
             if (activeTrade.getAction().equals("LONG") && (stopLossHit || takeProfitHit)) {
                 return tradeUtil.createTradeDecision("SELL", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
