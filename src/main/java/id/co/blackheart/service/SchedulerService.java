@@ -1,7 +1,6 @@
 package id.co.blackheart.service;
 
 import id.co.blackheart.dto.SchedulerRequest;
-import id.co.blackheart.util.TradeConstant;
 import jakarta.annotation.PreDestroy;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +21,7 @@ public class SchedulerService {
     private final ScheduledExecutorService executorService = Executors.newScheduledThreadPool(5);
     private final Map<String, ScheduledFuture<?>> schedulerMap = new ConcurrentHashMap<>();
     private final PortfolioService portfolioService;
+    private final DeepLearningService deepLearningService;
 
     /**
      * Starts a scheduler for a specific job type
@@ -77,7 +77,7 @@ public class SchedulerService {
         // Example router
         switch (jobType) {
             case "TRAIN_MODEL":
-
+                deepLearningService.executeTraining();
                 log.info("[TRAIN_MODEL] Triggered at " + LocalDateTime.now());
                 break;
             case "UPDATE_BALANCE":

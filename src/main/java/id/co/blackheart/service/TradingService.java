@@ -283,7 +283,6 @@ public class TradingService {
         switch (decision.getAction()) {
             case "BUY":
                 if ("BUY".equals(featureStore.getSignal()) && activeTradeOpt.isEmpty()) {
-                    log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal(), asset, featureStore.getConfidence());
                     Portfolio usdAsset = portfolioService.updateAndGetAssetBalance("USDT", user, "5000");
                     BigDecimal tradeAmount = usdAsset.getBalance().multiply(user.getRiskAmount()).setScale(0, RoundingMode.DOWN);;
                     if (tradeAmount.compareTo(BigDecimal.valueOf(7)) <= 0) {
@@ -338,6 +337,7 @@ public class TradingService {
         // If an active trade exists, check for stop-loss/take-profit conditions
         if (activeTradeOpt.isPresent()) {
             Trades activeTrade = activeTradeOpt.get();
+            log.info("✅is Present {} signal detected for {} with confidence {}", featureStore.getSignal(), asset, featureStore.getConfidence());
 
             boolean stopLossHit = marketData.getClosePrice().compareTo(activeTrade.getStopLossPrice()) <= 0;
             boolean takeProfitHit = marketData.getClosePrice().compareTo(activeTrade.getTakeProfitPrice()) >= 0;
@@ -354,7 +354,7 @@ public class TradingService {
                 String signal = featureStore.getSignal();  // Get model prediction (BUY, SELL, or HOLD)
                 BigDecimal stopLoss = null;
                 BigDecimal takeProfit = null;
-
+                log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal(), asset, featureStore.getConfidence());
                 if ("BUY".equals(signal)) {
                     stopLoss = stopLossPriceLong;
                     takeProfit = takeProfitPriceLong;
