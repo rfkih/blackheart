@@ -1,6 +1,5 @@
 package id.co.blackheart.service;
 
-import id.co.blackheart.dto.SchedulerRequest;
 import id.co.blackheart.model.SchedulerJob;
 import id.co.blackheart.repository.SchedulerJobRepository;
 import jakarta.annotation.PostConstruct;
@@ -11,7 +10,6 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
