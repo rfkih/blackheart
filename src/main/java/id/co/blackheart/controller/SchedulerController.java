@@ -22,7 +22,7 @@ public class SchedulerController {
 
     @PostMapping("/start")
     public String startScheduler(@RequestBody SchedulerRequest request) {
-        schedulerService.startScheduler(request);
+//        schedulerService.startScheduler(request);
         return "Scheduler " + request.getSchedulerId() + " started.";
     }
 
