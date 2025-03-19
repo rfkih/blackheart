@@ -4,7 +4,7 @@ package id.co.blackheart.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.client.DeepLearningClientService;
-import id.co.blackheart.dto.PredictionResponse;
+import id.co.blackheart.dto.response.PredictionResponse;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.MarketDataRepository;
 import lombok.AllArgsConstructor;

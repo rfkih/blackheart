@@ -2,8 +2,8 @@ package id.co.blackheart.service;
 
 
 import id.co.blackheart.client.DeepLearningClientService;
-import id.co.blackheart.dto.PredictionRequest;
-import id.co.blackheart.dto.PredictionResponse;
+import id.co.blackheart.dto.request.PredictionRequest;
+import id.co.blackheart.dto.response.PredictionResponse;
 import id.co.blackheart.model.TrainingJob;
 import id.co.blackheart.repository.TrainingJobRepository;
 import lombok.AllArgsConstructor;

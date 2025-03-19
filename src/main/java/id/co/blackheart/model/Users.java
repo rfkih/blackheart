@@ -24,6 +24,9 @@ public class Users {
     @Column(nullable = false, length = 1)
     private String isActive;
 
+    @Column(nullable = false, length = 3)
+    private String exchange;
+
     @Column(precision = 5, scale = 2)
     private BigDecimal riskAmount;
 

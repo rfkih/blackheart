@@ -2,6 +2,10 @@ package id.co.blackheart.util;
 
 
 import id.co.blackheart.dto.*;
+import id.co.blackheart.dto.request.MarketOrderRequest;
+import id.co.blackheart.dto.request.OrderDetailRequest;
+import id.co.blackheart.dto.response.MarketOrderResponse;
+import id.co.blackheart.dto.response.OrderDetailResponse;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.model.Users;

@@ -2,7 +2,7 @@ package id.co.blackheart.client;
 
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import id.co.blackheart.dto.PredictionResponse;
+import id.co.blackheart.dto.response.PredictionResponse;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;

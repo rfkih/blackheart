@@ -1,4 +1,4 @@
-package id.co.blackheart.dto;
+package id.co.blackheart.dto.request;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

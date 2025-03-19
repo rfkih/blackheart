@@ -1,4 +1,4 @@
-package id.co.blackheart.dto;
+package id.co.blackheart.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;

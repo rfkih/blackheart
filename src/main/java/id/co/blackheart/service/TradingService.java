@@ -47,7 +47,7 @@ public class TradingService {
 
         if ("BUY".equals(decision.getAction())) {
             log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal(), asset, featureStore.getConfidence());
-            Portfolio usdAsset = portfolioService.updateAndGetAssetBalance("USDT", user, "5000");
+            Portfolio usdAsset = portfolioService.updateAndGetAssetBalance("USDT", user);
             BigDecimal tradeAmount = usdAsset.getBalance().multiply(user.getRiskAmount()).setScale(0, RoundingMode.DOWN);;
             if (tradeAmount.compareTo(BigDecimal.valueOf(7)) <= 0) {
                 tradeAmount = BigDecimal.valueOf(7);// minimum Trade Amount
@@ -144,7 +144,7 @@ public class TradingService {
 
         // Execute Trade Action
         if ("SELL".equals(decision.getAction())) {
-            Portfolio btcAsset = portfolioService.updateAndGetAssetBalance("BTC", user, "5000");
+            Portfolio btcAsset = portfolioService.updateAndGetAssetBalance("BTC", user);
             BigDecimal tradeAmount = btcAsset.getBalance().multiply(user.getRiskAmount()).setScale(5, RoundingMode.DOWN);
             if (tradeAmount.compareTo(new BigDecimal("0.00008")) <= 0) {
                 tradeAmount = new BigDecimal("0.00008");// minimum Trade Amount
@@ -283,7 +283,7 @@ public class TradingService {
         switch (decision.getAction()) {
             case "BUY":
                 if ("BUY".equals(featureStore.getSignal()) && activeTradeOpt.isEmpty()) {
-                    Portfolio usdAsset = portfolioService.updateAndGetAssetBalance("USDT", user, "5000");
+                    Portfolio usdAsset = portfolioService.updateAndGetAssetBalance("USDT", user);
                     BigDecimal tradeAmount = usdAsset.getBalance().multiply(user.getRiskAmount()).setScale(0, RoundingMode.DOWN);;
                     if (tradeAmount.compareTo(BigDecimal.valueOf(7)) <= 0) {
                         tradeAmount = BigDecimal.valueOf(7);// minimum Trade Amount
@@ -299,7 +299,7 @@ public class TradingService {
                 break;
             case "SELL":
                 if ("SELL".equals(featureStore.getSignal()) && activeTradeOpt.isEmpty()) {
-                    Portfolio btcAsset = portfolioService.updateAndGetAssetBalance("BTC", user, "5000");
+                    Portfolio btcAsset = portfolioService.updateAndGetAssetBalance("BTC", user);
                     BigDecimal tradeAmount = btcAsset.getBalance().multiply(user.getRiskAmount()).setScale(5, RoundingMode.DOWN);
                     if (tradeAmount.compareTo(new BigDecimal("0.00008")) <= 0) {
                         tradeAmount = new BigDecimal("0.00008");// minimum Trade Amount

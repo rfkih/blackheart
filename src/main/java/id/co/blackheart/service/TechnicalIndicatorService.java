@@ -1,6 +1,6 @@
 package id.co.blackheart.service;
 
-import id.co.blackheart.dto.PredictionResponse;
+import id.co.blackheart.dto.response.PredictionResponse;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;

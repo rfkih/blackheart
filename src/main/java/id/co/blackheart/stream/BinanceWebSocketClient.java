@@ -2,7 +2,7 @@ package id.co.blackheart.stream;
 
 
 import id.co.blackheart.client.DeepLearningClientService;
-import id.co.blackheart.dto.PredictionResponse;
+import id.co.blackheart.dto.response.PredictionResponse;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Users;

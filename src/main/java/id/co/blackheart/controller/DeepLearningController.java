@@ -1,9 +1,9 @@
 package id.co.blackheart.controller;
 
 
-import id.co.blackheart.dto.PredictionRequest;
-import id.co.blackheart.dto.PredictionResponse;
-import id.co.blackheart.dto.ResponseDto;
+import id.co.blackheart.dto.request.PredictionRequest;
+import id.co.blackheart.dto.response.PredictionResponse;
+import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.DeepLearningService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;

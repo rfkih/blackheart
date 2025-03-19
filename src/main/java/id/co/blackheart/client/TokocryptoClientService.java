@@ -2,9 +2,9 @@ package id.co.blackheart.client;
 
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import id.co.blackheart.dto.MarketOrderRequest;
-import id.co.blackheart.dto.OrderDetailRequest;
-import id.co.blackheart.dto.TokocryptoResponse;
+import id.co.blackheart.dto.request.MarketOrderRequest;
+import id.co.blackheart.dto.request.OrderDetailRequest;
+import id.co.blackheart.dto.response.TokocryptoResponse;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
