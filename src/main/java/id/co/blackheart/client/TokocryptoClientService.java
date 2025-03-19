@@ -28,8 +28,6 @@ public class TokocryptoClientService {
     private final String BASE_URL_ORDER = "http://localhost:3000/api/place-market-order";
     private static final String BASE_URL_ORDER_DETAIL = "http://localhost:3000/api/order-detail";
 
-
-
     public TokocryptoResponse getAssetDetails(String asset, int recvWindow, String apiKey, String apiSecret) {
         String url = UriComponentsBuilder.fromHttpUrl(BASE_URL_GET_ASSET)
                 .queryParam("asset", asset)
