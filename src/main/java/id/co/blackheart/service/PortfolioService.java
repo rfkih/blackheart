@@ -79,7 +79,6 @@ public class PortfolioService {
         binanceAssetRequest.setRecvWindow(RECV_WINDOW);
 
         BinanceAssetResponse binanceAssetResponse = binanceClientService.getBinanceAssetDetails(binanceAssetRequest);
-        log.info("binanceAssetResponse: {}", binanceAssetResponse.getAssets().size());
 
         // Save everything async
         saveAllBinanceAssets(user, binanceAssetResponse.getAssets());
@@ -94,7 +93,7 @@ public class PortfolioService {
 
         if ("TKO".equals(user.getExchange())) {
             return updateAndGetTokocryptoAssetBalance(asset, user);
-        } else {
+        } else if ("BNC".equals(user.getExchange())){
             BinanceAssetRequest request = new BinanceAssetRequest();
             request.setApiKey(user.getApiKey());
             request.setApiSecret(user.getApiSecret());
@@ -109,6 +108,7 @@ public class PortfolioService {
                     .map(dto -> savePortfolio(user, dto.getAsset(), dto.getFree(), dto.getLocked()))
                     .orElse(null);
         }
+        return new Portfolio();
     }
 
     private Portfolio savePortfolio(Users user, String asset, String free, String locked) {

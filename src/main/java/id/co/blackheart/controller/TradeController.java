@@ -1,8 +1,10 @@
 package id.co.blackheart.controller;
 
 
+import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
 import id.co.blackheart.dto.request.MarketOrderRequest;
 import id.co.blackheart.dto.request.OrderDetailRequest;
+import id.co.blackheart.dto.response.BinanceOrderDetailResponse;
 import id.co.blackheart.dto.response.MarketOrderResponse;
 import id.co.blackheart.dto.response.OrderDetailResponse;
 import id.co.blackheart.dto.response.ResponseDto;
@@ -41,6 +43,15 @@ public class TradeController {
     @PostMapping("/order-detail")
     public ResponseEntity<ResponseDto> orderDetail(@RequestBody OrderDetailRequest orderDetailRequest) {
         OrderDetailResponse response = tradeExecutionService.getOrderDetail(orderDetailRequest);
+        return ResponseEntity.ok().body(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(response)
+                .build());
+    }
+
+    @PostMapping("/order-detail-binance")
+    public ResponseEntity<ResponseDto> orderDetailBinance(@RequestBody BinanceOrderDetailRequest binanceOrderDetailRequest) {
+        BinanceOrderDetailResponse response = tradeExecutionService.getOrderDetailBinance(binanceOrderDetailRequest);
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(response)

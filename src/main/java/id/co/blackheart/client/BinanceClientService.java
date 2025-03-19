@@ -3,19 +3,19 @@ package id.co.blackheart.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.request.BinanceAssetRequest;
+import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
+import id.co.blackheart.dto.request.OrderDetailRequest;
 import id.co.blackheart.dto.response.BinanceAssetDto;
 import id.co.blackheart.dto.response.BinanceAssetResponse;
-import id.co.blackheart.dto.response.TokocryptoResponse;
+import id.co.blackheart.dto.response.BinanceOrderDetailResponse;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 
 @Service
 @Slf4j
@@ -40,12 +40,12 @@ public class BinanceClientService {
             throw new IllegalArgumentException("Response body is null or empty");
         }
 
-        return decodeResponse(response);
+        return decodeAssetResponse(response);
     }
 
 
 
-    private BinanceAssetResponse decodeResponse(ResponseEntity<String> response) {
+    private BinanceAssetResponse decodeAssetResponse(ResponseEntity<String> response) {
         try {
 
             List<BinanceAssetDto> listAsset = objectMapper.readValue(
@@ -61,6 +61,48 @@ public class BinanceClientService {
             binanceAssetResponse.setAssets(listAsset);
 
             return binanceAssetResponse;
+        } catch (IOException e) {
+            log.info("Error decoding response: " + e.getMessage());
+            throw new RuntimeException("Failed to decode asset details", e);
+        }
+    }
+
+
+    /**
+     * Sends a POST request to Binance API with the request body.
+     */
+    public BinanceOrderDetailResponse orderDetailBinance(BinanceOrderDetailRequest orderDetailRequest) {
+        try {
+            // Set headers
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("X-MBX-APIKEY", orderDetailRequest.getApiKey());
+
+            // Create HTTP request with body
+            HttpEntity<BinanceOrderDetailRequest> requestEntity = new HttpEntity<>(orderDetailRequest, headers);
+
+            // Send HTTP POST request
+            ResponseEntity<String> response = restTemplate.exchange(BASE_URL_ORDER_DETAIL, HttpMethod.POST, requestEntity, String.class);
+
+            // Deserialize response
+            return decodeOrderDetailResponse(response);
+        } catch (Exception e) {
+            throw new RuntimeException("❌ Error fetching order details: " + e.getMessage(), e);
+        }
+    }
+
+    private BinanceOrderDetailResponse decodeOrderDetailResponse(ResponseEntity<String> response) {
+        try {
+            BinanceOrderDetailResponse orderDetailResponse = objectMapper.readValue(
+                    response.getBody(),
+                    new TypeReference<BinanceOrderDetailResponse>() {}
+            );
+
+            if (orderDetailResponse == null) {
+                throw new IllegalStateException("Invalid response or empty array: " + response.getBody());
+            }
+
+            return orderDetailResponse;
         } catch (IOException e) {
             log.info("Error decoding response: " + e.getMessage());
             throw new RuntimeException("Failed to decode asset details", e);

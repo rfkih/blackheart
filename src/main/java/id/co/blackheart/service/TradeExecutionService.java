@@ -1,10 +1,13 @@
 package id.co.blackheart.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import id.co.blackheart.client.BinanceClientService;
 import id.co.blackheart.client.DeepLearningClientService;
 import id.co.blackheart.client.TokocryptoClientService;
+import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
 import id.co.blackheart.dto.request.MarketOrderRequest;
 import id.co.blackheart.dto.request.OrderDetailRequest;
+import id.co.blackheart.dto.response.BinanceOrderDetailResponse;
 import id.co.blackheart.dto.response.MarketOrderResponse;
 import id.co.blackheart.dto.response.OrderDetailResponse;
 import id.co.blackheart.dto.response.TokocryptoResponse;
@@ -19,8 +22,9 @@ import org.springframework.stereotype.Service;
 @AllArgsConstructor
 public class TradeExecutionService {
 
-    TokocryptoClientService tokocryptoClientService;
-    DeepLearningClientService deepLearningClientService;
+    private final BinanceClientService binanceClientService;
+    private final TokocryptoClientService tokocryptoClientService;
+    private final DeepLearningClientService deepLearningClientService;
 
     public MarketOrderResponse placeMarketOrder(MarketOrderRequest marketOrder) {
 
@@ -53,6 +57,22 @@ public class TradeExecutionService {
             }
 
             return objectMapper.treeToValue(response.getData(), OrderDetailResponse.class);
+        }catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public BinanceOrderDetailResponse getOrderDetailBinance(BinanceOrderDetailRequest orderDetailRequest) {
+        try {
+            BinanceOrderDetailResponse response = binanceClientService.orderDetailBinance(orderDetailRequest);
+            log.info("orderDetailBinance : " + response);
+
+            if (response == null) {
+                log.warn("⚠No data received for ID Detail : {}", orderDetailRequest.getOrderId());
+                throw new Exception("No data Received for ID Detail :" + orderDetailRequest.getOrderId());
+            }
+
+            return response;
         }catch (Exception e) {
             throw new RuntimeException(e);
         }

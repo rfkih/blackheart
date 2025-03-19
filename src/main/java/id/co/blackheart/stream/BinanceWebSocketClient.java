@@ -120,6 +120,7 @@ public class BinanceWebSocketClient {
 
 
                 for (Users user : userList) {
+                    if (user.getExchange().equals("BNC")){continue;}
                     tradingService.cnnTransformerLongShortTradeAction(marketData,featureStore,user,"BTCUSDT");
                 }
 
