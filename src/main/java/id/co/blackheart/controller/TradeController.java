@@ -2,12 +2,10 @@ package id.co.blackheart.controller;
 
 
 import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
+import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.request.MarketOrderRequest;
 import id.co.blackheart.dto.request.OrderDetailRequest;
-import id.co.blackheart.dto.response.BinanceOrderDetailResponse;
-import id.co.blackheart.dto.response.MarketOrderResponse;
-import id.co.blackheart.dto.response.OrderDetailResponse;
-import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.dto.response.*;
 import id.co.blackheart.service.TradeExecutionService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -34,6 +32,15 @@ public class TradeController {
     @PostMapping("/place-market-order")
     public ResponseEntity<ResponseDto> placeMarketOrder(@RequestBody MarketOrderRequest marketOrder) {
         MarketOrderResponse response = tradeExecutionService.placeMarketOrder(marketOrder);
+        return ResponseEntity.ok().body(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(response)
+                .build());
+    }
+
+    @PostMapping("/place-market-order-binance")
+    public ResponseEntity<ResponseDto> binanceMarketOrder(@RequestBody BinanceOrderRequest binanceOrderRequest) {
+        BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(response)

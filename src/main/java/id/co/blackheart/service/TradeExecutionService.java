@@ -5,12 +5,10 @@ import id.co.blackheart.client.BinanceClientService;
 import id.co.blackheart.client.DeepLearningClientService;
 import id.co.blackheart.client.TokocryptoClientService;
 import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
+import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.request.MarketOrderRequest;
 import id.co.blackheart.dto.request.OrderDetailRequest;
-import id.co.blackheart.dto.response.BinanceOrderDetailResponse;
-import id.co.blackheart.dto.response.MarketOrderResponse;
-import id.co.blackheart.dto.response.OrderDetailResponse;
-import id.co.blackheart.dto.response.TokocryptoResponse;
+import id.co.blackheart.dto.response.*;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,7 +22,22 @@ public class TradeExecutionService {
 
     private final BinanceClientService binanceClientService;
     private final TokocryptoClientService tokocryptoClientService;
-    private final DeepLearningClientService deepLearningClientService;
+
+
+    public BinanceOrderResponse binanceMarketOrder(BinanceOrderRequest binanceOrderRequest) {
+
+        try {
+            BinanceOrderResponse response = binanceClientService.binanceMarketOrder(binanceOrderRequest);
+
+            if (response == null) {
+                log.warn("⚠No data received for Asset: {}", binanceOrderRequest.getSymbol());
+            }
+
+            return response;
+        }catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     public MarketOrderResponse placeMarketOrder(MarketOrderRequest marketOrder) {
 

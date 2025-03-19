@@ -4,10 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.request.BinanceAssetRequest;
 import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
-import id.co.blackheart.dto.request.OrderDetailRequest;
-import id.co.blackheart.dto.response.BinanceAssetDto;
-import id.co.blackheart.dto.response.BinanceAssetResponse;
-import id.co.blackheart.dto.response.BinanceOrderDetailResponse;
+import id.co.blackheart.dto.request.BinanceOrderRequest;
+import id.co.blackheart.dto.response.*;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -15,7 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @Slf4j
@@ -43,11 +43,8 @@ public class BinanceClientService {
         return decodeAssetResponse(response);
     }
 
-
-
     private BinanceAssetResponse decodeAssetResponse(ResponseEntity<String> response) {
         try {
-
             List<BinanceAssetDto> listAsset = objectMapper.readValue(
                     response.getBody(),
                     new TypeReference<List<BinanceAssetDto>>() {}
@@ -108,5 +105,41 @@ public class BinanceClientService {
             throw new RuntimeException("Failed to decode asset details", e);
         }
     }
+
+    public BinanceOrderResponse binanceMarketOrder(BinanceOrderRequest binanceOrderRequest) {
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        HttpEntity<BinanceOrderRequest> request = new HttpEntity<>(binanceOrderRequest, headers);
+
+        ResponseEntity<String> response = restTemplate.exchange(BASE_URL_ORDER, HttpMethod.POST, request, String.class);
+
+        if (response.getBody() == null || response.getBody().isEmpty()) {
+            throw new IllegalArgumentException("Response body is null or empty");
+        }
+
+        return decodePlaceMarketOrder(response);
+    }
+
+    private BinanceOrderResponse decodePlaceMarketOrder(ResponseEntity<String> response) {
+        try {
+            BinanceOrderResponse binanceOrderResponse = objectMapper.readValue(
+                    response.getBody(),
+                    new TypeReference<BinanceOrderResponse>() {}
+            );
+
+            if (binanceOrderResponse == null) {
+                throw new IllegalStateException("Invalid response or empty array: " + response.getBody());
+            }
+
+            return binanceOrderResponse;
+        } catch (IOException e) {
+            log.info("Error decoding response: " + e.getMessage());
+            throw new RuntimeException("Failed to decode asset details", e);
+        }
+    }
+
+
 
 }
