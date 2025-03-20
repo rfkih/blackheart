@@ -10,4 +10,5 @@ import java.util.List;
 @Repository
 public interface UsersRepository extends JpaRepository<Users, Long> {
     List<Users> findByIsActive(String isActive);
+    List<Users> findByIsActiveAndExchange(String isActive, String exchange);
 }

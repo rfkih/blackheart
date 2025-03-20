@@ -116,11 +116,10 @@ public class BinanceWebSocketClient {
                 PredictionResponse predictionResponse = deepLearningClientService.sendPredictionRequest();
 
                featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, predictionResponse);
-                List<Users> userList = usersRepository.findByIsActive("1");
+                List<Users> userList = usersRepository.findByIsActiveAndExchange("1", "BNC");
 
 
                 for (Users user : userList) {
-                    if (user.getExchange().equals("BNC")){continue;}
                     tradingService.cnnTransformerLongShortTradeAction(marketData,featureStore,user,"BTCUSDT");
                 }
 

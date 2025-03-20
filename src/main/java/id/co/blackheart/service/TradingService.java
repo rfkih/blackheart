@@ -58,7 +58,7 @@ public class TradingService {
             }
             tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan, BigDecimal.ONE);
         } else if ("SELL".equals(decision.getAction())) {
-            tradeUtil.closeLongMarketOrder(user, activeTradeOpt, marketData, asset);
+            tradeUtil.tokocryptoCloseLongMarketOrder(user, activeTradeOpt, marketData, asset);
         } else {
             log.info("⏳ HOLD: No Long trade action needed for {} at {}", asset, closePrice);
         }
@@ -155,7 +155,7 @@ public class TradingService {
             }
             tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
         } else if ("BUY".equals(decision.getAction())) {
-            tradeUtil.closeShortMarketOrder(user, activeTradeOpt, marketData, asset);
+            tradeUtil.tokocryptoCloseShortMarketOrder(user, activeTradeOpt, marketData, asset);
         } else {
             log.info("⏳ HOLD: No trade action needed for {} at {}", asset, closePrice);
         }
@@ -177,9 +177,19 @@ public class TradingService {
             Optional<Trades> optionalActiveTrade = Optional.ofNullable(activeTrade);
             // Execute Trade Action
             if ("SELL".equals(decision.getAction())) {
-                tradeUtil.closeLongMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+                if (user.isPresent() && user.get().getExchange().equals("TKO")) {
+                    tradeUtil.tokocryptoCloseLongMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+                }else if (user.isPresent() &&  user.get().getExchange().equals("BNC")){
+                    tradeUtil.binanceCloseLongMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+                }
+
             } else if ("BUY".equals(decision.getAction())) {
-                tradeUtil.closeShortMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+                if (user.isPresent() && user.get().getExchange().equals("TKO")) {
+                    tradeUtil.tokocryptoCloseShortMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+                }else if (user.isPresent() &&  user.get().getExchange().equals("BNC")){
+                    tradeUtil.binanceCloseShortMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
+                }
+
             }
         }
     }
@@ -292,9 +302,19 @@ public class TradingService {
                         log.info("Insufficient USDT Balance : {}, cannot making trade action.", usdAsset.getBalance());
                         return;
                     }
-                    tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan, tradeAmount);
+                    if (user.getExchange().equals("TKO")){
+                        tradeUtil.openLongMarketOrder(user, asset, decision, tradePlan, tradeAmount);
+                    } else if (user.getExchange().equals("BNC")) {
+                        tradeUtil.binanceOpenLongMarketOrder(user, asset, decision, tradePlan, tradeAmount);
+                    }
+
                 } else {
-                    tradeUtil.closeShortMarketOrder(user, activeTradeOpt, marketData, asset);
+                    if (user.getExchange().equals("TKO")){
+                        tradeUtil.tokocryptoCloseShortMarketOrder(user, activeTradeOpt, marketData, asset);
+                    } else if (user.getExchange().equals("BNC")) {
+                        tradeUtil.binanceCloseShortMarketOrder(user, activeTradeOpt, marketData, asset);
+                    }
+
                 }
                 break;
             case "SELL":
@@ -308,13 +328,23 @@ public class TradingService {
                         log.info("Insufficient Btc Balance : {}, cannot making trade action.", btcAsset.getBalance());
                         return;
                     }
-                    tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
+                    if (user.getExchange().equals("TKO")){
+                        tradeUtil.openShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
+                    } else if (user.getExchange().equals("BNC")) {
+                        tradeUtil.binanceOpenShortMarketOrder(user, asset, decision, tradePlan, tradeAmount);
+                    }
+
                 } else {
-                    tradeUtil.closeLongMarketOrder(user, activeTradeOpt, marketData, asset);
+                    if (user.getExchange().equals("TKO")){
+                        tradeUtil.tokocryptoCloseLongMarketOrder(user, activeTradeOpt, marketData, asset);
+                    } else if (user.getExchange().equals("BNC")) {
+                        tradeUtil.binanceCloseLongMarketOrder(user, activeTradeOpt, marketData, asset);
+                    }
+
                 }
                 break;
             default:
-                log.info("⏳ HOLD: No trade action needed for {} at {}", asset, decision);
+                log.info("⏳ HOLD: No trade action needed for {} at {}", asset, decision.getAction());
                 break;
         }
     }
@@ -350,7 +380,7 @@ public class TradingService {
             }
         } else {
             // No Active Trade, Look for New Entry Signals
-            if (featureStore.getConfidence().compareTo(BigDecimal.valueOf(0.6)) >= 0) {
+            if (featureStore.getConfidence().compareTo(BigDecimal.valueOf(0.5)) >= 0) {
                 String signal = featureStore.getSignal();  // Get model prediction (BUY, SELL, or HOLD)
                 BigDecimal stopLoss = null;
                 BigDecimal takeProfit = null;
