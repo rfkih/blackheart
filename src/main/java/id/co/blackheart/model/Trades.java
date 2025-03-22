@@ -49,6 +49,12 @@ public class Trades {
     @Column(precision = 20, scale = 12)
     private BigDecimal exitExecutedQuoteQty;
 
+    @Column(precision = 20, scale = 12)
+    private BigDecimal entryFee;
+
+    @Column(precision = 20, scale = 12)
+    private BigDecimal exitFee;
+
     @Column(nullable = false, precision = 20, scale = 12)
     private BigDecimal entryPrice; // Price at trade execution
 
@@ -69,6 +75,9 @@ public class Trades {
 
     @Column(nullable = false)
     private String isActive; // Indicates if trade is still open
+
+    @Column(nullable = false)
+    private String feeCurrency;
 
     @Column(nullable = false)
     private LocalDateTime entryTime; // Timestamp when trade was executed

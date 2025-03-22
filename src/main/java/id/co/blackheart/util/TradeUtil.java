@@ -1,6 +1,7 @@
 package id.co.blackheart.util;
 
 
+import id.co.blackheart.client.BinanceClientService;
 import id.co.blackheart.dto.*;
 import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.request.MarketOrderRequest;
@@ -24,6 +25,7 @@ import java.util.Optional;
 @AllArgsConstructor
 @Slf4j
 public class TradeUtil {
+    private final BinanceClientService binanceClientService;
     TradesRepository tradesRepository;
     TradeExecutionService tradeExecutionService;
 
@@ -50,7 +52,7 @@ public class TradeUtil {
             // 2. Calculate weighted average price & total commission from fills[]
             BigDecimal totalQty = BigDecimal.ZERO;
             BigDecimal totalCost = BigDecimal.ZERO;
-            BigDecimal totalCommission = BigDecimal.ZERO;
+            BigDecimal totalFee = BigDecimal.ZERO;
 
             for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
                 BigDecimal qty = new BigDecimal(fill.getQty());
@@ -59,7 +61,7 @@ public class TradeUtil {
 
                 totalQty = totalQty.add(qty);
                 totalCost = totalCost.add(price.multiply(qty));
-                totalCommission = totalCommission.add(commission);
+                totalFee = totalFee.add(commission);
             }
 
             BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
@@ -74,6 +76,8 @@ public class TradeUtil {
             newTrade.setEntryPrice(avgEntryPrice);
             newTrade.setEntryExecutedQty(totalQty);
             newTrade.setEntryExecutedQuoteQty(totalCost);
+            newTrade.setEntryFee(totalFee);
+            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
             newTrade.setStopLossPrice(decision.getStopLossPrice());
             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
             newTrade.setIsActive("1");
@@ -106,12 +110,16 @@ public class TradeUtil {
                 // 2. Calculate weighted average exit price from fills
                 BigDecimal totalQty = BigDecimal.ZERO;
                 BigDecimal totalCost = BigDecimal.ZERO;
+                BigDecimal totalFee = BigDecimal.ZERO;
 
                 for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
                     BigDecimal qty = new BigDecimal(fill.getQty());
                     BigDecimal price = new BigDecimal(fill.getPrice());
+                    BigDecimal commission = new BigDecimal(fill.getCommission());
+
                     totalQty = totalQty.add(qty);
                     totalCost = totalCost.add(price.multiply(qty));
+                    totalFee = totalFee.add(commission);
                 }
 
                 BigDecimal avgExitPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
@@ -120,6 +128,7 @@ public class TradeUtil {
                 trade.setExitOrderId(binanceOrderResponse.getOrderId());
                 trade.setExitExecutedQuoteQty(totalCost);
                 trade.setExitExecutedQty(totalQty);
+                trade.setExitFee(totalFee);
                 trade.setIsActive("0");
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(avgExitPrice);
@@ -225,7 +234,6 @@ public class TradeUtil {
 
     public void binanceOpenShortMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
         try {
-            // 1. Place market SELL order
             BinanceOrderRequest binanceOrderRequest = BinanceOrderRequest.builder()
                     .symbol("BTCUSDT")
                     .side("SELL")
@@ -236,15 +244,17 @@ public class TradeUtil {
 
             BinanceOrderResponse binanceOrderResponse = tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
 
-            // 2. Calculate weighted average price from fills
             BigDecimal totalQty = BigDecimal.ZERO;
             BigDecimal totalCost = BigDecimal.ZERO;
+            BigDecimal totalFee = BigDecimal.ZERO;
 
             for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
                 BigDecimal qty = new BigDecimal(fill.getQty());
                 BigDecimal price = new BigDecimal(fill.getPrice());
+                BigDecimal commission = new BigDecimal(fill.getCommission());
                 totalQty = totalQty.add(qty);
                 totalCost = totalCost.add(price.multiply(qty));
+                totalFee = totalFee.add(commission);
             }
 
             BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
@@ -259,13 +269,14 @@ public class TradeUtil {
             newTrade.setEntryPrice(avgEntryPrice);
             newTrade.setEntryExecutedQty(totalQty);
             newTrade.setEntryExecutedQuoteQty(totalCost);
+            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
+            newTrade.setEntryFee(totalFee);
             newTrade.setStopLossPrice(decision.getStopLossPrice());
             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
             newTrade.setIsActive("1");
             newTrade.setEntryTime(LocalDateTime.now());
 
             tradesRepository.save(newTrade);
-
             log.info("✅ Short order placed for {} at avg price: {}", asset, avgEntryPrice);
         } catch (Exception e) {
             log.error("❌ Error placing short market order: ", e);
@@ -280,11 +291,18 @@ public class TradeUtil {
 
         activeTradeOpt.ifPresent(trade -> {
             try {
-                // 1. Place market BUY order to close SHORT
+                double currentBtcPrice = binanceClientService.getCurrentBtcPrice();
+                BigDecimal btcAmount = trade.getEntryExecutedQty();
+
+                BigDecimal usdtAmountWithBuffer = btcAmount
+                        .multiply(BigDecimal.valueOf(currentBtcPrice))
+                        .multiply(new BigDecimal("1.01"))
+                        .setScale(2, RoundingMode.UP);
+
                 BinanceOrderRequest binanceOrderRequest = BinanceOrderRequest.builder()
                         .symbol("BTCUSDT")
                         .side("BUY") // Buying back to close short
-                        .amount(trade.getEntryExecutedQty())
+                        .amount(usdtAmountWithBuffer)
                         .apiKey(user.getApiKey())
                         .apiSecret(user.getApiSecret())
                         .build();
@@ -294,12 +312,16 @@ public class TradeUtil {
                 // 2. Weighted average from fills
                 BigDecimal totalQty = BigDecimal.ZERO;
                 BigDecimal totalCost = BigDecimal.ZERO;
+                BigDecimal totalFee = BigDecimal.ZERO;
+
 
                 for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
                     BigDecimal qty = new BigDecimal(fill.getQty());
                     BigDecimal price = new BigDecimal(fill.getPrice());
+                    BigDecimal commission = new BigDecimal(fill.getCommission());
                     totalQty = totalQty.add(qty);
                     totalCost = totalCost.add(price.multiply(qty));
+                    totalFee = totalFee.add(commission);
                 }
 
                 BigDecimal avgExitPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
@@ -308,6 +330,7 @@ public class TradeUtil {
                 trade.setExitOrderId(binanceOrderResponse.getOrderId());
                 trade.setExitExecutedQuoteQty(totalCost);
                 trade.setExitExecutedQty(totalQty);
+                trade.setExitFee(totalFee);
                 trade.setIsActive("0");
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(avgExitPrice);

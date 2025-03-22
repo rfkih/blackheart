@@ -13,6 +13,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.util.List;
@@ -30,6 +31,21 @@ public class BinanceClientService {
     public BinanceClientService(RestTemplate restTemplate, ObjectMapper objectMapper) {
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
+    }
+
+    public double getCurrentBtcPrice() {
+        String url = UriComponentsBuilder
+                .fromHttpUrl("https://api.binance.com/api/v3/ticker/price")
+                .queryParam("symbol", "BTCUSDT")
+                .toUriString();
+
+        BinancePriceResponse response = restTemplate.getForObject(url, BinancePriceResponse.class);
+
+        if (response != null) {
+            return Double.parseDouble(response.getPrice());
+        } else {
+            throw new RuntimeException("Failed to fetch BTC price from Binance");
+        }
     }
 
     public BinanceAssetResponse getBinanceAssetDetails(BinanceAssetRequest binanceAssetRequest) {

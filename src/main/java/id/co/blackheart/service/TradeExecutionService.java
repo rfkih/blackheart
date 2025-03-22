@@ -35,6 +35,7 @@ public class TradeExecutionService {
 
             return response;
         }catch (Exception e) {
+            log.info("[binanceMarketOrder] Request failed: " + e.getMessage());
             throw new RuntimeException(e);
         }
     }

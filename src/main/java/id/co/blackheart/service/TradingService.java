@@ -76,7 +76,7 @@ public class TradingService {
         BigDecimal confidence = featureStore.getConfidence();
 
         // Risk Parameters
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.01); // 1% Take Profit
+        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.012); // 1% Take Profit
         BigDecimal stopLossThreshold = BigDecimal.valueOf(0.005); // 0.5% Stop Loss
 
         // Compute Stop-Loss and Take-Profit Levels
@@ -355,7 +355,7 @@ public class TradingService {
     private TradeDecision cnnTransformerLongShortTradeDecision(MarketData marketData, FeatureStore featureStore, Optional<Trades> activeTradeOpt,
                                                                String asset) {
         // Risk Parameters
-        final BigDecimal TAKE_PROFIT_THRESHOLD = BigDecimal.valueOf(0.01); // 1% Take Profit
+        final BigDecimal TAKE_PROFIT_THRESHOLD = BigDecimal.valueOf(0.012); // 1% Take Profit
         final BigDecimal STOP_LOSS_THRESHOLD = BigDecimal.valueOf(0.005);  // 0.5% Stop Loss
 
         // Compute Stop-Loss and Take-Profit Levels
