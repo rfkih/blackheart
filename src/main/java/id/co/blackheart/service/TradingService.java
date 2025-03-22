@@ -174,7 +174,7 @@ public class TradingService {
             MarketData marketData = new MarketData();
             marketData.setClosePrice(closePrice);
 
-            Optional<Trades> optionalActiveTrade = Optional.ofNullable(activeTrade);
+            Optional<Trades> optionalActiveTrade = Optional.of(activeTrade);
             // Execute Trade Action
             if ("SELL".equals(decision.getAction())) {
                 if (user.isPresent() && user.get().getExchange().equals("TKO")) {
@@ -196,12 +196,16 @@ public class TradingService {
 
 
     public TradeDecision activeTradeDecision(Trades activeTrade, BigDecimal closePrice) {
-        boolean stopLossHit = closePrice.compareTo(activeTrade.getStopLossPrice()) <= 0;
-        boolean takeProfitHit = closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0;
-        if (activeTrade.getAction().equals("LONG") && (stopLossHit || takeProfitHit)) {
+        boolean longStopLossHit = closePrice.compareTo(activeTrade.getStopLossPrice()) <= 0;
+        boolean longTakeProfitHit = closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0;
+        boolean shortStopLossHit = closePrice.compareTo(activeTrade.getStopLossPrice()) >= 0;
+        boolean shortTakeProfitHit = closePrice.compareTo(activeTrade.getTakeProfitPrice()) <= 0;
+        if (activeTrade.getAction().equals("LONG") && (longStopLossHit || longTakeProfitHit)) {
             return tradeUtil.createTradeDecision("SELL", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
         }
-        if (activeTrade.getAction().equals("SHORT") && (stopLossHit || takeProfitHit)) {
+        if (activeTrade.getAction().equals("SHORT") && (shortStopLossHit || shortTakeProfitHit)) {
+            log.info("logging service Take-Profit hit for {} at {}", activeTrade.getAsset(), closePrice);
+            log.info("logging service Position stoploss {} takeProfit {}", activeTrade.getStopLossPrice(), activeTrade.getTakeProfitPrice());
             return tradeUtil.createTradeDecision("BUY", activeTrade.getEntryExecutedQty(), activeTrade.getStopLossPrice(),activeTrade.getTakeProfitPrice());
         }
 
