@@ -37,7 +37,6 @@ public class FeatureStore {
     @Column(name = "timestamp", nullable = false)
     private LocalDateTime timestamp;
 
-    // Price & Moving Averages
     @Column(name = "price", precision = 20, scale = 8, nullable = false)
     private BigDecimal price;
 
