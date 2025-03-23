@@ -20,12 +20,11 @@ import java.util.List;
 
 @Service
 @Slf4j
-
 public class BinanceClientService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    @Value("${binance.api.base-url}")
+    @Value("${nodejs.api.base-url}")
     private String baseUrl;
 
     public BinanceClientService(RestTemplate restTemplate, ObjectMapper objectMapper) {
@@ -50,7 +49,7 @@ public class BinanceClientService {
 
     public BinanceAssetResponse getBinanceAssetDetails(BinanceAssetRequest binanceAssetRequest) {
         ResponseEntity<String> response = postRequest(
-                baseUrl + "/get-asset-binance",
+                baseUrl + "/api/get-asset-binance",
                 binanceAssetRequest,
                 buildJsonHeaders()
         );
@@ -62,7 +61,7 @@ public class BinanceClientService {
 
     public BinanceOrderDetailResponse orderDetailBinance(BinanceOrderDetailRequest orderDetailRequest) {
         ResponseEntity<String> response = postRequest(
-                baseUrl + "/order-detail-binance",
+                baseUrl + "/api/order-detail-binance",
                 orderDetailRequest,
                 buildBinanceHeaders(orderDetailRequest.getApiKey())
         );
@@ -71,7 +70,7 @@ public class BinanceClientService {
 
     public BinanceOrderResponse binanceMarketOrder(BinanceOrderRequest binanceOrderRequest) {
         ResponseEntity<String> response = postRequest(
-                baseUrl + "/place-market-order-binance",
+                baseUrl + "/api/place-market-order-binance",
                 binanceOrderRequest,
                 buildJsonHeaders()
         );
