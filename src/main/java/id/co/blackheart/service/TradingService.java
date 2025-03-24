@@ -43,7 +43,7 @@ public class TradingService {
 
         Optional<Trades> activeTradeOpt = tradesRepository.findByUserIdAndAssetAndIsActiveAndTradePlanAndAction(user.getId(), asset, "1", tradePlan, "LONG");
 
-        TradeDecision decision = cnnTransformerLongTradeDecision(marketData, featureStore, accountBalance, riskPercentage, activeTradeOpt, asset);
+        TradeDecision decision = cnnTransformerLongTradeDecision(user,marketData, featureStore, accountBalance, riskPercentage, activeTradeOpt, asset);
 
         if ("BUY".equals(decision.getAction())) {
             log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal(), asset, featureStore.getConfidence());
@@ -67,7 +67,7 @@ public class TradingService {
     /**
      * Determines whether to BUY, SELL, or HOLD based on VWAP and MACD strategy.
      */
-    private TradeDecision cnnTransformerLongTradeDecision(MarketData marketData, FeatureStore featureStore,
+    private TradeDecision cnnTransformerLongTradeDecision(Users users, MarketData marketData, FeatureStore featureStore,
                                                           BigDecimal accountBalance, BigDecimal riskPercentage,
                                                           Optional<Trades> activeTradeOpt, String asset) {
 
@@ -76,8 +76,8 @@ public class TradingService {
         BigDecimal confidence = featureStore.getConfidence();
 
         // Risk Parameters
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.012); // 1% Take Profit
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.005); // 0.5% Stop Loss
+        BigDecimal takeProfitThreshold = users.getTakeProfit(); // 1% Take Profit
+        BigDecimal stopLossThreshold = users.getStopLoss(); // 0.5% Stop Loss
 
         // Compute Stop-Loss and Take-Profit Levels
         BigDecimal stopLossPrice = closePrice.subtract(closePrice.multiply(stopLossThreshold));
@@ -105,7 +105,7 @@ public class TradingService {
         } else {
             // Buy Condition (No active trade)
             log.info("signal {} : confidence {} ", signal, confidence );
-            if (signal.equals("BUY") && confidence.compareTo(BigDecimal.valueOf(0.6)) >= 0) {
+            if (signal.equals("BUY") && confidence.compareTo(users.getConfidence()) >= 0) {
                 log.info("✅ BUY signal detected for {} with confidence {}", asset, confidence);
                 return TradeDecision.builder()
                         .action("BUY")
@@ -140,7 +140,7 @@ public class TradingService {
                 user.getId(), asset, "1", tradePlan, "SHORT");
 
         TradeDecision decision = cnnTransformerShortTradeDecision(closePrice, featureStore, accountBalance, riskPercentage,
-                marketData.getLowPrice(), activeTradeOpt, asset);
+                user, activeTradeOpt, asset);
 
         // Execute Trade Action
         if ("SELL".equals(decision.getAction())) {
@@ -214,12 +214,12 @@ public class TradingService {
 
     public TradeDecision cnnTransformerShortTradeDecision(BigDecimal closePrice, FeatureStore featureStore,
                                                           BigDecimal accountBalance, BigDecimal riskPercentage,
-                                                          BigDecimal lastLowestPrice, Optional<Trades> activeTradeOpt,
+                                                          Users users, Optional<Trades> activeTradeOpt,
                                                           String asset) {
 
         // Risk Parameters
-        BigDecimal takeProfitThreshold = BigDecimal.valueOf(0.012); // 0.2% Take Profit
-        BigDecimal stopLossThreshold = BigDecimal.valueOf(0.005); // 0.1% Stop Loss
+        BigDecimal takeProfitThreshold = users.getTakeProfit(); // 0.2% Take Profit
+        BigDecimal stopLossThreshold = users.getStopLoss(); // 0.1% Stop Loss
 
 
         // Compute Stop-Loss and Take-Profit Levels
@@ -247,7 +247,7 @@ public class TradingService {
             }
         } else {
             // Selling Condition (Only if there's no active trade)
-            if (featureStore.getSignal().equals("SELL") && featureStore.getConfidence().compareTo(BigDecimal.valueOf(0.6)) >= 0) {
+            if (featureStore.getSignal().equals("SELL") && featureStore.getConfidence().compareTo(users.getConfidence()) >= 0) {
                 log.info("✅ {} signal detected for {} with confidence {}", featureStore.getSignal() , asset, featureStore.getConfidence());
                 return TradeDecision.builder()
                         .action("SELL")
@@ -282,7 +282,7 @@ public class TradingService {
                 user.getId(), asset, "1", tradePlan);
 
         // Determine Trade Decision
-        TradeDecision decision = cnnTransformerLongShortTradeDecision(marketData, featureStore, activeTradeOpt, asset);
+        TradeDecision decision = cnnTransformerLongShortTradeDecision(user, marketData, featureStore, activeTradeOpt, asset);
 
         // Execute Trade Action
         executeTradeAction(user, asset, decision, tradePlan, activeTradeOpt, featureStore, marketData);
@@ -356,11 +356,11 @@ public class TradingService {
     /**
      * Determines whether to BUY, SELL, or HOLD.
      */
-    private TradeDecision cnnTransformerLongShortTradeDecision(MarketData marketData, FeatureStore featureStore, Optional<Trades> activeTradeOpt,
+    private TradeDecision cnnTransformerLongShortTradeDecision(Users users, MarketData marketData, FeatureStore featureStore, Optional<Trades> activeTradeOpt,
                                                                String asset) {
         // Risk Parameters
-        final BigDecimal TAKE_PROFIT_THRESHOLD = BigDecimal.valueOf(0.012); // 1% Take Profit
-        final BigDecimal STOP_LOSS_THRESHOLD = BigDecimal.valueOf(0.005);  // 0.5% Stop Loss
+        final BigDecimal TAKE_PROFIT_THRESHOLD = users.getTakeProfit(); // 1% Take Profit
+        final BigDecimal STOP_LOSS_THRESHOLD = users.getStopLoss();  // 0.5% Stop Loss
 
         // Compute Stop-Loss and Take-Profit Levels
         BigDecimal stopLossPriceShort = marketData.getClosePrice().multiply(BigDecimal.ONE.add(STOP_LOSS_THRESHOLD));
@@ -384,7 +384,7 @@ public class TradingService {
             }
         } else {
             // No Active Trade, Look for New Entry Signals
-            if (featureStore.getConfidence().compareTo(BigDecimal.valueOf(0.5)) >= 0) {
+            if (featureStore.getConfidence().compareTo(users.getConfidence()) >= 0) {
                 String signal = featureStore.getSignal();  // Get model prediction (BUY, SELL, or HOLD)
                 BigDecimal stopLoss = null;
                 BigDecimal takeProfit = null;
@@ -396,11 +396,9 @@ public class TradingService {
                     stopLoss = stopLossPriceShort;
                     takeProfit = takeProfitPriceShort;
                 } else {
-                    log.info("⏳ HOLD signal detected for {}. No action taken.", asset);
+                    log.info("⏳ action HOLD for {}. No action taken. confidence too low {}", asset, featureStore.getConfidence());
                     return tradeUtil.createTradeDecision("HOLD", BigDecimal.ZERO, null, null);
                 }
-
-                log.info("✅ {} signal detected for {} with confidence {}", signal, asset, featureStore.getConfidence());
                 return tradeUtil.createTradeDecision(signal, BigDecimal.ONE, stopLoss, takeProfit);
             }
         }

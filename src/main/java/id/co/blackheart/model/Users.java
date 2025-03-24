@@ -30,6 +30,15 @@ public class Users {
     @Column(precision = 5, scale = 2)
     private BigDecimal riskAmount;
 
+    @Column(precision = 5, scale = 2)
+    private BigDecimal confidence;
+
+    @Column(nullable = false, precision = 20, scale = 12)
+    private BigDecimal takeProfit;
+
+    @Column(nullable = false, precision = 20, scale = 12)
+    private BigDecimal stopLoss;
+
     @Column(nullable = false)
     private String apiKey;
 
