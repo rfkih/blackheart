@@ -142,6 +142,8 @@ public class TechnicalIndicatorService {
         featureData.setEma50(new BigDecimal(new EMAIndicator(closePrice, 50)
                 .getValue(series.getEndIndex()).toString()));
 
+        featureData.setEma100(new BigDecimal(new EMAIndicator(closePrice, 100)
+                .getValue(series.getEndIndex()).toString()));
 
         // ✅ Bollinger Bands (20)
         BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(new SMAIndicator(closePrice, 20));
