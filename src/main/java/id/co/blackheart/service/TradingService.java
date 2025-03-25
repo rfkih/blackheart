@@ -164,7 +164,7 @@ public class TradingService {
     public void activeTradeListener(String asset, BigDecimal closePrice){
 
         List<Trades> activeTradeList = tradesRepository.findByAssetAndIsActive( asset, "1");
-
+        log.info("actively listening | current price : {} " , closePrice);
         for (Trades activeTrade : activeTradeList) {
             TradeDecision decision = activeTradeDecision(activeTrade, closePrice);
 
@@ -181,14 +181,14 @@ public class TradingService {
                 }else if (user.isPresent() &&  user.get().getExchange().equals("BNC")){
                     tradeUtil.binanceCloseLongMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
                 }
-
+                log.info("closing order {} action {}" , optionalActiveTrade.get().getAsset(), decision.getAction());
             } else if ("BUY".equals(decision.getAction())) {
                 if (user.isPresent() && user.get().getExchange().equals("TKO")) {
                     tradeUtil.tokocryptoCloseShortMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
                 }else if (user.isPresent() &&  user.get().getExchange().equals("BNC")){
                     tradeUtil.binanceCloseShortMarketOrder(user.orElse(null), optionalActiveTrade, marketData, asset);
                 }
-
+                log.info("closing order {} action {}" , optionalActiveTrade.get().getAsset(), decision.getAction());
             }
         }
     }
