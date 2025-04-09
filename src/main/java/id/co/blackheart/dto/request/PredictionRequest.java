@@ -1,15 +1,13 @@
 package id.co.blackheart.dto.request;
 
 
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
-@Setter
-@Getter
+@Data
 @AllArgsConstructor
 @NoArgsConstructor
 public class PredictionRequest {
-    String pair;
+    private String symbol;  // Initial Account
+    private String interval;     // Amount to be risked at a trade
+    private boolean isStock;
 }

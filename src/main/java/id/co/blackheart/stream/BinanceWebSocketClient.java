@@ -31,8 +31,8 @@ import java.util.concurrent.Executors;
 @AllArgsConstructor
 public class BinanceWebSocketClient {
 
-    private static final String BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@kline_5m";
-    private static final String INTERVAL = "5m";
+    private static final String BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@kline_15m";
+    private static final String INTERVAL = "15m";
     private final MarketDataRepository marketDataRepository;
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final TechnicalIndicatorService technicalIndicatorService;
@@ -91,11 +91,9 @@ public class BinanceWebSocketClient {
             double lowPrice = kline.getBigDecimal("l").doubleValue();
             double volume = kline.getBigDecimal("v").doubleValue();
             long tradeCount = kline.getLong("n");
-
             boolean isFinal = kline.getBoolean("x");
             tradingService.activeTradeListener(symbol, BigDecimal.valueOf(closePrice));
             if (isFinal) {
-
                 marketData.setSymbol(symbol);
                 marketData.setInterval(INTERVAL);
                 marketData.setStartTime(LocalDateTime.ofInstant(startTime, ZoneId.of("UTC")));

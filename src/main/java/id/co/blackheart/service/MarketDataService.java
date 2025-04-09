@@ -53,7 +53,7 @@ public class MarketDataService {
 
 
     private void fetchMissingCandles(String symbol, long startTime, long endTime) {
-        String url = String.format("https://api.binance.com/api/v3/klines?symbol=%s&interval=5m&limit=1000&startTime=%d&endTime=%d",
+        String url = String.format("https://api.binance.com/api/v3/klines?symbol=%s&interval=15m&limit=1000&startTime=%d&endTime=%d",
                 symbol, startTime, endTime);
 
         try {
@@ -67,7 +67,7 @@ public class MarketDataService {
                 for (Object[] kline : klineData) {
                     MarketData marketData = new MarketData();
                     marketData.setSymbol(symbol);
-                    marketData.setInterval("5m");
+                    marketData.setInterval("15m");
                     marketData.setStartTime(LocalDateTime.ofInstant(Instant.ofEpochMilli((Long) kline[0]), ZoneId.of("UTC")));
                     marketData.setEndTime(LocalDateTime.ofInstant(Instant.ofEpochMilli((Long) kline[6]), ZoneId.of("UTC")));
                     marketData.setOpenPrice(new BigDecimal(kline[1].toString()));

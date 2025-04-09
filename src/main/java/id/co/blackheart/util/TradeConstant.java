@@ -7,7 +7,8 @@ public final class TradeConstant {
     @Getter
     public enum INTERVAL{
         ONE_MINUTE("1m","1 Minutes Interval"),
-        FIVE_MINUTE("5m","5 Minutes Interval");
+        FIVE_MINUTE("5m","5 Minutes Interval"),
+        FIVETEEN_MINUTE("15m","15 Minutes Interval");
 
         private final String code;
         private final String description;

@@ -27,8 +27,8 @@ public class DeepLearningService {
             log.info("prediction Response : " + response);
 
             if (response == null) {
-                log.warn("⚠No data received for ID Detail : {}", predictionRequest.getPair());
-                throw new Exception("No data Received for ID Detail :" + predictionRequest.getPair());
+                log.warn("⚠No data received for ID Detail : {}", predictionRequest.getSymbol());
+                throw new Exception("No data Received for ID Detail :" + predictionRequest.getSymbol());
             }
 
             return response;

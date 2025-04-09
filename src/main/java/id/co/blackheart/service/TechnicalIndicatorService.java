@@ -41,7 +41,7 @@ public class TechnicalIndicatorService {
 
 
     public FeatureStore computeIndicatorsAndStore(String symbol, Instant instantTimestamp, PredictionResponse predictionResponse) {
-        List<MarketData> historicalData = marketDataRepository.findLast100BySymbolAndInterval(symbol, "5m");
+        List<MarketData> historicalData = marketDataRepository.findLast100BySymbolAndInterval(symbol, "15m");
 
         FeatureStore featureStore = new FeatureStore();
         if (historicalData.size() < 50) {

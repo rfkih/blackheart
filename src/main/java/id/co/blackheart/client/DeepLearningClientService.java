@@ -1,6 +1,7 @@
 package id.co.blackheart.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import id.co.blackheart.dto.request.PredictionRequest;
 import id.co.blackheart.dto.response.PredictionResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
@@ -26,9 +28,15 @@ public class DeepLearningClientService {
 
     public PredictionResponse sendPredictionRequest() {
         HttpHeaders headers = new HttpHeaders();
-        headers.setAccept(MediaType.parseMediaTypes("application/json"));
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
 
-        HttpEntity<String> requestEntity = new HttpEntity<>(null, headers);
+        PredictionRequest predictionRequest = new PredictionRequest();
+        predictionRequest.setInterval("15m");
+        predictionRequest.setSymbol("BTCUSDT");
+        predictionRequest.setStock(false);
+
+        HttpEntity<PredictionRequest> requestEntity = new HttpEntity<>(predictionRequest, headers);
 
         String predictUrl = baseUrl + "/predict";
 
@@ -41,6 +49,7 @@ public class DeepLearningClientService {
 
         return decodeResponse(response);
     }
+
 
     @Async // Optional: Enable @EnableAsync in your SpringBootApp class!
     public CompletableFuture<Void> sendTrainRequestAsync() {

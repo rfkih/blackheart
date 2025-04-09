@@ -166,7 +166,6 @@ public class TradingService {
         List<Trades> activeTradeList = tradesRepository.findByAssetAndIsActive( asset, "1");
 
         for (Trades activeTrade : activeTradeList) {
-
             TradeDecision decision = activeTradeDecision(activeTrade, closePrice);
 
             Optional<Users> user = usersRepository.findById(activeTrade.getUserId());
