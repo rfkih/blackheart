@@ -18,3 +18,6 @@ COPY --from=build /application/build/libs/*.jar /application/
 ENV JAVA_OPTS=""
 ENTRYPOINT exec java $JAVA_OPTS -jar /application/blackheart-0.0.1-SNAPSHOT.jar
 EXPOSE 8080
+
+#docker build -t blackheart .
+#docker run --name blackheart -p 8080:8080 blackheart
