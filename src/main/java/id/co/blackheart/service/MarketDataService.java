@@ -36,8 +36,8 @@ public class MarketDataService {
         if (latestMarketData.getEndTime() != null) {
             Instant lastInsertedInstant = latestMarketData.getEndTime().atZone(ZoneId.of("UTC")).toInstant();
 
-            // If last inserted candle is older than 5 minutes, fetch missing data
-            if (Duration.between(lastInsertedInstant, latestKlineEndTime).toMinutes() >= 6) {
+            // If last inserted candle is older than 15 minutes, fetch missing data
+            if (Duration.between(lastInsertedInstant, latestKlineEndTime).toMinutes() >= 16) {
                 log.warn("⚠ Missing candlestick detected! Fetching missing data for {}", symbol);
                 fetchMissingCandles(symbol, lastInsertedInstant.toEpochMilli(), latestKlineEndTime.toEpochMilli());
                 return true;
