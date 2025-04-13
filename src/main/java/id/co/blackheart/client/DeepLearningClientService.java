@@ -2,6 +2,7 @@ package id.co.blackheart.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.request.PredictionRequest;
+import id.co.blackheart.dto.request.TrainRequest;
 import id.co.blackheart.dto.response.PredictionResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,14 +53,22 @@ public class DeepLearningClientService {
 
 
     @Async // Optional: Enable @EnableAsync in your SpringBootApp class!
-    public CompletableFuture<Void> sendTrainRequestAsync() {
+    public void sendTrainRequestAsync() {
         HttpHeaders headers = new HttpHeaders();
-        headers.setAccept(MediaType.parseMediaTypes("application/json"));
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
 
-        HttpEntity<String> requestEntity = new HttpEntity<>(null, headers);
         String trainUrl = baseUrl + "/train";
 
         try {
+            TrainRequest trainRequest = new TrainRequest();
+            trainRequest.setSymbol("BTCUSDT");
+            trainRequest.setInterval("15m");
+            trainRequest.setThresholdDown(-4);
+            trainRequest.setThresholdUp(4);
+
+            HttpEntity<TrainRequest> requestEntity = new HttpEntity<>(trainRequest, headers);
+
             ResponseEntity<String> response = restTemplate.exchange(
                     trainUrl,
                     HttpMethod.POST,
@@ -70,7 +79,7 @@ public class DeepLearningClientService {
         } catch (Exception e) {
             log.warn("[TRAIN_API] Request failed: {}", e.getMessage());
         }
-        return CompletableFuture.completedFuture(null);
+        CompletableFuture.completedFuture(null);
     }
 
     private PredictionResponse decodeResponse(ResponseEntity<String> response) {
