@@ -1,6 +1,6 @@
 package id.co.blackheart.stream;
 
-
+import com.fasterxml.jackson.core.JsonProcessingException;
 import id.co.blackheart.client.DeepLearningClientService;
 import id.co.blackheart.dto.response.PredictionResponse;
 import id.co.blackheart.model.FeatureStore;
@@ -11,11 +11,15 @@ import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.MarketDataService;
 import id.co.blackheart.service.TechnicalIndicatorService;
 import id.co.blackheart.service.TradingService;
-import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import org.json.JSONObject;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.socket.WebSocketMessage;
+import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
+import reactor.core.Disposable;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -23,107 +27,92 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-@Service
 @Slf4j
-@AllArgsConstructor
+@Service
+@RequiredArgsConstructor
 public class BinanceWebSocketClient {
 
     private static final String BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@kline_15m";
     private static final String INTERVAL = "15m";
-    private final MarketDataRepository marketDataRepository;
-    private final ExecutorService executorService = Executors.newSingleThreadExecutor();
+
+    private final DeepLearningClientService deepLearningClientService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final TradingService tradingService;
-    private final DeepLearningClientService deepLearningClientService;
-    private final UsersRepository usersRepository;
+    private final MarketDataRepository marketDataRepository;
     private final MarketDataService marketDataService;
+    private final UsersRepository usersRepository;
 
+    private Disposable subscription;
 
     public void connect() {
-        executorService.submit(() -> {
-            while (true) {
-                try {
-                    new ReactorNettyWebSocketClient()
-                            .execute(URI.create(BINANCE_WS_URL), session ->
-                                    session.receive()
-                                            .map(webSocketMessage -> webSocketMessage.getPayloadAsText())
-                                            .doOnNext(this::handleMessage)
-                                            .then()
-                            )
-                            .retry()
-                            .subscribe();
+        log.info("Attempting to connect to Binance WebSocket...");
 
-                    log.info("WebSocket connection established.");
-                    break; // Exit retry loop on successful connection
-
-                } catch (Exception e) {
-                    log.error("WebSocket connection failed. Retrying in 5 seconds...", e);
-                    try {
-                        Thread.sleep(5000);
-                    } catch (InterruptedException interruptedException) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-            }
-        });
+        subscription = new ReactorNettyWebSocketClient()
+                .execute(URI.create(BINANCE_WS_URL), session ->
+                        session.receive()
+                                .map(WebSocketMessage::getPayloadAsText)
+                                .flatMap(this::handleMessageReactive)
+                                .onErrorContinue((ex, obj) -> log.error("Error during WebSocket stream", ex))
+                                .then()
+                )
+                .retry() // reconnect automatically on error
+                .subscribe(
+                        null,
+                        err -> log.error("WebSocket error", err),
+                        () -> log.warn("WebSocket stream closed")
+                );
     }
 
-    private void handleMessage(String message) {
+    private Mono<Void> handleMessageReactive(String message) {
         try {
-            String symbol = "BTCUSDT";
             JSONObject json = new JSONObject(message);
             JSONObject kline = json.getJSONObject("k");
-            FeatureStore featureStore;
-            MarketData marketData = new MarketData();
 
-            Instant startTime = Instant.ofEpochMilli(kline.getLong("t"));  // Kline start time
-            Instant endTime = Instant.ofEpochMilli(kline.getLong("T"));    // Kline end time
-            Instant eventTime = Instant.ofEpochMilli(json.getLong("E"));  // Event timestamp
-
-            // Extract numerical values
-            double openPrice = kline.getBigDecimal("o").doubleValue();
-            double closePrice = kline.getBigDecimal("c").doubleValue();
-            double highPrice = kline.getBigDecimal("h").doubleValue();
-            double lowPrice = kline.getBigDecimal("l").doubleValue();
-            double volume = kline.getBigDecimal("v").doubleValue();
-            long tradeCount = kline.getLong("n");
             boolean isFinal = kline.getBoolean("x");
-            tradingService.activeTradeListener(symbol, BigDecimal.valueOf(closePrice));
-            if (isFinal) {
-                marketData.setSymbol(symbol);
-                marketData.setInterval(INTERVAL);
-                marketData.setStartTime(LocalDateTime.ofInstant(startTime, ZoneId.of("UTC")));
-                marketData.setEndTime(LocalDateTime.ofInstant(endTime, ZoneId.of("UTC")));
-                marketData.setOpenPrice(BigDecimal.valueOf(openPrice));
-                marketData.setClosePrice(BigDecimal.valueOf(closePrice));
-                marketData.setHighPrice(BigDecimal.valueOf(highPrice));
-                marketData.setLowPrice(BigDecimal.valueOf(lowPrice));
-                marketData.setVolume(BigDecimal.valueOf(volume));
-                marketData.setTradeCount(tradeCount);
-                marketData.setTimestamp(eventTime);
+            log.info("Actively Listening | Current Price: {}", kline.getString("c"));
+            if (!isFinal) return Mono.empty(); // only process finalized candlesticks
 
-                if (!marketDataService.checkAndFetchMissingCandles(symbol, endTime, INTERVAL)){
-                    marketDataRepository.save(marketData);
-                    log.info("Saved finalized candlestick: {}", marketData);
-                }
+            Instant startTime = Instant.ofEpochMilli(kline.getLong("t"));
+            Instant endTime = Instant.ofEpochMilli(kline.getLong("T"));
+            Instant eventTime = Instant.ofEpochMilli(json.getLong("E"));
 
-                PredictionResponse predictionResponse = deepLearningClientService.sendPredictionRequest();
+            MarketData marketData = new MarketData();
+            marketData.setSymbol("BTCUSDT");
+            marketData.setInterval(INTERVAL);
+            marketData.setStartTime(LocalDateTime.ofInstant(startTime, ZoneId.of("UTC")));
+            marketData.setEndTime(LocalDateTime.ofInstant(endTime, ZoneId.of("UTC")));
+            marketData.setOpenPrice(new BigDecimal(kline.getString("o")));
+            marketData.setClosePrice(new BigDecimal(kline.getString("c")));
+            marketData.setHighPrice(new BigDecimal(kline.getString("h")));
+            marketData.setLowPrice(new BigDecimal(kline.getString("l")));
+            marketData.setVolume(new BigDecimal(kline.getString("v")));
+            marketData.setTradeCount(kline.getLong("n"));
+            marketData.setTimestamp(eventTime);
 
-               featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, predictionResponse);
-                List<Users> userList = usersRepository.findByIsActiveAndExchange("1", "BNC");
+            return deepLearningClientService.sendPredictionRequestReactive()
+                    .publishOn(Schedulers.boundedElastic())
+                    .doOnNext(prediction -> {
+                        if (!marketDataService.checkAndFetchMissingCandles("BTCUSDT", endTime, INTERVAL)) {
+                            marketDataRepository.save(marketData);
+                            log.info("Saved candlestick: {}", marketData);
+                        }
 
+                        FeatureStore featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, prediction);
+                        List<Users> users = usersRepository.findByIsActiveAndExchange("1", "BNC");
 
-                for (Users user : userList) {
-                    tradingService.cnnTransformerLongShortTradeAction(marketData,featureStore,user,"BTCUSDT");
-                }
-
-            }
+                        for (Users user : users) {
+                            try {
+                                tradingService.cnnTransformerLongShortTradeAction(marketData, featureStore, user, "BTCUSDT");
+                            } catch (JsonProcessingException e) {
+                                log.info("Error during trading ", e.getCause());
+                            }
+                        }
+                    })
+                    .then(); // return Mono<Void>
         } catch (Exception e) {
-            log.error("Error parsing WebSocket message: {}", message, e);
+            log.error("Error processing message: {}", message, e);
+            return Mono.empty();
         }
     }
 }

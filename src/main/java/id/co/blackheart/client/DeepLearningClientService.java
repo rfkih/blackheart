@@ -11,6 +11,8 @@ import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -26,6 +28,7 @@ public class DeepLearningClientService {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
+    private final WebClient.Builder webClientBuilder;
 
     public PredictionResponse sendPredictionRequest() {
         HttpHeaders headers = new HttpHeaders();
@@ -51,8 +54,24 @@ public class DeepLearningClientService {
         return decodeResponse(response);
     }
 
+    public Mono<PredictionResponse> sendPredictionRequestReactive() {
+        PredictionRequest request = new PredictionRequest();
+        request.setInterval("15m");
+        request.setSymbol("BTCUSDT");
+        request.setStock(false);
 
-    @Async // Optional: Enable @EnableAsync in your SpringBootApp class!
+        return webClientBuilder.build()
+                .post()
+                .uri(baseUrl + "/predict")
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(PredictionResponse.class)
+                .doOnNext(response -> log.info("[PREDICT_API] Success"))
+                .doOnError(err -> log.warn("[PREDICT_API] Failed: {}", err.getMessage()));
+    }
+
+
+    @Async("taskExecutor")
     public void sendTrainRequestAsync() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
