@@ -23,6 +23,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.net.URI;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -43,12 +44,10 @@ public class BinanceWebSocketClient {
     private final MarketDataService marketDataService;
     private final UsersRepository usersRepository;
 
-    private Disposable subscription;
-
     public void connect() {
         log.info("Attempting to connect to Binance WebSocket...");
 
-        subscription = new ReactorNettyWebSocketClient()
+        Disposable subscription = new ReactorNettyWebSocketClient()
                 .execute(URI.create(BINANCE_WS_URL), session ->
                         session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
@@ -56,12 +55,24 @@ public class BinanceWebSocketClient {
                                 .onErrorContinue((ex, obj) -> log.error("Error during WebSocket stream", ex))
                                 .then()
                 )
-                .retry() // reconnect automatically on error
+                .retry() // Retry on error
                 .subscribe(
                         null,
-                        err -> log.error("WebSocket error", err),
-                        () -> log.warn("WebSocket stream closed")
+                        err -> {
+                            log.error("WebSocket error", err);
+                            reconnectWithDelay();
+                        },
+                        () -> {
+                            log.warn("WebSocket stream closed, reconnecting...");
+                            reconnectWithDelay();
+                        }
                 );
+    }
+
+    private void reconnectWithDelay() {
+        Mono.delay(Duration.ofSeconds(5))
+                .doOnNext(ignore -> connect())
+                .subscribe();
     }
 
     private Mono<Void> handleMessageReactive(String message) {
