@@ -11,6 +11,7 @@ import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.MarketDataService;
 import id.co.blackheart.service.TechnicalIndicatorService;
 import id.co.blackheart.service.TradingService;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONObject;
@@ -28,6 +29,9 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -44,35 +48,64 @@ public class BinanceWebSocketClient {
     private final MarketDataService marketDataService;
     private final UsersRepository usersRepository;
 
-    public void connect() {
-        log.info("Attempting to connect to Binance WebSocket...");
+    private final ReactorNettyWebSocketClient client = new ReactorNettyWebSocketClient();
+    private volatile Instant lastMessageTime = Instant.now();
+    private final Duration TIMEOUT_DURATION = Duration.ofSeconds(30);
+    private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
 
-        Disposable subscription = new ReactorNettyWebSocketClient()
+    private Disposable subscription;
+
+    @PostConstruct
+    public void start() {
+        connect();
+        startWatchdog();
+    }
+
+    public void connect() {
+        log.info("Connecting to Binance WebSocket...");
+
+        subscription = client
                 .execute(URI.create(BINANCE_WS_URL), session ->
                         session.receive()
-                                .map(WebSocketMessage::getPayloadAsText)
+                                .map(message -> {
+                                    lastMessageTime = Instant.now();
+                                    return message.getPayloadAsText();
+                                })
                                 .flatMap(this::handleMessageReactive)
-                                .onErrorContinue((ex, obj) -> log.error("Error during WebSocket stream", ex))
+                                .onErrorContinue((ex, obj) -> log.error("WebSocket stream error", ex))
                                 .then()
                 )
-                .retry() // Retry on error
+                .retry()
                 .subscribe(
                         null,
-                        err -> {
-                            log.error("WebSocket error", err);
+                        error -> {
+                            log.error("WebSocket error", error);
                             reconnectWithDelay();
                         },
                         () -> {
-                            log.warn("WebSocket stream closed, reconnecting...");
+                            log.warn("WebSocket stream closed. Reconnecting...");
                             reconnectWithDelay();
                         }
                 );
     }
 
     private void reconnectWithDelay() {
+        if (subscription != null && !subscription.isDisposed()) {
+            subscription.dispose();
+        }
+
         Mono.delay(Duration.ofSeconds(5))
                 .doOnNext(ignore -> connect())
                 .subscribe();
+    }
+
+    private void startWatchdog() {
+        watchdog.scheduleAtFixedRate(() -> {
+            if (Duration.between(lastMessageTime, Instant.now()).compareTo(TIMEOUT_DURATION) > 0) {
+                log.warn("WebSocket connection appears stale. Triggering reconnect...");
+                reconnectWithDelay();
+            }
+        }, 30, 30, TimeUnit.SECONDS);
     }
 
     private Mono<Void> handleMessageReactive(String message) {
@@ -81,8 +114,8 @@ public class BinanceWebSocketClient {
             JSONObject kline = json.getJSONObject("k");
 
             boolean isFinal = kline.getBoolean("x");
-            log.info("Actively Listening | Current Price: {}", kline.getString("c"));
-            if (!isFinal) return Mono.empty(); // only process finalized candlesticks
+            log.info("Price update | Current: {}", kline.getString("c"));
+            if (!isFinal) return Mono.empty();
 
             Instant startTime = Instant.ofEpochMilli(kline.getLong("t"));
             Instant endTime = Instant.ofEpochMilli(kline.getLong("T"));
@@ -106,24 +139,25 @@ public class BinanceWebSocketClient {
                     .doOnNext(prediction -> {
                         if (!marketDataService.checkAndFetchMissingCandles("BTCUSDT", endTime, INTERVAL)) {
                             marketDataRepository.save(marketData);
-                            log.info("Saved candlestick: {}", marketData);
+                            log.info("Saved: {}", marketData);
                         }
 
-                        FeatureStore featureStore = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, prediction);
+                        FeatureStore features = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, prediction);
                         List<Users> users = usersRepository.findByIsActiveAndExchange("1", "BNC");
 
                         for (Users user : users) {
                             try {
-                                tradingService.cnnTransformerLongShortTradeAction(marketData, featureStore, user, "BTCUSDT");
+                                tradingService.cnnTransformerLongShortTradeAction(marketData, features, user, "BTCUSDT");
                             } catch (JsonProcessingException e) {
-                                log.info("Error during trading ", e.getCause());
+                                log.warn("Trading error", e);
                             }
                         }
                     })
-                    .then(); // return Mono<Void>
+                    .then();
         } catch (Exception e) {
-            log.error("Error processing message: {}", message, e);
+            log.error("Message processing error: {}", message, e);
             return Mono.empty();
         }
     }
 }
+
