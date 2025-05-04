@@ -176,7 +176,7 @@ public class TechnicalIndicatorService {
 
             // ✅ Use BaseBar.Builder with Num values
             BaseBar bar = BaseBar.builder()
-                    .timePeriod(Duration.ofMinutes(1))  // 1-minute bars
+                    .timePeriod(Duration.ofMinutes(15))  // 1-minute bars
                     .endTime(barTimestamp.atZone(ZoneId.of("UTC")))  // Correct timestamp handling
                     .openPrice(openPrice)
                     .highPrice(highPrice)

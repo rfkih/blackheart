@@ -53,17 +53,31 @@ public class BinanceWebSocketClient {
     private final Duration TIMEOUT_DURATION = Duration.ofSeconds(30);
     private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
 
+    private volatile LocalDateTime lastSavedEndTime = null;
+    private final Object insertLock = new Object();
+
     private Disposable subscription;
+    private volatile boolean isRunning = false;
 
     @PostConstruct
-    public void start() {
-        connect();
-        startWatchdog();
+    public synchronized void start() {
+        if (!isRunning) {
+            log.info("Starting BinanceWebSocketClient...");
+            connect();
+            startWatchdog();
+            isRunning = true;
+        } else {
+            log.warn("BinanceWebSocketClient already started.");
+        }
     }
 
-    public void connect() {
-        log.info("Connecting to Binance WebSocket...");
+    public synchronized void connect() {
+        if (subscription != null && !subscription.isDisposed()) {
+            log.warn("WebSocket already connected. Skipping reconnect.");
+            return;
+        }
 
+        log.info("Connecting to Binance WebSocket...");
         subscription = client
                 .execute(URI.create(BINANCE_WS_URL), session ->
                         session.receive()
@@ -95,7 +109,10 @@ public class BinanceWebSocketClient {
         }
 
         Mono.delay(Duration.ofSeconds(5))
-                .doOnNext(ignore -> connect())
+                .doOnNext(ignore -> {
+                    log.info("Reconnecting to Binance WebSocket after delay...");
+                    connect();
+                })
                 .subscribe();
     }
 
@@ -134,14 +151,28 @@ public class BinanceWebSocketClient {
             marketData.setTradeCount(kline.getLong("n"));
             marketData.setTimestamp(eventTime);
 
+            // Final double-check to prevent duplicate processing
+            synchronized (insertLock) {
+                if (lastSavedEndTime != null && lastSavedEndTime.equals(marketData.getEndTime())) {
+                    log.info("⏩ Duplicate candlestick detected in memory. Skipping insert: {}", marketData.getEndTime());
+                    return Mono.empty();
+                }
+
+                MarketData checkExist = marketDataRepository.findLatestBySymbol("BTCUSDT", INTERVAL);
+                if (checkExist != null && checkExist.getEndTime().equals(marketData.getEndTime())) {
+                    log.info("⏩ Duplicate candlestick found in DB. Skipping insert: {}", marketData.getEndTime());
+                    return Mono.empty();
+                }
+
+                marketDataRepository.save(marketData);
+                lastSavedEndTime = marketData.getEndTime();
+                log.info("✅ Inserted candlestick: {}", marketData);
+            }
+
             return deepLearningClientService.sendPredictionRequestReactive()
                     .publishOn(Schedulers.boundedElastic())
                     .doOnNext(prediction -> {
-                        if (!marketDataService.checkAndFetchMissingCandles("BTCUSDT", endTime, INTERVAL)) {
-                            marketDataRepository.save(marketData);
-                            log.info("Saved: {}", marketData);
-                        }
-
+                        marketDataService.checkAndFetchMissingCandles("BTCUSDT", endTime, INTERVAL);
                         FeatureStore features = technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", eventTime, prediction);
                         List<Users> users = usersRepository.findByIsActiveAndExchange("1", "BNC");
 
@@ -154,10 +185,10 @@ public class BinanceWebSocketClient {
                         }
                     })
                     .then();
+
         } catch (Exception e) {
             log.error("Message processing error: {}", message, e);
             return Mono.empty();
         }
     }
 }
-

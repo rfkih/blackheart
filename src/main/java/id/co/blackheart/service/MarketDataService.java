@@ -78,11 +78,19 @@ public class MarketDataService {
                     marketData.setTradeCount(((Number) kline[8]).longValue());
                     marketData.setTimestamp(Instant.ofEpochMilli((Long) kline[6]));
 
-                    marketDataRepository.save(marketData);
+                    MarketData checkExist = new MarketData();
+
+                    checkExist = marketDataRepository.findLatestBySymbol(symbol,"15m");
+
+                    if (!checkExist.getEndTime().equals(marketData.getEndTime())) {
+                        marketDataRepository.save(marketData);
+                        log.info("✅ Inserted missing candlestick: {}", marketData);
+                    }
+
                     PredictionResponse predictionResponse = deepLearningClientService.sendPredictionRequest();
 
                     technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", Instant.ofEpochSecond(System.currentTimeMillis()), predictionResponse);
-                    log.info("✅ Inserted missing candlestick: {}", marketData);
+
                 }
             }
         } catch (Exception e) {
