@@ -19,10 +19,12 @@ import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
 import org.ta4j.core.indicators.volume.*;
 import org.ta4j.core.num.Num;
 
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 
@@ -40,122 +42,280 @@ public class TechnicalIndicatorService {
     private final FeatureStoreRepository featureStoreRepository;
 
 
-    public FeatureStore computeIndicatorsAndStore(String symbol, Instant instantTimestamp, PredictionResponse predictionResponse) {
-        List<MarketData> historicalData = marketDataRepository.findLast100BySymbolAndInterval(symbol, "15m");
+    public FeatureStore computeIndicatorsAndStore(String symbol, String interval) {
+        List<MarketData> historicalData = marketDataRepository.findLast300BySymbolAndInterval(symbol, interval);
 
-        FeatureStore featureStore = new FeatureStore();
-        if (historicalData.size() < 50) {
-            log.warn("Not enough historical data to compute indicators for {}", symbol);
-            return featureStore;
+        if (historicalData == null || historicalData.size() < 50) {
+            log.warn("Not enough historical data to compute indicators for {} {}", symbol, interval);
+            return null;
         }
 
-        MarketData latestMarketData = historicalData.getFirst();
-        LocalDateTime timestamp = LocalDateTime.ofInstant(instantTimestamp, ZoneId.of("UTC"));
+        // Make sure the data is sorted ascending by start time
+        historicalData.sort(Comparator.comparing(MarketData::getStartTime));
+
+        MarketData latestMarketData = historicalData.get(historicalData.size() - 1);
         BigDecimal price = latestMarketData.getClosePrice();
+
+        BarSeries series = convertToBarSeries(historicalData);
+        int endIndex = series.getEndIndex();
+
+        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+        HighPriceIndicator highPrice = new HighPriceIndicator(series);
+        LowPriceIndicator lowPrice = new LowPriceIndicator(series);
+        VolumeIndicator volumeIndicator = new VolumeIndicator(series);
 
         FeatureStore featureData = new FeatureStore();
         featureData.setIdMarketData(latestMarketData.getId());
         featureData.setSymbol(symbol);
-        featureData.setSignal(predictionResponse.getSignal());
-        featureData.setConfidence(predictionResponse.getConfidence());
-        featureData.setModel(predictionResponse.getModel());
-        featureData.setTimestamp(timestamp);
+        featureData.setInterval(interval);
+        featureData.setStartTime(latestMarketData.getStartTime());
+        featureData.setEndTime(latestMarketData.getEndTime());
         featureData.setPrice(price);
 
-        // ✅ Convert MarketData to TA4J BarSeries
-        BarSeries series = convertToBarSeries(historicalData);
+        // Trend
+        EMAIndicator ema20 = new EMAIndicator(closePrice, 20);
+        EMAIndicator ema50 = new EMAIndicator(closePrice, 50);
+        EMAIndicator ema200 = new EMAIndicator(closePrice, 200);
 
-        // ✅ Use TA4J Indicators
-        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+        featureData.setEma20(toBigDecimal(ema20.getValue(endIndex)));
+        featureData.setEma50(toBigDecimal(ema50.getValue(endIndex)));
+        featureData.setEma200(toBigDecimal(ema200.getValue(endIndex)));
 
-        featureData.setSma14(new BigDecimal(new SMAIndicator(closePrice, 14)
-                .getValue(series.getEndIndex()).toString()));
+        if (endIndex > 0) {
+            featureData.setEma50Slope(
+                    toBigDecimal(ema50.getValue(endIndex).minus(ema50.getValue(endIndex - 1)))
+            );
+            featureData.setEma200Slope(
+                    toBigDecimal(ema200.getValue(endIndex).minus(ema200.getValue(endIndex - 1)))
+            );
+        } else {
+            featureData.setEma50Slope(BigDecimal.ZERO);
+            featureData.setEma200Slope(BigDecimal.ZERO);
+        }
 
-        featureData.setSma50(new BigDecimal(new SMAIndicator(closePrice, 50)
-                .getValue(series.getEndIndex()).toString()));
-
-        featureData.setWma(new BigDecimal(new WMAIndicator(closePrice, 14)
-                .getValue(series.getEndIndex()).toString()));
-
-        featureData.setMomentum(new BigDecimal( new ROCIndicator(closePrice, 10).getValue(series.getEndIndex()).toString()));
-
-        StochasticOscillatorKIndicator stochK = new StochasticOscillatorKIndicator(series, 14);
-        featureData.setStochK(new BigDecimal(stochK.getValue(series.getEndIndex()).toString()));
-
-        StochasticOscillatorDIndicator stochD = new StochasticOscillatorDIndicator(stochK);
-        featureData.setStochD(new BigDecimal(stochD.getValue(series.getEndIndex()).toString()));
-
-        // ✅ Compute MACD (8, 21) and Signal Line (5)
-        MACDIndicator macd = new MACDIndicator(closePrice, 8, 21);
-        EMAIndicator macdSignal = new EMAIndicator(macd, 5);
-        featureData.setMacd(new BigDecimal(macd.getValue(series.getEndIndex()).toString()));
-        featureData.setMacdSignal(new BigDecimal(macdSignal.getValue(series.getEndIndex()).toString()));
-        featureData.setMacdHistogram(new BigDecimal(macd.getValue(series.getEndIndex())
-                .minus(macdSignal.getValue(series.getEndIndex())).toString()));
-
-        // ✅ RSI (14)
-        featureData.setRsi(new BigDecimal(new RSIIndicator(closePrice, 14)
-                .getValue(series.getEndIndex()).toString()));
-
-        // ✅ Williams %R (14)
-        featureData.setWilliamsR(new BigDecimal(new WilliamsRIndicator(series, 14)
-                .getValue(series.getEndIndex()).toString()));
-
-        // ✅ CCI (20)
-        featureData.setCci(new BigDecimal(new CCIIndicator(series, 20)
-                .getValue(series.getEndIndex()).toString()));
-
-        // ✅ AD Oscillator
-        featureData.setAdOscillator(new BigDecimal(new AccumulationDistributionIndicator(series)
-                .getValue(series.getEndIndex()).toString()));
-
-        // ✅ VWAP
-        featureData.setVwap(new BigDecimal(new VWAPIndicator(series, 14).getValue(series.getEndIndex()).toString()));
-
-
-        // ✅ ATR (14)
-        featureData.setAtr(new BigDecimal(new ATRIndicator(series, 14)
-                .getValue(series.getEndIndex()).toString()));
-
-        // ✅ ADX (14)
+        // Trend strength
         ADXIndicator adx = new ADXIndicator(series, 14);
-        featureData.setAdx(new BigDecimal(adx.getValue(series.getEndIndex()).toString()));
+        PlusDIIndicator plusDI = new PlusDIIndicator(series, 14);
+        MinusDIIndicator minusDI = new MinusDIIndicator(series, 14);
 
-        // ✅ +DI and -DI (14)
-        featureData.setPlusDI(new BigDecimal(new PlusDIIndicator(series, 14)
-                .getValue(series.getEndIndex()).toString()));
+        featureData.setAdx(toBigDecimal(adx.getValue(endIndex)));
+        featureData.setPlusDI(toBigDecimal(plusDI.getValue(endIndex)));
+        featureData.setMinusDI(toBigDecimal(minusDI.getValue(endIndex)));
+        featureData.setEfficiencyRatio20(calculateEfficiencyRatio(historicalData, 20));
 
-        featureData.setMinusDI(new BigDecimal(new MinusDIIndicator(series, 14)
-                .getValue(series.getEndIndex()).toString()));
+        // Volatility
+        ATRIndicator atr = new ATRIndicator(series, 14);
+        BigDecimal atrValue = toBigDecimal(atr.getValue(endIndex));
 
+        featureData.setAtr(atrValue);
+        featureData.setAtrPct(
+                price.compareTo(BigDecimal.ZERO) == 0
+                        ? BigDecimal.ZERO
+                        : atrValue.divide(price, 8, RoundingMode.HALF_UP)
+        );
 
-        // ✅ EMA
-        featureData.setEma9(new BigDecimal(new EMAIndicator(closePrice, 9)
-                .getValue(series.getEndIndex()).toString()));
+        // Momentum
+        MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);
+        EMAIndicator macdSignal = new EMAIndicator(macd, 9);
 
-        featureData.setEma14(new BigDecimal(new EMAIndicator(closePrice, 14)
-                .getValue(series.getEndIndex()).toString()));
+        BigDecimal macdValue = toBigDecimal(macd.getValue(endIndex));
+        BigDecimal macdSignalValue = toBigDecimal(macdSignal.getValue(endIndex));
 
-        featureData.setEma21(new BigDecimal(new EMAIndicator(closePrice, 21)
-                .getValue(series.getEndIndex()).toString()));
+        featureData.setMacd(macdValue);
+        featureData.setMacdSignal(macdSignalValue);
+        featureData.setMacdHistogram(macdValue.subtract(macdSignalValue));
+        featureData.setRsi(toBigDecimal(new RSIIndicator(closePrice, 14).getValue(endIndex)));
 
-        featureData.setEma50(new BigDecimal(new EMAIndicator(closePrice, 50)
-                .getValue(series.getEndIndex()).toString()));
+        // Structure / breakout
+        featureData.setHighestHigh20(calculateHighestHigh(historicalData, 20));
+        featureData.setLowestLow20(calculateLowestLow(historicalData, 20));
+        featureData.setDonchianUpper20(featureData.getHighestHigh20());
+        featureData.setDonchianLower20(featureData.getLowestLow20());
+        featureData.setDonchianMid20(
+                featureData.getDonchianUpper20()
+                        .add(featureData.getDonchianLower20())
+                        .divide(BigDecimal.valueOf(2), 8, RoundingMode.HALF_UP)
+        );
 
-        featureData.setEma100(new BigDecimal(new EMAIndicator(closePrice, 100)
-                .getValue(series.getEndIndex()).toString()));
+        // Candle quality
+        BigDecimal open = latestMarketData.getOpenPrice();
+        BigDecimal high = latestMarketData.getHighPrice();
+        BigDecimal low = latestMarketData.getLowPrice();
+        BigDecimal close = latestMarketData.getClosePrice();
 
-        // ✅ Bollinger Bands (20)
-        BollingerBandsMiddleIndicator bbm = new BollingerBandsMiddleIndicator(new SMAIndicator(closePrice, 20));
-        BollingerBandsUpperIndicator bbu = new BollingerBandsUpperIndicator(bbm, new StandardDeviationIndicator(closePrice, 20));
-        BollingerBandsLowerIndicator bbl = new BollingerBandsLowerIndicator(bbm, new StandardDeviationIndicator(closePrice, 20));
-        featureData.setBollingerMiddle(new BigDecimal(bbm.getValue(series.getEndIndex()).toString()));
-        featureData.setBollingerUpper(new BigDecimal(bbu.getValue(series.getEndIndex()).toString()));
-        featureData.setBollingerLower(new BigDecimal(bbl.getValue(series.getEndIndex()).toString()));
+        BigDecimal bodySize = close.subtract(open).abs();
+        BigDecimal candleRange = high.subtract(low);
 
+        featureData.setBodySize(bodySize);
+        featureData.setCandleRange(candleRange);
+        featureData.setBodyToRangeRatio(
+                candleRange.compareTo(BigDecimal.ZERO) == 0
+                        ? BigDecimal.ZERO
+                        : bodySize.divide(candleRange, 8, RoundingMode.HALF_UP)
+        );
+        featureData.setCloseLocationValue(
+                candleRange.compareTo(BigDecimal.ZERO) == 0
+                        ? BigDecimal.ZERO
+                        : close.subtract(low).divide(candleRange, 8, RoundingMode.HALF_UP)
+        );
 
-        featureStoreRepository.save(featureData);
-        return featureData;
+        featureData.setRelativeVolume20(calculateRelativeVolume(historicalData, 20));
+
+        // Regime summary
+        Integer trendScore = calculateTrendScore(featureData, price);
+        featureData.setTrendScore(trendScore);
+        featureData.setTrendRegime(resolveTrendRegime(trendScore));
+        featureData.setVolatilityRegime(resolveVolatilityRegime(featureData.getAtrPct()));
+        featureData.setIsBreakout(isBreakout(featureData, price));
+        featureData.setIsPullback(isPullback(featureData, price));
+        featureData.setEntryBias(resolveEntryBias(featureData));
+
+        return featureStoreRepository.save(featureData);
+    }
+
+    private Boolean isBreakout(FeatureStore feature, BigDecimal price) {
+        if (feature.getDonchianUpper20() == null || feature.getDonchianLower20() == null) {
+            return false;
+        }
+
+        return price.compareTo(feature.getDonchianUpper20()) >= 0
+                || price.compareTo(feature.getDonchianLower20()) <= 0;
+    }
+
+    private Boolean isPullback(FeatureStore feature, BigDecimal price) {
+        if (feature.getTrendRegime() == null || feature.getEma20() == null || feature.getAtr() == null) {
+            return false;
+        }
+
+        BigDecimal distanceToEma20 = price.subtract(feature.getEma20()).abs();
+
+        if ("BULL".equals(feature.getTrendRegime())) {
+            return price.compareTo(feature.getEma20()) >= 0
+                    && distanceToEma20.compareTo(feature.getAtr()) <= 0;
+        }
+
+        if ("BEAR".equals(feature.getTrendRegime())) {
+            return price.compareTo(feature.getEma20()) <= 0
+                    && distanceToEma20.compareTo(feature.getAtr()) <= 0;
+        }
+
+        return false;
+    }
+
+    private String resolveEntryBias(FeatureStore feature) {
+        if ("BULL".equals(feature.getTrendRegime())) {
+            return "LONG";
+        }
+        if ("BEAR".equals(feature.getTrendRegime())) {
+            return "SHORT";
+        }
+        return "NONE";
+    }
+
+    private String resolveTrendRegime(Integer trendScore) {
+        if (trendScore == null) {
+            return "NEUTRAL";
+        }
+        if (trendScore >= 4) {
+            return "BULL";
+        }
+        if (trendScore <= 1) {
+            return "BEAR";
+        }
+        return "NEUTRAL";
+    }
+
+    private String resolveVolatilityRegime(BigDecimal atrPct) {
+        if (atrPct == null) {
+            return "NORMAL";
+        }
+
+        if (atrPct.compareTo(new BigDecimal("0.04")) >= 0) {
+            return "HIGH";
+        }
+        if (atrPct.compareTo(new BigDecimal("0.015")) <= 0) {
+            return "LOW";
+        }
+        return "NORMAL";
+    }
+
+    private Integer calculateTrendScore(FeatureStore feature, BigDecimal price) {
+        int score = 0;
+
+        if (feature.getEma20() != null && price.compareTo(feature.getEma20()) > 0) score++;
+        if (feature.getEma50() != null && price.compareTo(feature.getEma50()) > 0) score++;
+        if (feature.getEma200() != null && price.compareTo(feature.getEma200()) > 0) score++;
+        if (feature.getEma50() != null && feature.getEma200() != null
+                && feature.getEma50().compareTo(feature.getEma200()) > 0) score++;
+        if (feature.getAdx() != null && feature.getAdx().compareTo(new BigDecimal("20")) >= 0) score++;
+
+        return score;
+    }
+
+    private BigDecimal calculateRelativeVolume(List<MarketData> data, int period) {
+        if (data.size() < period) {
+            return BigDecimal.ZERO;
+        }
+
+        List<MarketData> recent = data.subList(Math.max(0, data.size() - period), data.size());
+        BigDecimal avgVolume = recent.stream()
+                .map(MarketData::getVolume)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(recent.size()), 8, RoundingMode.HALF_UP);
+
+        BigDecimal currentVolume = data.getLast().getVolume();
+
+        if (avgVolume.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO;
+        }
+
+        return currentVolume.divide(avgVolume, 8, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal calculateHighestHigh(List<MarketData> data, int period) {
+        return data.stream()
+                .skip(Math.max(0, data.size() - period))
+                .map(MarketData::getHighPrice)
+                .max(BigDecimal::compareTo)
+                .orElse(BigDecimal.ZERO);
+    }
+
+    private BigDecimal calculateLowestLow(List<MarketData> data, int period) {
+        return data.stream()
+                .skip(Math.max(0, data.size() - period))
+                .map(MarketData::getLowPrice)
+                .min(BigDecimal::compareTo)
+                .orElse(BigDecimal.ZERO);
+    }
+
+    private BigDecimal calculateEfficiencyRatio(List<MarketData> data, int period) {
+        if (data.size() < period + 1) {
+            return BigDecimal.ZERO;
+        }
+
+        int end = data.size() - 1;
+        int start = end - period;
+
+        BigDecimal direction = data.get(end).getClosePrice()
+                .subtract(data.get(start).getClosePrice())
+                .abs();
+
+        BigDecimal volatility = BigDecimal.ZERO;
+        for (int i = start + 1; i <= end; i++) {
+            BigDecimal currentClose = data.get(i).getClosePrice();
+            BigDecimal previousClose = data.get(i - 1).getClosePrice();
+            volatility = volatility.add(currentClose.subtract(previousClose).abs());
+        }
+
+        if (volatility.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO;
+        }
+
+        return direction.divide(volatility, 8, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal toBigDecimal(Num value) {
+        return new BigDecimal(value.toString()).setScale(8, RoundingMode.HALF_UP);
     }
 
     private BarSeries convertToBarSeries(List<MarketData> historicalData) {

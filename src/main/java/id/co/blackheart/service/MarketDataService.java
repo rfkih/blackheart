@@ -29,7 +29,7 @@ public class MarketDataService {
     TechnicalIndicatorService technicalIndicatorService;
 
 
-    public boolean checkAndFetchMissingCandles(String symbol, Instant latestKlineEndTime, String interval) {
+    public void checkAndFetchMissingCandles(String symbol, Instant latestKlineEndTime, String interval) {
 
         MarketData latestMarketData = marketDataRepository.findLatestBySymbol(symbol, interval);
 
@@ -38,21 +38,19 @@ public class MarketDataService {
 
             // If last inserted candle is older than 15 minutes, fetch missing data
             if (Duration.between(lastInsertedInstant, latestKlineEndTime).toMinutes() >= 16) {
-                log.warn("⚠ Missing candlestick detected! Fetching missing data for {}", symbol);
-                fetchMissingCandles(symbol, lastInsertedInstant.toEpochMilli(), latestKlineEndTime.toEpochMilli());
-                return true;
+                log.warn("Missing candlestick detected! Fetching missing data for {}", symbol);
+                fetchMissingCandles(symbol, lastInsertedInstant.toEpochMilli(), latestKlineEndTime.toEpochMilli(), "4h");
             }
         } else {
-            log.warn("⚠ No historical candlesticks found! Fetching initial data...");
-            fetchMissingCandles(symbol, latestKlineEndTime.minusSeconds(3600).toEpochMilli(), latestKlineEndTime.toEpochMilli());
-            return true;
+            log.warn("No historical candlesticks found! Fetching initial data...");
+            fetchMissingCandles(symbol, latestKlineEndTime.minusSeconds(3600).toEpochMilli(), latestKlineEndTime.toEpochMilli(), "4h");
         }
-        return false;
+
     }
 
 
 
-    private void fetchMissingCandles(String symbol, long startTime, long endTime) {
+    private void fetchMissingCandles(String symbol, long startTime, long endTime, String Interval) {
         String url = String.format("https://api.binance.com/api/v3/klines?symbol=%s&interval=15m&limit=1000&startTime=%d&endTime=%d",
                 symbol, startTime, endTime);
 
@@ -75,12 +73,13 @@ public class MarketDataService {
                     marketData.setHighPrice(new BigDecimal(kline[2].toString()));
                     marketData.setLowPrice(new BigDecimal(kline[3].toString()));
                     marketData.setVolume(new BigDecimal(kline[5].toString()));
+                    marketData.setQuoteAssetVolume(new BigDecimal(kline[7].toString()));
                     marketData.setTradeCount(((Number) kline[8]).longValue());
-                    marketData.setTimestamp(Instant.ofEpochMilli((Long) kline[6]));
+                    marketData.setTakerBuyBaseVolume(new BigDecimal(kline[9].toString()));
+                    marketData.setTakerBuyQuoteVolume(new BigDecimal(kline[10].toString()));
+                    marketData.setCreatedTime(Instant.ofEpochMilli((Long) kline[6]));
 
-                    MarketData checkExist = new MarketData();
-
-                    checkExist = marketDataRepository.findLatestBySymbol(symbol,"15m");
+                    MarketData checkExist = marketDataRepository.findLatestBySymbol(symbol,"15m");
 
                     if (!checkExist.getEndTime().equals(marketData.getEndTime())) {
                         marketDataRepository.save(marketData);
@@ -89,7 +88,7 @@ public class MarketDataService {
 
                     PredictionResponse predictionResponse = deepLearningClientService.sendPredictionRequest();
 
-                    technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT", Instant.ofEpochSecond(System.currentTimeMillis()), predictionResponse);
+                    technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT",  "15m");
 
                 }
             }

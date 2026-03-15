@@ -1,10 +1,7 @@
 package id.co.blackheart.controller;
 
 
-import id.co.blackheart.dto.request.BinanceAssetRequest;
-import id.co.blackheart.dto.request.SchedulerRequest;
 import id.co.blackheart.dto.response.ResponseDto;
-import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.service.PortfolioService;
 import id.co.blackheart.util.ResponseCode;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +10,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
-import java.util.List;
 
 
 @RestController

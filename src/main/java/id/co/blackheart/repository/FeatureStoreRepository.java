@@ -8,6 +8,6 @@ import java.util.List;
 
 @Repository
 public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long> {
-    List<FeatureStore> findBySymbolAndTimestampBetween(String symbol, LocalDateTime start, LocalDateTime end);
-    FeatureStore findTopBySymbolOrderByTimestampDesc(String symbol);
+//    List<FeatureStore> findBySymbolAndTimestampBetween(String symbol, LocalDateTime start, LocalDateTime end);
+//    FeatureStore findTopBySymbolOrderByTimestampDesc(String symbol);
 }

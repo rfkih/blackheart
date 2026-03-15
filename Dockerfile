@@ -1,23 +1,20 @@
-# Stage 1: Build Stage
+# ---- Stage 1: Build ---------------------------------------------------------
 FROM gradle:8.7.0-jdk21-alpine AS build
 WORKDIR /application
 
-COPY build.gradle .
-COPY settings.gradle .
-COPY src src
+# If you use Kotlin DSL, keep these lines.
+COPY build.gradle.kts settings.gradle.kts ./
+COPY src ./src
+# Build only the Spring Boot jar (fewer artifacts than 'gradle build')
+RUN gradle bootJar -x test
 
-RUN gradle build -x test
+# ---- Stage 2: Runtime -------------------------------------------------------
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
 
-# Stage 2: Deployment Stage
-FROM eclipse-temurin:21-jdk-alpine
-WORKDIR /application
-
-# Updated jar path here!
-COPY --from=build /application/build/libs/*.jar /application/
+# Copy the boot jar (only one is produced by 'bootJar')
+COPY --from=build /application/build/libs/*.jar /app/app.jar
 
 ENV JAVA_OPTS=""
-ENTRYPOINT exec java $JAVA_OPTS -jar /application/blackheart-0.0.1-SNAPSHOT.jar
 EXPOSE 8080
-
-#docker build -t blackheart .
-#docker run --name blackheart -p 8080:8080 blackheart
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

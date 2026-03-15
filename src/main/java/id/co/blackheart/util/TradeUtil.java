@@ -70,17 +70,17 @@ public class TradeUtil {
             Trades newTrade = new Trades();
             newTrade.setUserId(user.getId());
             newTrade.setAsset(asset);
-            newTrade.setTradePlan(tradePlan);
+//            newTrade.setTradePlan(tradePlan);
             newTrade.setEntryOrderId(binanceOrderResponse.getOrderId());
-            newTrade.setAction("LONG");
+//            newTrade.setAction("LONG");
             newTrade.setEntryPrice(avgEntryPrice);
             newTrade.setEntryExecutedQty(totalQty);
             newTrade.setEntryExecutedQuoteQty(totalCost);
             newTrade.setEntryFee(totalFee);
-            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
-            newTrade.setStopLossPrice(decision.getStopLossPrice());
+//            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
+//            newTrade.setStopLossPrice(decision.getStopLossPrice());
             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-            newTrade.setIsActive("1");
+//            newTrade.setIsActive("1");
             newTrade.setEntryTime(LocalDateTime.now());
 
             tradesRepository.save(newTrade);
@@ -129,7 +129,7 @@ public class TradeUtil {
                 trade.setExitExecutedQuoteQty(totalCost);
                 trade.setExitExecutedQty(totalQty);
                 trade.setExitFee(totalFee);
-                trade.setIsActive("0");
+//                trade.setIsActive("0");
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(avgExitPrice);
                 trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), avgExitPrice, trade.getEntryExecutedQty(), TradeType.LONG));
@@ -173,15 +173,15 @@ public class TradeUtil {
             Trades newTrade = new Trades();
             newTrade.setUserId(user.getId());
             newTrade.setAsset(asset);
-            newTrade.setTradePlan(tradePlan);
+//            newTrade.setTradePlan(tradePlan);
             newTrade.setEntryOrderId(marketOrderResponse.getOrderId());
-            newTrade.setAction("LONG");
+//            newTrade.setAction("LONG");
             newTrade.setEntryPrice(new BigDecimal(orderDetailResponse.getExecutedPrice()));
             newTrade.setEntryExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
             newTrade.setEntryExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
-            newTrade.setStopLossPrice(decision.getStopLossPrice());
+//            newTrade.setStopLossPrice(decision.getStopLossPrice());
             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-            newTrade.setIsActive("1");
+//            newTrade.setIsActive("1");
             newTrade.setEntryTime(LocalDateTime.now());
 
             tradesRepository.save(newTrade);
@@ -218,7 +218,7 @@ public class TradeUtil {
                 trade.setExitOrderId(marketOrderResponse.getOrderId());
                 trade.setExitExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
                 trade.setExitExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
-                trade.setIsActive("0");
+//                trade.setIsActive("0");
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(marketData.getClosePrice());
                 trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), trade.getExitPrice(), trade.getEntryExecutedQty(), TradeType.LONG));
@@ -263,17 +263,17 @@ public class TradeUtil {
             Trades newTrade = new Trades();
             newTrade.setUserId(user.getId());
             newTrade.setAsset(asset);
-            newTrade.setTradePlan(tradePlan);
+//            newTrade.setTradePlan(tradePlan);
             newTrade.setEntryOrderId(binanceOrderResponse.getOrderId());
-            newTrade.setAction("SHORT");
+//            newTrade.setAction("SHORT");
             newTrade.setEntryPrice(avgEntryPrice);
             newTrade.setEntryExecutedQty(totalQty);
             newTrade.setEntryExecutedQuoteQty(totalCost);
-            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
+//            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
             newTrade.setEntryFee(totalFee);
-            newTrade.setStopLossPrice(decision.getStopLossPrice());
+//            newTrade.setStopLossPrice(decision.getStopLossPrice());
             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-            newTrade.setIsActive("1");
+//            newTrade.setIsActive("1");
             newTrade.setEntryTime(LocalDateTime.now());
 
             tradesRepository.save(newTrade);
@@ -331,7 +331,7 @@ public class TradeUtil {
                 trade.setExitExecutedQuoteQty(totalCost);
                 trade.setExitExecutedQty(totalQty);
                 trade.setExitFee(totalFee);
-                trade.setIsActive("0");
+//                trade.setIsActive("0");
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(avgExitPrice);
                 trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), avgExitPrice, trade.getEntryExecutedQty(), TradeType.SHORT));
@@ -374,15 +374,15 @@ public class TradeUtil {
             Trades newTrade = new Trades();
             newTrade.setUserId(user.getId());
             newTrade.setAsset(asset);
-            newTrade.setTradePlan(tradePlan);
+//            newTrade.setTradePlan(tradePlan);
             newTrade.setEntryOrderId(marketOrderResponse.getOrderId());
-            newTrade.setAction("SHORT");
+//            newTrade.setAction("SHORT");
             newTrade.setEntryPrice(new BigDecimal(orderDetailResponse.getExecutedPrice()));
             newTrade.setEntryExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
             newTrade.setEntryExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
-            newTrade.setStopLossPrice(decision.getStopLossPrice());
+//            newTrade.setStopLossPrice(decision.getStopLossPrice());
             newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-            newTrade.setIsActive("1");
+//            newTrade.setIsActive("1");
             newTrade.setEntryTime(LocalDateTime.now());
 
             tradesRepository.save(newTrade);
@@ -424,7 +424,7 @@ public class TradeUtil {
                 trade.setExitOrderId(marketOrderResponse.getOrderId());
                 trade.setExitExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
                 trade.setExitExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
-                trade.setIsActive("0");
+//                trade.setIsActive("0");
 
                 trade.setExitTime(LocalDateTime.now());
                 trade.setExitPrice(marketData.getClosePrice());

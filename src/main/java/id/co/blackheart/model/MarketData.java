@@ -51,8 +51,17 @@ public class MarketData {
     @Column(name = "trade_count", nullable = false)
     private Long tradeCount;
 
-    @Column(name = "timestamp", nullable = false, updatable = false)
+    @Column(name = "quote_asset_volume", nullable = false)
+    private BigDecimal quoteAssetVolume;
+
+    @Column(name = "taker_buy_base_volume", nullable = false)
+    private BigDecimal takerBuyBaseVolume;
+
+    @Column(name = "taker_buy_quote_volume", nullable = false)
+    private BigDecimal takerBuyQuoteVolume;
+
+    @Column(name = "created_time", nullable = false, updatable = false)
     @Temporal(TemporalType.TIMESTAMP)
-    @CreationTimestamp // Automatically sets current time
-    private Instant timestamp;
+    @CreationTimestamp
+    private Instant createdTime;
 }

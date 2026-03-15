@@ -1,18 +1,26 @@
 package id.co.blackheart.model;
 
+import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import jakarta.persistence.*;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
-@Table(name = "feature_store", uniqueConstraints = {@UniqueConstraint(columnNames = {"symbol", "timestamp"})})
+@Table(
+        name = "feature_store",
+        uniqueConstraints = {
+                @UniqueConstraint(columnNames = {"symbol", "interval", "start_time"})
+        }
+)
 public class FeatureStore {
 
     @Id
@@ -25,103 +33,123 @@ public class FeatureStore {
     @Column(name = "symbol", length = 20, nullable = false)
     private String symbol;
 
-    @Column(name = "signal", length = 10)
-    private String signal;
+    @Column(name = "interval", length = 10, nullable = false)
+    private String interval;
 
-    @Column(name = "confidence", precision = 20, scale = 8)
-    private BigDecimal confidence;
+    @Column(name = "start_time", nullable = false)
+    private LocalDateTime startTime;
 
-    @Column(name = "model", length = 30)
-    private String model;
+    @Column(name = "end_time", nullable = false)
+    private LocalDateTime endTime;
 
-    @Column(name = "timestamp", nullable = false)
-    private LocalDateTime timestamp;
-
-    @Column(name = "price", precision = 20, scale = 8, nullable = false)
+    @Column(name = "price", precision = 24, scale = 8, nullable = false)
     private BigDecimal price;
 
-    @Column(name = "sma_14", precision = 20, scale = 8)
-    private BigDecimal sma14;
+    // Trend
+    @Column(name = "ema_20", precision = 24, scale = 8)
+    private BigDecimal ema20;
 
-    @Column(name = "sma_50", precision = 20, scale = 8)
-    private BigDecimal sma50;
-
-    @Column(name = "wma", precision = 20, scale = 8)
-    private BigDecimal wma;
-
-    // Momentum Indicators
-    @Column(name = "momentum", precision = 20, scale = 8)
-    private BigDecimal momentum;
-
-    @Column(name = "stoch_k", precision = 20, scale = 8)
-    private BigDecimal stochK;
-
-    @Column(name = "stoch_d", precision = 20, scale = 8)
-    private BigDecimal stochD;
-
-    // MACD (Moving Average Convergence Divergence)
-    @Column(name = "macd", precision = 20, scale = 8)
-    private BigDecimal macd;
-
-    @Column(name = "macd_signal", precision = 20, scale = 8)
-    private BigDecimal macdSignal;
-
-    @Column(name = "macd_histogram", precision = 20, scale = 8)
-    private BigDecimal macdHistogram;
-
-    // RSI, CCI, Williams %R
-    @Column(name = "rsi", precision = 5, scale = 2)
-    private BigDecimal rsi;
-
-    @Column(name = "williams_r", precision = 20, scale = 8)
-    private BigDecimal williamsR;
-
-    @Column(name = "cci", precision = 20, scale = 8)
-    private BigDecimal cci;
-
-    // Accumulation/Distribution Oscillator
-    @Column(name = "ad_oscillator", precision = 20, scale = 8)
-    private BigDecimal adOscillator;
-
-    //ATR (Average True Range)
-    @Column(name = "atr", precision = 20, scale = 8)
-    private BigDecimal atr;
-
-    @Column(name = "bollinger_upper", precision = 20, scale = 8)
-    private BigDecimal bollingerUpper;
-
-    @Column(name = "bollinger_lower", precision = 20, scale = 8)
-    private BigDecimal bollingerLower;
-
-    @Column(name = "bollinger_middle", precision = 20, scale = 8)
-    private BigDecimal bollingerMiddle;
-
-    @Column(name = "adx", precision = 20, scale = 8)
-    private BigDecimal adx;
-
-    @Column(name = "plus_di", precision = 20, scale = 8)
-    private BigDecimal plusDI;
-
-    @Column(name = "minus_di", precision = 20, scale = 8)
-    private BigDecimal minusDI;
-
-    //VWAP (Volume Weighted Average Price)
-    @Column(name = "vwap", precision = 20, scale = 8)
-    private BigDecimal vwap;
-
-    @Column(name = "ema_9", precision = 20, scale = 8)
-    private BigDecimal ema9;
-
-    @Column(name = "ema_14", precision = 20, scale = 8)
-    private BigDecimal ema14;
-
-    @Column(name = "ema_21", precision = 20, scale = 8)
-    private BigDecimal ema21;
-
-    @Column(name = "ema_50", precision = 20, scale = 8)
+    @Column(name = "ema_50", precision = 24, scale = 8)
     private BigDecimal ema50;
 
-    @Column(name = "ema_100", precision = 20, scale = 8)
-    private BigDecimal ema100;
+    @Column(name = "ema_200", precision = 24, scale = 8)
+    private BigDecimal ema200;
 
+    @Column(name = "ema_50_slope", precision = 24, scale = 8)
+    private BigDecimal ema50Slope;
+
+    @Column(name = "ema_200_slope", precision = 24, scale = 8)
+    private BigDecimal ema200Slope;
+
+    // Trend strength
+    @Column(name = "adx", precision = 24, scale = 8)
+    private BigDecimal adx;
+
+    @Column(name = "plus_di", precision = 24, scale = 8)
+    private BigDecimal plusDI;
+
+    @Column(name = "minus_di", precision = 24, scale = 8)
+    private BigDecimal minusDI;
+
+    @Column(name = "efficiency_ratio_20", precision = 24, scale = 8)
+    private BigDecimal efficiencyRatio20;
+
+    // Volatility
+    @Column(name = "atr", precision = 24, scale = 8)
+    private BigDecimal atr;
+
+    @Column(name = "atr_pct", precision = 24, scale = 8)
+    private BigDecimal atrPct;
+
+    // Momentum
+    @Column(name = "macd", precision = 24, scale = 8)
+    private BigDecimal macd;
+
+    @Column(name = "macd_signal", precision = 24, scale = 8)
+    private BigDecimal macdSignal;
+
+    @Column(name = "macd_histogram", precision = 24, scale = 8)
+    private BigDecimal macdHistogram;
+
+    @Column(name = "rsi", precision = 24, scale = 8)
+    private BigDecimal rsi;
+
+    // Structure / breakout
+    @Column(name = "donchian_upper_20", precision = 24, scale = 8)
+    private BigDecimal donchianUpper20;
+
+    @Column(name = "donchian_lower_20", precision = 24, scale = 8)
+    private BigDecimal donchianLower20;
+
+    @Column(name = "donchian_mid_20", precision = 24, scale = 8)
+    private BigDecimal donchianMid20;
+
+    @Column(name = "highest_high_20", precision = 24, scale = 8)
+    private BigDecimal highestHigh20;
+
+    @Column(name = "lowest_low_20", precision = 24, scale = 8)
+    private BigDecimal lowestLow20;
+
+    // Candle quality
+    @Column(name = "body_size", precision = 24, scale = 8)
+    private BigDecimal bodySize;
+
+    @Column(name = "candle_range", precision = 24, scale = 8)
+    private BigDecimal candleRange;
+
+    @Column(name = "body_to_range_ratio", precision = 24, scale = 8)
+    private BigDecimal bodyToRangeRatio;
+
+    @Column(name = "close_location_value", precision = 24, scale = 8)
+    private BigDecimal closeLocationValue;
+
+    @Column(name = "relative_volume_20", precision = 24, scale = 8)
+    private BigDecimal relativeVolume20;
+
+    // Regime summary
+    @Column(name = "trend_score")
+    private Integer trendScore;
+
+    @Column(name = "trend_regime", length = 10)
+    private String trendRegime;
+
+    @Column(name = "volatility_regime", length = 10)
+    private String volatilityRegime;
+
+    @Column(name = "is_breakout")
+    private Boolean isBreakout;
+
+    @Column(name = "is_pullback")
+    private Boolean isPullback;
+
+    @Column(name = "entry_bias", length = 10)
+    private String entryBias;
+
+    @Column(name = "created_time", nullable = false, updatable = false)
+    @CreationTimestamp
+    private Instant createdTime;
+
+    @Column(name = "updated_time")
+    @UpdateTimestamp
+    private Instant updatedTime;
 }
