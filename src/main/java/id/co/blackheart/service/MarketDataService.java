@@ -1,12 +1,10 @@
 package id.co.blackheart.service;
 
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import id.co.blackheart.client.DeepLearningClientService;
-import id.co.blackheart.dto.response.PredictionResponse;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.util.MapperUtil;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -24,77 +22,150 @@ import java.util.List;
 @Slf4j
 @AllArgsConstructor
 public class MarketDataService {
-    MarketDataRepository marketDataRepository;
-    DeepLearningClientService deepLearningClientService;
-    TechnicalIndicatorService technicalIndicatorService;
 
+    private static final long INITIAL_FETCH_CANDLE_COUNT = 300L;
+    private static final ZoneId UTC = ZoneId.of("UTC");
 
-    public void checkAndFetchMissingCandles(String symbol, Instant latestKlineEndTime, String interval) {
+    private final MarketDataRepository marketDataRepository;
+    private final TechnicalIndicatorService technicalIndicatorService;
+    private final MapperUtil mapperUtil;
 
-        MarketData latestMarketData = marketDataRepository.findLatestBySymbol(symbol, interval);
+    public void backfillMissingCandlesBeforeInsert(
+            String symbol,
+            String interval,
+            MarketData latestBeforeInsert,
+            Instant incomingCandleEndTime
+    ) {
+        long intervalMinutes = mapperUtil.getIntervalMinutes(interval);
+        Duration intervalDuration = Duration.ofMinutes(intervalMinutes);
 
-        if (latestMarketData.getEndTime() != null) {
-            Instant lastInsertedInstant = latestMarketData.getEndTime().atZone(ZoneId.of("UTC")).toInstant();
+        // If DB is empty, bootstrap the latest 300 candles.
+        if (latestBeforeInsert == null || latestBeforeInsert.getEndTime() == null) {
+            log.warn("No historical candlesticks found for symbol={} interval={}. Fetching latest {} candles before insert...",
+                    symbol, interval, INITIAL_FETCH_CANDLE_COUNT);
 
-            // If last inserted candle is older than 15 minutes, fetch missing data
-            if (Duration.between(lastInsertedInstant, latestKlineEndTime).toMinutes() >= 16) {
-                log.warn("Missing candlestick detected! Fetching missing data for {}", symbol);
-                fetchMissingCandles(symbol, lastInsertedInstant.toEpochMilli(), latestKlineEndTime.toEpochMilli(), "4h");
-            }
-        } else {
-            log.warn("No historical candlesticks found! Fetching initial data...");
-            fetchMissingCandles(symbol, latestKlineEndTime.minusSeconds(3600).toEpochMilli(), latestKlineEndTime.toEpochMilli(), "4h");
+            Instant fromTime = incomingCandleEndTime.minus(Duration.ofMinutes(intervalMinutes * INITIAL_FETCH_CANDLE_COUNT));
+
+            fetchMissingCandles(symbol,fromTime.toEpochMilli(),incomingCandleEndTime.toEpochMilli(),interval);
+            return;
         }
 
+        Instant latestDbEndTime = latestBeforeInsert.getEndTime().atZone(UTC).toInstant();
+
+        // Duplicate or old candle -> no backfill needed
+        if (!incomingCandleEndTime.isAfter(latestDbEndTime)) {
+            return;
+        }
+
+        Instant expectedNextEndTime = latestDbEndTime.plus(intervalDuration);
+
+        // Continuous sequence -> no gap
+        if (!incomingCandleEndTime.isAfter(expectedNextEndTime)) {
+            return;
+        }
+
+        // Gap detected. Backfill only the most recent 300 candles window.
+        Instant maxLookbackStart = incomingCandleEndTime.minus(Duration.ofMinutes(intervalMinutes * INITIAL_FETCH_CANDLE_COUNT));
+        Instant fetchStart = latestDbEndTime.isAfter(maxLookbackStart) ? latestDbEndTime : maxLookbackStart;
+
+        log.warn("Gap detected before insert. symbol={} interval={} latestDbEndTime={} incomingEndTime={} fetchStart={}",
+                symbol, interval, latestDbEndTime, incomingCandleEndTime, fetchStart);
+
+        fetchMissingCandles(symbol,fetchStart.toEpochMilli(),incomingCandleEndTime.toEpochMilli(),interval);
     }
 
 
 
-    private void fetchMissingCandles(String symbol, long startTime, long endTime, String Interval) {
-        String url = String.format("https://api.binance.com/api/v3/klines?symbol=%s&interval=15m&limit=1000&startTime=%d&endTime=%d",
-                symbol, startTime, endTime);
+    private void fetchMissingCandles(String symbol, long startTime, long endTime, String interval) {
+        String url = String.format(
+                "https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=1000&startTime=%d&endTime=%d",
+                symbol, interval, startTime, endTime
+        );
 
         try {
             RestTemplate restTemplate = new RestTemplate();
             ObjectMapper objectMapper = new ObjectMapper();
 
             ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
-            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                List<Object[]> klineData = objectMapper.readValue(response.getBody(), new TypeReference<List<Object[]>>() {});
 
-                for (Object[] kline : klineData) {
-                    MarketData marketData = new MarketData();
-                    marketData.setSymbol(symbol);
-                    marketData.setInterval("15m");
-                    marketData.setStartTime(LocalDateTime.ofInstant(Instant.ofEpochMilli((Long) kline[0]), ZoneId.of("UTC")));
-                    marketData.setEndTime(LocalDateTime.ofInstant(Instant.ofEpochMilli((Long) kline[6]), ZoneId.of("UTC")));
-                    marketData.setOpenPrice(new BigDecimal(kline[1].toString()));
-                    marketData.setClosePrice(new BigDecimal(kline[4].toString()));
-                    marketData.setHighPrice(new BigDecimal(kline[2].toString()));
-                    marketData.setLowPrice(new BigDecimal(kline[3].toString()));
-                    marketData.setVolume(new BigDecimal(kline[5].toString()));
-                    marketData.setQuoteAssetVolume(new BigDecimal(kline[7].toString()));
-                    marketData.setTradeCount(((Number) kline[8]).longValue());
-                    marketData.setTakerBuyBaseVolume(new BigDecimal(kline[9].toString()));
-                    marketData.setTakerBuyQuoteVolume(new BigDecimal(kline[10].toString()));
-                    marketData.setCreatedTime(Instant.ofEpochMilli((Long) kline[6]));
-
-                    MarketData checkExist = marketDataRepository.findLatestBySymbol(symbol,"15m");
-
-                    if (!checkExist.getEndTime().equals(marketData.getEndTime())) {
-                        marketDataRepository.save(marketData);
-                        log.info("✅ Inserted missing candlestick: {}", marketData);
-                    }
-
-                    PredictionResponse predictionResponse = deepLearningClientService.sendPredictionRequest();
-
-                    technicalIndicatorService.computeIndicatorsAndStore("BTCUSDT",  "15m");
-
-                }
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                log.warn("Failed to fetch missing candles. symbol={} interval={} status={}",
+                        symbol, interval, response.getStatusCode());
+                return;
             }
+
+            List<Object[]> klineData = objectMapper.readValue(
+                    response.getBody(),
+                    new TypeReference<List<Object[]>>() {}
+            );
+
+            if (klineData.isEmpty()) {
+                log.info("No missing candles returned from Binance. symbol={} interval={}", symbol, interval);
+                return;
+            }
+
+            int insertedCount = 0;
+
+            for (Object[] kline : klineData) {
+                MarketData marketData = mapKlineToMarketData(symbol, interval, kline);
+
+                boolean exists = marketDataRepository.existsBySymbolAndIntervalAndStartTime(
+                        symbol,
+                        interval,
+                        marketData.getStartTime()
+                );
+
+                if (exists) {
+                    continue;
+                }
+
+                marketDataRepository.save(marketData);
+                insertedCount++;
+
+                log.info("✅ Inserted missing candlestick. symbol={} interval={} startTime={} endTime={}",
+                        symbol, interval, marketData.getStartTime(), marketData.getEndTime());
+            }
+
+            if (insertedCount > 0 && shouldComputeIndicators(interval)) {
+                technicalIndicatorService.computeIndicatorsAndStore(symbol, interval);
+            }
+
+            log.info("Missing candle fetch completed. symbol={} interval={} inserted={}",symbol, interval, insertedCount);
+
         } catch (Exception e) {
-            log.error("❌ Failed to fetch missing candlestick data from Binance API", e);
+            log.error("❌ Failed to fetch missing candlestick data from Binance API. symbol={} interval={}",
+                    symbol, interval, e);
         }
     }
 
+    private boolean shouldComputeIndicators(String interval) {
+        return "15m".equals(interval) || "1h".equals(interval) || "4h".equals(interval);
+    }
+
+    private MarketData mapKlineToMarketData(String symbol, String interval, Object[] kline) {
+        MarketData marketData = new MarketData();
+
+        marketData.setSymbol(symbol);
+        marketData.setInterval(interval);
+        marketData.setStartTime(LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(((Number) kline[0]).longValue()),
+                UTC
+        ));
+        marketData.setEndTime(LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(((Number) kline[6]).longValue()),
+                UTC
+        ));
+        marketData.setOpenPrice(new BigDecimal(kline[1].toString()));
+        marketData.setHighPrice(new BigDecimal(kline[2].toString()));
+        marketData.setLowPrice(new BigDecimal(kline[3].toString()));
+        marketData.setClosePrice(new BigDecimal(kline[4].toString()));
+        marketData.setVolume(new BigDecimal(kline[5].toString()));
+        marketData.setQuoteAssetVolume(new BigDecimal(kline[7].toString()));
+        marketData.setTradeCount(((Number) kline[8]).longValue());
+        marketData.setTakerBuyBaseVolume(new BigDecimal(kline[9].toString()));
+        marketData.setTakerBuyQuoteVolume(new BigDecimal(kline[10].toString()));
+        marketData.setCreatedTime(Instant.now());
+
+        return marketData;
+    }
 }

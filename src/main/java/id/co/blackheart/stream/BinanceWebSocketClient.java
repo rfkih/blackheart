@@ -21,11 +21,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.Comparator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Service
@@ -38,233 +38,185 @@ public class BinanceWebSocketClient {
     private static final String BINANCE_WS_URL = WS_BASE + "/stream?streams=" + STREAMS;
 
     private static final Set<String> ACCEPTED_INTERVALS = Set.of("15m", "1h", "4h");
-    private static final Duration TIMEOUT_DURATION = Duration.ofSeconds(30);
+
+    private static final Duration STALE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration RECONNECT_DELAY = Duration.ofSeconds(5);
+    private static final ZoneId UTC = ZoneId.of("UTC");
 
     private final MarketDataRepository marketDataRepository;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
 
-    private final ReactorNettyWebSocketClient client = new ReactorNettyWebSocketClient();
+    private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
-    private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "binance-ws-watchdog");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ScheduledExecutorService watchdogExecutor =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "binance-ws-watchdog");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private final Map<String, LocalDateTime> lastSavedEndTimeByInterval = new ConcurrentHashMap<>();
 
+    private volatile boolean running = false;
     private volatile Instant lastMessageTime = Instant.now();
-    private volatile boolean isRunning = false;
 
-    private volatile Disposable socketSubscription;
-    private volatile ScheduledFuture<?> watchdogFuture;
-    private volatile Disposable reconnectSubscription;
+    private final AtomicReference<Disposable> socketDisposable = new AtomicReference<>();
+    private final AtomicReference<Disposable> reconnectDisposable = new AtomicReference<>();
+    private final AtomicReference<ScheduledFuture<?>> watchdogFuture = new AtomicReference<>();
 
     @PostConstruct
     public synchronized void start() {
-        if (isRunning) {
-            log.warn("BinanceWebSocketClient already started.");
+        if (running) {
+            log.warn("BinanceWebSocketClient is already running.");
             return;
         }
 
-        log.info("Starting BinanceWebSocketClient...");
-        isRunning = true;
+        running = true;
         lastMessageTime = Instant.now();
 
+        log.info("Starting BinanceWebSocketClient for {}", SYMBOL);
         connect();
         startWatchdog();
     }
 
     @PreDestroy
     public synchronized void stop() {
-        log.info("Stopping BinanceWebSocketClient...");
-        isRunning = false;
-
-        disposeReconnectSubscription();
-        disposeSocketSubscription();
-        stopWatchdog();
-
-        try {
-            watchdog.shutdown();
-            if (!watchdog.awaitTermination(5, TimeUnit.SECONDS)) {
-                log.warn("Watchdog did not terminate gracefully. Forcing shutdown...");
-                watchdog.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            watchdog.shutdownNow();
-            Thread.currentThread().interrupt();
-            log.warn("Interrupted while shutting down watchdog", e);
-        } catch (Exception e) {
-            log.warn("Unexpected error while shutting down watchdog", e);
+        if (!running) {
+            return;
         }
+
+        log.info("Stopping BinanceWebSocketClient...");
+        running = false;
+
+        cancelReconnect();
+        disconnectSocket();
+        stopWatchdog();
+        shutdownWatchdogExecutor();
 
         log.info("BinanceWebSocketClient stopped.");
     }
 
     public synchronized void connect() {
-        if (!isRunning) {
-            log.info("Client is not running. Skipping connect.");
+        if (!running) {
+            log.info("Client is not running. Connect skipped.");
             return;
         }
 
-        if (socketSubscription != null && !socketSubscription.isDisposed()) {
+        if (isSocketConnected()) {
             log.debug("WebSocket already connected.");
             return;
         }
 
         log.info("Connecting to Binance WebSocket: {}", BINANCE_WS_URL);
 
-        socketSubscription = client.execute(
+        socketDisposable.set(webSocketClient.execute(
                 URI.create(BINANCE_WS_URL),
                 session -> session.receive()
                         .map(WebSocketMessage::getPayloadAsText)
-                        .flatMap(this::handleMessageReactive)
-                        .onErrorResume(ex -> {
-                            log.error("WebSocket session stream error", ex);
+                        .flatMap(this::handleMessage)
+                        .onErrorResume(error -> {
+                            log.error("WebSocket session error", error);
                             return Mono.empty();
                         })
                         .then()
         ).subscribe(
                 null,
                 error -> {
-                    if (!isRunning) {
+                    if (!running) {
                         return;
                     }
                     log.error("WebSocket connection error", error);
-                    reconnectWithDelay();
+                    scheduleReconnect();
                 },
                 () -> {
-                    if (!isRunning) {
+                    if (!running) {
                         return;
                     }
                     log.warn("WebSocket connection closed. Scheduling reconnect...");
-                    reconnectWithDelay();
+                    scheduleReconnect();
                 }
-        );
+        ));
     }
 
-    private synchronized void reconnectWithDelay() {
-        if (!isRunning) {
-            log.info("Client is stopping. Reconnect skipped.");
-            return;
-        }
-
-        disposeSocketSubscription();
-        disposeReconnectSubscription();
-
-        reconnectSubscription = Mono.delay(RECONNECT_DELAY)
-                .filter(ignore -> isRunning)
-                .subscribe(
-                        ignore -> {
-                            log.info("Reconnecting to Binance WebSocket...");
-                            connect();
-                        },
-                        error -> log.error("Reconnect scheduling error", error)
-                );
-    }
-
-    private void startWatchdog() {
-        if (watchdogFuture != null && !watchdogFuture.isCancelled() && !watchdogFuture.isDone()) {
-            log.debug("Watchdog already running.");
-            return;
-        }
-
-        watchdogFuture = watchdog.scheduleAtFixedRate(() -> {
-            if (!isRunning) {
-                return;
-            }
-
-            Duration silence = Duration.between(lastMessageTime, Instant.now());
-            if (silence.compareTo(TIMEOUT_DURATION) > 0) {
-                log.warn("WebSocket connection appears stale ({} seconds). Triggering reconnect...",
-                        silence.getSeconds());
-                reconnectWithDelay();
-            }
-        }, 30, 30, TimeUnit.SECONDS);
-    }
-
-    private void stopWatchdog() {
-        if (watchdogFuture != null) {
-            watchdogFuture.cancel(true);
-        }
-    }
-
-    private void disposeSocketSubscription() {
-        try {
-            if (socketSubscription != null && !socketSubscription.isDisposed()) {
-                socketSubscription.dispose();
-                log.info("WebSocket subscription disposed.");
-            }
-        } catch (Exception e) {
-            log.warn("Failed to dispose websocket subscription cleanly", e);
-        }
-    }
-
-    private void disposeReconnectSubscription() {
-        try {
-            if (reconnectSubscription != null && !reconnectSubscription.isDisposed()) {
-                reconnectSubscription.dispose();
-                log.debug("Reconnect subscription disposed.");
-            }
-        } catch (Exception e) {
-            log.warn("Failed to dispose reconnect subscription cleanly", e);
-        }
-    }
-
-    private Mono<Void> handleMessageReactive(String message) {
+    private Mono<Void> handleMessage(String message) {
         try {
             lastMessageTime = Instant.now();
 
             JSONObject root = new JSONObject(message);
-            JSONObject container = root.has("data") ? root.getJSONObject("data") : root;
+            JSONObject container = extractContainer(root);
             JSONObject kline = container.getJSONObject("k");
 
-            boolean isFinal = kline.getBoolean("x");
             String interval = kline.getString("i");
+            boolean finalCandle = kline.getBoolean("x");
 
-            if (!ACCEPTED_INTERVALS.contains(interval)) {
+            if (!isProcessable(interval, finalCandle)) {
                 return Mono.empty();
             }
 
+            MarketData incomingMarketData = buildMarketData(container, kline, interval);
 
-            if (!isFinal) {
+            MarketData latestBeforeInsert = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
+
+            if (isDuplicateAgainstLatest(latestBeforeInsert, incomingMarketData)) {
                 return Mono.empty();
             }
 
-            log.info("[{}] Candle closed at {}", interval, kline.getString("c"));
-
-            MarketData marketData = mapToMarketData(kline, container, interval);
-
-            if (isDuplicateCandle(interval, marketData)) {
-                return Mono.empty();
-            }
-
-            marketDataRepository.save(marketData);
-            lastSavedEndTimeByInterval.put(interval, marketData.getEndTime());
-
-            log.info("✅ Inserted {} {} candle: end={}, close={}", SYMBOL, interval, marketData.getEndTime(), marketData.getClosePrice());
-
-            marketDataService.checkAndFetchMissingCandles(
+            marketDataService.backfillMissingCandlesBeforeInsert(
                     SYMBOL,
-                    marketData.getEndTime().atZone(ZoneId.of("UTC")).toInstant(),
-                    interval
+                    interval,
+                    latestBeforeInsert,
+                    incomingMarketData.getEndTime().atZone(UTC).toInstant()
             );
 
-            if ("1h".equals(interval) || "4h".equals(interval)) {
-                technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval);
+            boolean exists = marketDataRepository.existsBySymbolAndIntervalAndStartTime(
+                    SYMBOL,
+                    interval,
+                    incomingMarketData.getStartTime()
+            );
+
+            if (!exists) {
+                persistMarketData(interval, incomingMarketData);
             }
+            processPostPersist(interval);
 
             return Mono.empty();
 
         } catch (Exception e) {
-            log.error("Message processing error: {}", message, e);
+            log.error("Failed to process websocket message: {}", message, e);
             return Mono.empty();
         }
     }
 
-    private MarketData mapToMarketData(JSONObject kline, JSONObject container, String interval) {
+    private JSONObject extractContainer(JSONObject root) {
+        return root.has("data") ? root.getJSONObject("data") : root;
+    }
+
+    private boolean isDuplicateAgainstLatest(MarketData latestBeforeInsert, MarketData incomingMarketData) {
+        if (latestBeforeInsert == null || latestBeforeInsert.getEndTime() == null) {
+            return false;
+        }
+
+        boolean duplicate = Objects.equals(latestBeforeInsert.getEndTime(), incomingMarketData.getEndTime());
+
+        if (duplicate) {
+            log.debug("Duplicate candle detected. interval={} endTime={}",
+                    incomingMarketData.getInterval(),
+                    incomingMarketData.getEndTime());
+        }
+
+        return duplicate;
+    }
+
+    private boolean isProcessable(String interval, boolean finalCandle) {
+        if (!ACCEPTED_INTERVALS.contains(interval)) {
+            return false;
+        }
+
+        return finalCandle;
+    }
+
+    private MarketData buildMarketData(JSONObject container, JSONObject kline, String interval) {
         Instant startTime = Instant.ofEpochMilli(kline.getLong("t"));
         Instant endTime = Instant.ofEpochMilli(kline.getLong("T"));
         Instant eventTime = Instant.ofEpochMilli(container.getLong("E"));
@@ -272,8 +224,8 @@ public class BinanceWebSocketClient {
         MarketData marketData = new MarketData();
         marketData.setSymbol(SYMBOL);
         marketData.setInterval(interval);
-        marketData.setStartTime(LocalDateTime.ofInstant(startTime, ZoneId.of("UTC")));
-        marketData.setEndTime(LocalDateTime.ofInstant(endTime, ZoneId.of("UTC")));
+        marketData.setStartTime(LocalDateTime.ofInstant(startTime, UTC));
+        marketData.setEndTime(LocalDateTime.ofInstant(endTime, UTC));
         marketData.setOpenPrice(new BigDecimal(kline.getString("o")));
         marketData.setHighPrice(new BigDecimal(kline.getString("h")));
         marketData.setLowPrice(new BigDecimal(kline.getString("l")));
@@ -288,21 +240,148 @@ public class BinanceWebSocketClient {
         return marketData;
     }
 
+    private void persistMarketData(String interval, MarketData marketData) {
+        marketDataRepository.save(marketData);
+        lastSavedEndTimeByInterval.put(interval, marketData.getEndTime());
+
+        log.info("Inserted candle | symbol={} interval={} endTime={} close={}",SYMBOL,interval,marketData.getEndTime(),marketData.getClosePrice());
+    }
+
+    private void processPostPersist(String interval) {
+        if (requiresFeatureComputation(interval)) {
+            technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval);
+        }
+    }
+
+    private boolean requiresFeatureComputation(String interval) {
+        return "1h".equals(interval) || "4h".equals(interval) || "15m".equals(interval);
+    }
+
     private boolean isDuplicateCandle(String interval, MarketData marketData) {
-        LocalDateTime lastEnd = lastSavedEndTimeByInterval.get(interval);
-        if (Objects.equals(lastEnd, marketData.getEndTime())) {
-            log.debug("⏩ Duplicate {} candle in memory. Skipping: {}", interval, marketData.getEndTime());
+        LocalDateTime currentEndTime = marketData.getEndTime();
+
+        LocalDateTime cachedEndTime = lastSavedEndTimeByInterval.get(interval);
+        if (Objects.equals(cachedEndTime, currentEndTime)) {
+            log.debug("Duplicate candle detected in memory. interval={} endTime={}", interval, currentEndTime);
             return true;
         }
 
-        MarketData latest = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
-        if (latest != null && latest.getEndTime() != null
-                && latest.getEndTime().equals(marketData.getEndTime())) {
-            log.debug("⏩ Duplicate {} candle in DB. Skipping: {}", interval, marketData.getEndTime());
-            lastSavedEndTimeByInterval.put(interval, marketData.getEndTime());
+        MarketData latestSaved = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
+        if (latestSaved != null && Objects.equals(latestSaved.getEndTime(), currentEndTime)) {
+            lastSavedEndTimeByInterval.put(interval, currentEndTime);
+            log.debug("Duplicate candle detected in database. interval={} endTime={}", interval, currentEndTime);
             return true;
         }
 
         return false;
     }
+
+    private void startWatchdog() {
+        ScheduledFuture<?> existing = watchdogFuture.get();
+        if (existing != null && !existing.isCancelled() && !existing.isDone()) {
+            log.debug("Watchdog already running.");
+            return;
+        }
+
+        ScheduledFuture<?> scheduled = watchdogExecutor.scheduleAtFixedRate(
+                this::checkConnectionHealth,
+                30,
+                30,
+                TimeUnit.SECONDS
+        );
+
+        watchdogFuture.set(scheduled);
+        log.debug("Watchdog started.");
+    }
+
+    private void stopWatchdog() {
+        ScheduledFuture<?> existing = watchdogFuture.getAndSet(null);
+        if (existing == null) {
+            return;
+        }
+
+        try {
+            existing.cancel(true);
+            log.debug("Watchdog stopped.");
+        } catch (Exception e) {
+            log.warn("Failed to stop watchdog cleanly", e);
+        }
+    }
+
+    private void checkConnectionHealth() {
+        if (!running) {
+            return;
+        }
+
+        Duration silenceDuration = Duration.between(lastMessageTime, Instant.now());
+        if (silenceDuration.compareTo(STALE_TIMEOUT) > 0) {
+            log.warn("WebSocket connection stale for {} seconds. Scheduling reconnect...",
+                    silenceDuration.getSeconds());
+            scheduleReconnect();
+        }
+    }
+
+    private synchronized void scheduleReconnect() {
+        if (!running) {
+            log.info("Client is stopping. Reconnect skipped.");
+            return;
+        }
+
+        disconnectSocket();
+        cancelReconnect();
+
+        reconnectDisposable.set(Mono.delay(RECONNECT_DELAY)
+                .filter(ignore -> running)
+                .subscribe(
+                        ignore -> {
+                            log.info("Reconnecting to Binance WebSocket...");
+                            connect();
+                        },
+                        error -> log.error("Reconnect scheduling failed", error)
+                ));
+    }
+
+    private boolean isSocketConnected() {
+        return socketDisposable.get() != null && !socketDisposable.get().isDisposed();
+    }
+
+    private void disconnectSocket() {
+        try {
+            if (socketDisposable.get() != null && !socketDisposable.get().isDisposed()) {
+                socketDisposable.get().dispose();
+                log.info("WebSocket subscription disposed.");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to dispose websocket subscription cleanly", e);
+        }
+    }
+
+    private void cancelReconnect() {
+        try {
+            if (reconnectDisposable.get() != null && !reconnectDisposable.get().isDisposed()) {
+                reconnectDisposable.get().dispose();
+                log.debug("Reconnect subscription disposed.");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to dispose reconnect subscription cleanly", e);
+        }
+    }
+
+
+    private void shutdownWatchdogExecutor() {
+        try {
+            watchdogExecutor.shutdown();
+            if (!watchdogExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                log.warn("Watchdog executor did not terminate gracefully. Forcing shutdown...");
+                watchdogExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            watchdogExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+            log.warn("Interrupted while shutting down watchdog executor", e);
+        } catch (Exception e) {
+            log.warn("Unexpected error while shutting down watchdog executor", e);
+        }
+    }
 }
+

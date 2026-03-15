@@ -5,6 +5,7 @@ import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.util.MapperUtil;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -40,24 +41,36 @@ public class TechnicalIndicatorService {
 
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
+    private final MapperUtil mapperUtil;
 
 
-    public FeatureStore computeIndicatorsAndStore(String symbol, String interval) {
+    public void computeIndicatorsAndStore(String symbol, String interval) {
+
+
+
+
         List<MarketData> historicalData = marketDataRepository.findLast300BySymbolAndInterval(symbol, interval);
 
-        if (historicalData == null || historicalData.size() < 50) {
+        if (historicalData == null || historicalData.size() < 250) {
             log.warn("Not enough historical data to compute indicators for {} {}", symbol, interval);
-            return null;
+            return;
         }
 
         // Make sure the data is sorted ascending by start time
         historicalData.sort(Comparator.comparing(MarketData::getStartTime));
 
-        MarketData latestMarketData = historicalData.get(historicalData.size() - 1);
+        MarketData latestMarketData = historicalData.getLast();
         BigDecimal price = latestMarketData.getClosePrice();
 
-        BarSeries series = convertToBarSeries(historicalData);
+        BarSeries series = convertToBarSeries(historicalData,interval);
         int endIndex = series.getEndIndex();
+
+        boolean exists = featureStoreRepository.existsBySymbolAndIntervalAndStartTime(symbol,interval,latestMarketData.getStartTime());
+
+        if (exists) {
+            log.debug("Feature already exists. symbol={} interval={} startTime={}",symbol, interval, latestMarketData.getStartTime());
+            return;
+        }
 
         ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
         HighPriceIndicator highPrice = new HighPriceIndicator(series);
@@ -169,8 +182,7 @@ public class TechnicalIndicatorService {
         featureData.setIsBreakout(isBreakout(featureData, price));
         featureData.setIsPullback(isPullback(featureData, price));
         featureData.setEntryBias(resolveEntryBias(featureData));
-
-        return featureStoreRepository.save(featureData);
+        featureStoreRepository.save(featureData);
     }
 
     private Boolean isBreakout(FeatureStore feature, BigDecimal price) {
@@ -318,26 +330,23 @@ public class TechnicalIndicatorService {
         return new BigDecimal(value.toString()).setScale(8, RoundingMode.HALF_UP);
     }
 
-    private BarSeries convertToBarSeries(List<MarketData> historicalData) {
+    private BarSeries convertToBarSeries(List<MarketData> historicalData, String interval) {
         BarSeries series = new BaseBarSeries();
 
-        Collections.reverse(historicalData);
+        Duration barDuration = Duration.ofMinutes(mapperUtil.getIntervalMinutes(interval));
 
         for (MarketData data : historicalData) {
-            // ✅ Handle missing timestamp by generating one dynamically
             Instant barTimestamp = data.getEndTime().atZone(ZoneId.of("UTC")).toInstant();
 
-            // ✅ Convert BigDecimal to Num using default Num.valueOf()
             Num openPrice = series.numOf(data.getOpenPrice());
             Num highPrice = series.numOf(data.getHighPrice());
             Num lowPrice = series.numOf(data.getLowPrice());
             Num closePrice = series.numOf(data.getClosePrice());
             Num volume = series.numOf(data.getVolume());
 
-            // ✅ Use BaseBar.Builder with Num values
             BaseBar bar = BaseBar.builder()
-                    .timePeriod(Duration.ofMinutes(15))  // 1-minute bars
-                    .endTime(barTimestamp.atZone(ZoneId.of("UTC")))  // Correct timestamp handling
+                    .timePeriod(barDuration)
+                    .endTime(barTimestamp.atZone(ZoneId.of("UTC")))
                     .openPrice(openPrice)
                     .highPrice(highPrice)
                     .lowPrice(lowPrice)
@@ -347,6 +356,7 @@ public class TechnicalIndicatorService {
 
             series.addBar(bar);
         }
+
         return series;
     }
 }
