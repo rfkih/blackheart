@@ -1,9 +1,13 @@
 package id.co.blackheart.stream;
 
+import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
+import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.MarketDataService;
 import id.co.blackheart.service.TechnicalIndicatorService;
+import id.co.blackheart.service.TrendFollowingStrategyService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +25,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -44,8 +49,10 @@ public class BinanceWebSocketClient {
     private static final ZoneId UTC = ZoneId.of("UTC");
 
     private final MarketDataRepository marketDataRepository;
+    private final UsersRepository usersRepository;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
+    private final TrendFollowingStrategyService trendFollowingStrategyService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
@@ -178,7 +185,8 @@ public class BinanceWebSocketClient {
             if (!exists) {
                 persistMarketData(interval, incomingMarketData);
             }
-            processPostPersist(interval);
+
+            processPostPersist(interval, incomingMarketData);
 
             return Mono.empty();
 
@@ -247,9 +255,24 @@ public class BinanceWebSocketClient {
         log.info("Inserted candle | symbol={} interval={} endTime={} close={}",SYMBOL,interval,marketData.getEndTime(),marketData.getClosePrice());
     }
 
-    private void processPostPersist(String interval) {
+    private void processPostPersist(String interval, MarketData marketData) {
+        FeatureStore featureStore = null;
+
         if (requiresFeatureComputation(interval)) {
-            technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval);
+            featureStore = technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval);
+        }
+
+        if ("4h".equals(interval) && featureStore != null) {
+            List<Users> users = usersRepository.findByIsActive("1");
+
+            for (Users user : users) {
+                try {
+
+                    trendFollowingStrategyService.execute(marketData, featureStore, user, SYMBOL);
+                } catch (Exception e) {
+                    log.error("Trend following strategy failed for user={} asset={}", user.getId(), SYMBOL, e);
+                }
+            }
         }
     }
 

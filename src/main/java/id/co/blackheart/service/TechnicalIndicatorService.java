@@ -33,6 +33,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Optional;
 
 @Service
 @Slf4j
@@ -44,7 +45,7 @@ public class TechnicalIndicatorService {
     private final MapperUtil mapperUtil;
 
 
-    public void computeIndicatorsAndStore(String symbol, String interval) {
+    public FeatureStore computeIndicatorsAndStore(String symbol, String interval) {
 
 
 
@@ -53,7 +54,7 @@ public class TechnicalIndicatorService {
 
         if (historicalData == null || historicalData.size() < 250) {
             log.warn("Not enough historical data to compute indicators for {} {}", symbol, interval);
-            return;
+            return null;
         }
 
         // Make sure the data is sorted ascending by start time
@@ -65,17 +66,14 @@ public class TechnicalIndicatorService {
         BarSeries series = convertToBarSeries(historicalData,interval);
         int endIndex = series.getEndIndex();
 
-        boolean exists = featureStoreRepository.existsBySymbolAndIntervalAndStartTime(symbol,interval,latestMarketData.getStartTime());
+        Optional<FeatureStore> existingFeature = featureStoreRepository.findBySymbolAndIntervalAndStartTime(symbol, interval, latestMarketData.getStartTime());
 
-        if (exists) {
+        if (existingFeature.isPresent()) {
             log.debug("Feature already exists. symbol={} interval={} startTime={}",symbol, interval, latestMarketData.getStartTime());
-            return;
+            return existingFeature.get();
         }
 
         ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
-        HighPriceIndicator highPrice = new HighPriceIndicator(series);
-        LowPriceIndicator lowPrice = new LowPriceIndicator(series);
-        VolumeIndicator volumeIndicator = new VolumeIndicator(series);
 
         FeatureStore featureData = new FeatureStore();
         featureData.setIdMarketData(latestMarketData.getId());
@@ -182,7 +180,7 @@ public class TechnicalIndicatorService {
         featureData.setIsBreakout(isBreakout(featureData, price));
         featureData.setIsPullback(isPullback(featureData, price));
         featureData.setEntryBias(resolveEntryBias(featureData));
-        featureStoreRepository.save(featureData);
+        return  featureStoreRepository.save(featureData);
     }
 
     private Boolean isBreakout(FeatureStore feature, BigDecimal price) {

@@ -59,4 +59,21 @@ public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
             @Param("interval") String interval,
             @Param("startTime") LocalDateTime startTime
     );
+
+    @Query(
+            value = """
+            SELECT *
+            FROM market_data
+            WHERE symbol = :symbol
+              AND "interval" = :interval
+              AND start_time = :startTime
+            LIMIT 1
+            """,
+            nativeQuery = true
+    )
+    MarketData findBySymbolAndIntervalAndStartTime(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime
+    );
 }
