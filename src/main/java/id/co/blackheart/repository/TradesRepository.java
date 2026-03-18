@@ -7,6 +7,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
+import java.util.UUID;
 
 @Repository
 public interface TradesRepository extends JpaRepository<Trades, Long> {
@@ -23,7 +24,7 @@ public interface TradesRepository extends JpaRepository<Trades, Long> {
         LIMIT 1
         """, nativeQuery = true)
     Optional<Trades> findLatestOpenTrade(
-            @Param("userId") Long userId,
+            @Param("userId") UUID userId,
             @Param("asset") String asset,
             @Param("strategyName") String strategyName,
             @Param("interval") String interval

@@ -1,53 +1,58 @@
 package id.co.blackheart.model;
 
+import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import jakarta.persistence.*;
+import org.hibernate.annotations.UuidGenerator;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
+@Table(name = "users")
 public class Users {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue
+    @UuidGenerator
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private UUID userId;
 
-    @Column(nullable = false, unique = true, length = 50)
+    @Column(name = "username", nullable = false, unique = true, length = 50)
     private String username;
 
-    @Column(nullable = false, length = 1)
+    @Column(name = "is_active", nullable = false, length = 1)
     private String isActive;
 
-    @Column(nullable = false, length = 3)
+    @Column(name = "exchange", nullable = false, length = 3)
     private String exchange;
 
-    @Column(precision = 5, scale = 2)
+    @Column(name = "risk_amount", precision = 5, scale = 2)
     private BigDecimal riskAmount;
 
-    @Column(precision = 5, scale = 2)
+    @Column(name = "confidence", precision = 5, scale = 2)
     private BigDecimal confidence;
 
-    @Column(nullable = false, precision = 20, scale = 12)
+    @Column(name = "take_profit", nullable = false, precision = 20, scale = 12)
     private BigDecimal takeProfit;
 
-    @Column(nullable = false, precision = 20, scale = 12)
+    @Column(name = "stop_loss", nullable = false, precision = 20, scale = 12)
     private BigDecimal stopLoss;
 
-    @Column(nullable = false)
+    @Column(name = "api_key", nullable = false)
     private String apiKey;
 
-    @Column(nullable = false)
+    @Column(name = "api_secret", nullable = false)
     private String apiSecret;
 
-    @Column(nullable = false, updatable = false)
+    @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    @Column
+    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 }

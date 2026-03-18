@@ -1,42 +1,47 @@
 package id.co.blackheart.model;
 
-
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Entity
 @Setter
 @Getter
-@Table(name = "portfolio")
-@IdClass(PortfolioId.class)  // Use composite key
+@Table(
+        name = "portfolio",
+        uniqueConstraints = {
+                @UniqueConstraint(name = "uk_portfolio_user_asset", columnNames = {"user_id", "asset"})
+        }
+)
 public class Portfolio {
 
     @Id
-    @Column(name = "user_id", nullable = false)
-    private Long userId;
+    @GeneratedValue(strategy = GenerationType.UUID)
+    @Column(name = "portfolio_id", nullable = false, updatable = false)
+    private UUID portfolioId;
 
-    @Id
-    @Column(nullable = false, length = 10)
+    @Column(name = "user_id", nullable = false)
+    private UUID userId;
+
+    @Column(name = "asset", nullable = false, length = 10)
     private String asset;
 
-    @Column(nullable = false, length = 1)
+    @Column(name = "is_active", nullable = false, length = 1)
     private String isActive;
 
-    @Column(nullable = false, precision = 20, scale = 8)
+    @Column(name = "balance", nullable = false, precision = 20, scale = 8)
     private BigDecimal balance;
 
-    @Column(nullable = false, precision = 20, scale = 8)
+    @Column(name = "locked", nullable = false, precision = 20, scale = 8)
     private BigDecimal locked;
 
-    @Column(nullable = false, updatable = false)
+    @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    @Column
+    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
-
 }
-

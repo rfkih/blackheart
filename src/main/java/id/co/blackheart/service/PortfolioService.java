@@ -112,10 +112,10 @@ public class PortfolioService {
     }
 
     private Portfolio savePortfolio(Users user, String asset, String free, String locked) {
-        Portfolio portfolio = portfolioRepository.findByUserIdAndAsset(user.getId(), asset)
+        Portfolio portfolio = portfolioRepository.findByUserIdAndAsset(user.getUserId(), asset)
                 .orElse(new Portfolio());
 
-        portfolio.setUserId(user.getId());
+        portfolio.setUserId(user.getUserId());
         portfolio.setAsset(asset);
         portfolio.setIsActive("1");
         portfolio.setBalance(new BigDecimal(free));
@@ -126,7 +126,6 @@ public class PortfolioService {
         return portfolio;
     }
 
-    @Async
     protected void saveAllBinanceAssets(Users user, List<BinanceAssetDto> assetList) {
         assetList.forEach(dto -> savePortfolio(user, dto.getAsset(), dto.getFree(), dto.getLocked()));
     }

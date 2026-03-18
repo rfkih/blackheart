@@ -68,7 +68,7 @@ public class TrendFollowingStrategyService {
         }
 
         Optional<Trades> activeTradeOpt = tradesRepository.findLatestOpenTrade(
-                user.getId(), asset, STRATEGY_NAME, STRATEGY_INTERVAL
+                user.getUserId(), asset, STRATEGY_NAME, STRATEGY_INTERVAL
         );
 
         if (activeTradeOpt.isPresent()) {

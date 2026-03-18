@@ -5,6 +5,7 @@ import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Entity
 @Table(name = "trades")
@@ -16,102 +17,103 @@ import java.time.LocalDateTime;
 public class Trades {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue(strategy = GenerationType.UUID)
+    @Column(name = "trade_id", nullable = false, updatable = false)
+    private UUID tradeId;
 
-    @Column(nullable = false)
-    private Long userId;
+    @Column(name = "user_id", nullable = false)
+    private UUID userId;
 
-    @Column(nullable = false, length = 50)
+    @Column(name = "strategy_name", nullable = false, length = 50)
     private String strategyName;
 
-    @Column(nullable = false, length = 10)
+    @Column(name = "interval", nullable = false, length = 10)
     private String interval;
 
-    @Column(nullable = false, length = 10)
+    @Column(name = "exchange", nullable = false, length = 10)
     private String exchange;
 
-    @Column(nullable = false, length = 20)
+    @Column(name = "asset", nullable = false, length = 20)
     private String asset;
 
-    @Column(nullable = false, length = 10)
-    private String side; // LONG or SHORT
+    @Column(name = "side", nullable = false, length = 10)
+    private String side;
 
-    @Column(nullable = false, length = 20)
-    private String status; // OPEN, CLOSED, CANCELLED, FAILED
+    @Column(name = "status", nullable = false, length = 20)
+    private String status;
 
-    @Column(nullable = false)
+    @Column(name = "entry_order_id", nullable = false)
     private Long entryOrderId;
 
-    @Column
+    @Column(name = "exit_order_id")
     private Long exitOrderId;
 
-    @Column(nullable = false, precision = 24, scale = 12)
+    @Column(name = "entry_executed_qty", nullable = false, precision = 24, scale = 12)
     private BigDecimal entryExecutedQty;
 
-    @Column(nullable = false, precision = 24, scale = 12)
+    @Column(name = "entry_executed_quote_qty", nullable = false, precision = 24, scale = 12)
     private BigDecimal entryExecutedQuoteQty;
 
-    @Column(precision = 24, scale = 12)
+    @Column(name = "exit_executed_qty", precision = 24, scale = 12)
     private BigDecimal exitExecutedQty;
 
-    @Column(precision = 24, scale = 12)
+    @Column(name = "exit_executed_quote_qty", precision = 24, scale = 12)
     private BigDecimal exitExecutedQuoteQty;
 
-    @Column(precision = 24, scale = 12)
+    @Column(name = "entry_fee", precision = 24, scale = 12)
     private BigDecimal entryFee;
 
-    @Column(length = 20)
+    @Column(name = "entry_fee_currency", length = 20)
     private String entryFeeCurrency;
 
-    @Column(precision = 24, scale = 12)
+    @Column(name = "exit_fee", precision = 24, scale = 12)
     private BigDecimal exitFee;
 
-    @Column(length = 20)
+    @Column(name = "exit_fee_currency", length = 20)
     private String exitFeeCurrency;
 
-    @Column(nullable = false, precision = 24, scale = 12)
+    @Column(name = "entry_price", nullable = false, precision = 24, scale = 12)
     private BigDecimal entryPrice;
 
-    @Column(precision = 24, scale = 12)
+    @Column(name = "exit_price", precision = 24, scale = 12)
     private BigDecimal exitPrice;
 
-    @Column(precision = 12, scale = 6)
+    @Column(name = "pl_percent", precision = 12, scale = 6)
     private BigDecimal plPercent;
 
-    @Column(precision = 24, scale = 12)
+    @Column(name = "pl_amount", precision = 24, scale = 12)
     private BigDecimal plAmount;
 
-    @Column(nullable = false, precision = 24, scale = 12)
+    @Column(name = "initial_stop_loss_price", nullable = false, precision = 24, scale = 12)
     private BigDecimal initialStopLossPrice;
 
-    @Column(nullable = false, precision = 24, scale = 12)
+    @Column(name = "current_stop_loss_price", nullable = false, precision = 24, scale = 12)
     private BigDecimal currentStopLossPrice;
 
-    @Column(precision = 24, scale = 12)
+    @Column(name = "trailing_stop_price", precision = 24, scale = 12)
     private BigDecimal trailingStopPrice;
 
-    @Column(nullable = false, precision = 24, scale = 12)
+    @Column(name = "take_profit_price", nullable = false, precision = 24, scale = 12)
     private BigDecimal takeProfitPrice;
 
-    @Column(length = 30)
-    private String exitReason; // STOP_LOSS, TAKE_PROFIT, TRAILING_STOP, TIME_STOP, REGIME_REVERSAL, MANUAL_CLOSE
+    @Column(name = "exit_reason", length = 30)
+    private String exitReason;
 
-    @Column(length = 10)
+    @Column(name = "entry_trend_regime", length = 10)
     private String entryTrendRegime;
 
-    @Column(precision = 24, scale = 8)
+    @Column(name = "entry_adx", precision = 24, scale = 8)
     private BigDecimal entryAdx;
 
-    @Column(precision = 24, scale = 8)
+    @Column(name = "entry_atr", precision = 24, scale = 8)
     private BigDecimal entryAtr;
 
-    @Column(precision = 24, scale = 8)
+    @Column(name = "entry_rsi", precision = 24, scale = 8)
     private BigDecimal entryRsi;
 
-    @Column(nullable = false)
+    @Column(name = "entry_time", nullable = false)
     private LocalDateTime entryTime;
 
-    @Column
+    @Column(name = "exit_time")
     private LocalDateTime exitTime;
 }

@@ -270,7 +270,7 @@ public class BinanceWebSocketClient {
 
                     trendFollowingStrategyService.execute(marketData, featureStore, user, SYMBOL);
                 } catch (Exception e) {
-                    log.error("Trend following strategy failed for user={} asset={}", user.getId(), SYMBOL, e);
+                    log.error("Trend following strategy failed for user={} asset={}", user.getUserId(), SYMBOL, e);
                 }
             }
         }
@@ -278,25 +278,6 @@ public class BinanceWebSocketClient {
 
     private boolean requiresFeatureComputation(String interval) {
         return "1h".equals(interval) || "4h".equals(interval) || "15m".equals(interval);
-    }
-
-    private boolean isDuplicateCandle(String interval, MarketData marketData) {
-        LocalDateTime currentEndTime = marketData.getEndTime();
-
-        LocalDateTime cachedEndTime = lastSavedEndTimeByInterval.get(interval);
-        if (Objects.equals(cachedEndTime, currentEndTime)) {
-            log.debug("Duplicate candle detected in memory. interval={} endTime={}", interval, currentEndTime);
-            return true;
-        }
-
-        MarketData latestSaved = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
-        if (latestSaved != null && Objects.equals(latestSaved.getEndTime(), currentEndTime)) {
-            lastSavedEndTimeByInterval.put(interval, currentEndTime);
-            log.debug("Duplicate candle detected in database. interval={} endTime={}", interval, currentEndTime);
-            return true;
-        }
-
-        return false;
     }
 
     private void startWatchdog() {

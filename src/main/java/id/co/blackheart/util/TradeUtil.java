@@ -81,7 +81,7 @@ public class TradeUtil {
             BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
 
             Trades newTrade = Trades.builder()
-                    .userId(user.getId())
+                    .userId(user.getUserId())
                     .strategyName(tradePlan)
                     .interval("4h")
                     .exchange("BINANCE")
@@ -292,7 +292,7 @@ public class TradeUtil {
             BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
 
             Trades newTrade = Trades.builder()
-                    .userId(user.getId())
+                    .userId(user.getUserId())
                     .strategyName(tradePlan) // assuming tradePlan = strategy name for now
                     .interval(interval) // replace later with real interval from your strategy/decision
                     .exchange("BINANCE")
