@@ -5,9 +5,9 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.UsersRepository;
-import id.co.blackheart.service.MarketDataService;
-import id.co.blackheart.service.TechnicalIndicatorService;
-import id.co.blackheart.service.TrendFollowingStrategyService;
+import id.co.blackheart.service.live.LiveTradingCoordinatorService;
+import id.co.blackheart.service.marketdata.MarketDataService;
+import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -52,7 +52,7 @@ public class BinanceWebSocketClient {
     private final UsersRepository usersRepository;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
-    private final TrendFollowingStrategyService trendFollowingStrategyService;
+    private final LiveTradingCoordinatorService liveTradingCoordinatorService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
@@ -268,7 +268,8 @@ public class BinanceWebSocketClient {
             for (Users user : users) {
                 try {
 
-                    trendFollowingStrategyService.execute(marketData, featureStore, user, SYMBOL);
+                    liveTradingCoordinatorService.process(user, SYMBOL, interval, marketData, featureStore);
+
                 } catch (Exception e) {
                     log.error("Trend following strategy failed for user={} asset={}", user.getUserId(), SYMBOL, e);
                 }

@@ -4,6 +4,17 @@ import lombok.Getter;
 
 public final class TradeConstant {
 
+
+    @Getter
+    public enum DecisionType {
+        HOLD,
+        OPEN_LONG,
+        OPEN_SHORT,
+        CLOSE_LONG,
+        CLOSE_SHORT,
+        UPDATE_TRAILING_STOP
+    }
+
     @Getter
     public enum INTERVAL{
         ONE_MINUTE("1m","1 Minutes Interval"),

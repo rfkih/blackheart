@@ -1,7 +1,9 @@
-package id.co.blackheart.service;
+package id.co.blackheart.service.scheduler;
 
 import id.co.blackheart.model.SchedulerJob;
 import id.co.blackheart.repository.SchedulerJobRepository;
+import id.co.blackheart.service.DeepLearningService;
+import id.co.blackheart.service.portfolio.PortfolioService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.AllArgsConstructor;

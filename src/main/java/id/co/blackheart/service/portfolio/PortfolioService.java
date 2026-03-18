@@ -1,4 +1,4 @@
-package id.co.blackheart.service;
+package id.co.blackheart.service.portfolio;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,18 +36,11 @@ public class PortfolioService {
 
     public void reloadAsset() {
         log.info("Starting portfolio reload...");
-        String[] assetArray = {"IDR", "BTC", "USDT", "TKO"};
         List<Users> userList = usersRepository.findByIsActive("1");
 
         userList.parallelStream().forEach(user -> {
             try {
-                if ("TKO".equals(user.getExchange())) {
-                    for (String asset : assetArray) {
-                        updateAndGetTokocryptoAssetBalance(asset, user);
-                    }
-                } else {
-                    updateAndGetBinanceAssetBalance(user);
-                }
+                updateAndGetBinanceAssetBalance(user);
             } catch (Exception e) {
                 log.error("Error processing User: {} in reloadAsset()", user.getUsername(), e);
             }

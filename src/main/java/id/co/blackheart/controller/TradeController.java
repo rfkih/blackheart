@@ -6,7 +6,7 @@ import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.request.MarketOrderRequest;
 import id.co.blackheart.dto.request.OrderDetailRequest;
 import id.co.blackheart.dto.response.*;
-import id.co.blackheart.service.TradeExecutionService;
+import id.co.blackheart.service.tradeexecuition.TradeExecutionService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
@@ -28,16 +28,6 @@ public class TradeController {
     private TradeExecutionService tradeExecutionService;
 
 
-
-    @PostMapping("/place-market-order")
-    public ResponseEntity<ResponseDto> placeMarketOrder(@RequestBody MarketOrderRequest marketOrder) {
-        MarketOrderResponse response = tradeExecutionService.placeMarketOrder(marketOrder);
-        return ResponseEntity.ok().body(ResponseDto.builder()
-                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(response)
-                .build());
-    }
-
     @PostMapping("/place-market-order-binance")
     public ResponseEntity<ResponseDto> binanceMarketOrder(@RequestBody BinanceOrderRequest binanceOrderRequest) {
         BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
@@ -47,14 +37,6 @@ public class TradeController {
                 .build());
     }
 
-    @PostMapping("/order-detail")
-    public ResponseEntity<ResponseDto> orderDetail(@RequestBody OrderDetailRequest orderDetailRequest) {
-        OrderDetailResponse response = tradeExecutionService.getOrderDetail(orderDetailRequest);
-        return ResponseEntity.ok().body(ResponseDto.builder()
-                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(response)
-                .build());
-    }
 
     @PostMapping("/order-detail-binance")
     public ResponseEntity<ResponseDto> orderDetailBinance(@RequestBody BinanceOrderDetailRequest binanceOrderDetailRequest) {

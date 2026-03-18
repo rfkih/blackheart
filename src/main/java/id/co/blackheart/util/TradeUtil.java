@@ -1,17 +1,13 @@
 package id.co.blackheart.util;
 
 
-import id.co.blackheart.client.BinanceClientService;
 import id.co.blackheart.dto.*;
 import id.co.blackheart.dto.request.BinanceOrderRequest;
-import id.co.blackheart.dto.request.MarketOrderRequest;
-import id.co.blackheart.dto.request.OrderDetailRequest;
 import id.co.blackheart.dto.response.*;
-import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.TradesRepository;
-import id.co.blackheart.service.TradeExecutionService;
+import id.co.blackheart.service.tradeexecuition.TradeExecutionService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,7 +15,6 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.Optional;
 
 @Service
 @AllArgsConstructor

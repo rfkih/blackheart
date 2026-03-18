@@ -1,6 +1,5 @@
-package id.co.blackheart.service;
+package id.co.blackheart.service.technicalindicator;
 
-import id.co.blackheart.dto.response.PredictionResponse;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
@@ -14,17 +13,13 @@ import org.ta4j.core.indicators.*;
 import org.ta4j.core.indicators.adx.ADXIndicator;
 import org.ta4j.core.indicators.adx.MinusDIIndicator;
 import org.ta4j.core.indicators.adx.PlusDIIndicator;
-import org.ta4j.core.indicators.bollinger.*;
 import org.ta4j.core.indicators.helpers.*;
-import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
-import org.ta4j.core.indicators.volume.*;
 import org.ta4j.core.num.Num;
 
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
@@ -32,7 +27,6 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.Optional;
 
 @Service
