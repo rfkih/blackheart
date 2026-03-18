@@ -177,39 +177,146 @@ public class TechnicalIndicatorService {
         featureData.setTrendScore(trendScore);
         featureData.setTrendRegime(resolveTrendRegime(trendScore));
         featureData.setVolatilityRegime(resolveVolatilityRegime(featureData.getAtrPct()));
-        featureData.setIsBreakout(isBreakout(featureData, price));
-        featureData.setIsPullback(isPullback(featureData, price));
+        featureData.setIsBearishBreakout(isBearishBreakout(featureData, price));
+        featureData.setIsBullishBreakout(isBullishBreakout(featureData, price));
+        featureData.setIsBullishPullback(isBullishPullback(featureData, price));
+        featureData.setIsBearishPullback(isBearishPullback(featureData, price));
         featureData.setEntryBias(resolveEntryBias(featureData));
         return  featureStoreRepository.save(featureData);
     }
 
-    private Boolean isBreakout(FeatureStore feature, BigDecimal price) {
-        if (feature.getDonchianUpper20() == null || feature.getDonchianLower20() == null) {
+    private boolean isBullishPullback(FeatureStore feature, BigDecimal price) {
+        if (feature == null || price == null) {
+            log.debug("Bullish pullback check failed: feature or price is null");
             return false;
         }
 
-        return price.compareTo(feature.getDonchianUpper20()) >= 0
-                || price.compareTo(feature.getDonchianLower20()) <= 0;
+        if (feature.getEma20() == null || feature.getEma50() == null) {
+            log.debug("Bullish pullback check failed: ema20 or ema50 is null");
+            return false;
+        }
+
+        BigDecimal ema20 = feature.getEma20();
+        BigDecimal ema50 = feature.getEma50();
+
+        // Tolerance: 0.2% from EMA20
+        BigDecimal tolerance = ema20.multiply(new BigDecimal("0.002"));
+
+        boolean bullishStructure = "BULL".equalsIgnoreCase(feature.getTrendRegime())
+                && ema20.compareTo(ema50) > 0;
+
+        boolean nearEma20 = price.compareTo(ema20.subtract(tolerance)) >= 0
+                && price.compareTo(ema20.add(tolerance)) <= 0;
+
+        boolean stillAboveEma50 = price.compareTo(ema50) >= 0;
+
+        boolean acceptableCandle = feature.getCloseLocationValue() == null
+                || feature.getCloseLocationValue().compareTo(new BigDecimal("0.4")) >= 0;
+
+        boolean result = bullishStructure
+                && nearEma20
+                && stillAboveEma50
+                && acceptableCandle;
+
+        log.debug(
+                "Bullish pullback analysis: price={} ema20={} ema50={} bullishStructure={} nearEma20={} stillAboveEma50={} acceptableCandle={} final={}",
+                price,
+                ema20,
+                ema50,
+                bullishStructure,
+                nearEma20,
+                stillAboveEma50,
+                acceptableCandle,
+                result
+        );
+
+        return result;
     }
 
-    private Boolean isPullback(FeatureStore feature, BigDecimal price) {
-        if (feature.getTrendRegime() == null || feature.getEma20() == null || feature.getAtr() == null) {
+    private boolean isBearishPullback(FeatureStore feature, BigDecimal price) {
+        if (feature == null || price == null) {
+            log.debug("Bearish pullback check failed: feature or price is null");
             return false;
         }
 
-        BigDecimal distanceToEma20 = price.subtract(feature.getEma20()).abs();
-
-        if ("BULL".equals(feature.getTrendRegime())) {
-            return price.compareTo(feature.getEma20()) >= 0
-                    && distanceToEma20.compareTo(feature.getAtr()) <= 0;
+        if (feature.getEma20() == null || feature.getEma50() == null) {
+            log.debug("Bearish pullback check failed: ema20 or ema50 is null");
+            return false;
         }
 
-        if ("BEAR".equals(feature.getTrendRegime())) {
-            return price.compareTo(feature.getEma20()) <= 0
-                    && distanceToEma20.compareTo(feature.getAtr()) <= 0;
+        BigDecimal ema20 = feature.getEma20();
+        BigDecimal ema50 = feature.getEma50();
+
+        // Tolerance: 0.2% from EMA20
+        BigDecimal tolerance = ema20.multiply(new BigDecimal("0.002"));
+
+        boolean bearishStructure = "BEAR".equalsIgnoreCase(feature.getTrendRegime())
+                && ema20.compareTo(ema50) < 0;
+
+        boolean nearEma20 = price.compareTo(ema20.subtract(tolerance)) >= 0
+                && price.compareTo(ema20.add(tolerance)) <= 0;
+
+        boolean stillBelowEma50 = price.compareTo(ema50) <= 0;
+
+        boolean acceptableCandle = feature.getCloseLocationValue() == null
+                || feature.getCloseLocationValue().compareTo(new BigDecimal("0.6")) <= 0;
+
+        boolean result = bearishStructure
+                && nearEma20
+                && stillBelowEma50
+                && acceptableCandle;
+
+        log.debug(
+                "Bearish pullback analysis: price={} ema20={} ema50={} bearishStructure={} nearEma20={} stillBelowEma50={} acceptableCandle={} final={}",
+                price,
+                ema20,
+                ema50,
+                bearishStructure,
+                nearEma20,
+                stillBelowEma50,
+                acceptableCandle,
+                result
+        );
+
+        return result;
+    }
+
+    private boolean isBullishBreakout(FeatureStore feature, BigDecimal price) {
+        if (feature.getDonchianUpper20() == null || price == null) {
+            log.debug("Bullish breakout check failed: Donchian upper or price is null");
+            return false;
         }
 
-        return false;
+        BigDecimal buffer = feature.getDonchianUpper20().multiply(new BigDecimal("0.001"));
+
+        boolean upperBreakout = price.compareTo(feature.getDonchianUpper20()) >= 0;
+        boolean nearUpperBreakout = price.compareTo(feature.getDonchianUpper20().subtract(buffer)) >= 0;
+
+        boolean result = upperBreakout || nearUpperBreakout;
+
+        log.debug("Bullish breakout analysis: price={} upper={} upperBreakout={} nearUpperBreakout={} final={}",
+                price, feature.getDonchianUpper20(), upperBreakout, nearUpperBreakout, result);
+
+        return result;
+    }
+
+    private boolean isBearishBreakout(FeatureStore feature, BigDecimal price) {
+        if (feature.getDonchianLower20() == null || price == null) {
+            log.debug("Bearish breakout check failed: Donchian lower or price is null");
+            return false;
+        }
+
+        BigDecimal buffer = feature.getDonchianLower20().multiply(new BigDecimal("0.001"));
+
+        boolean lowerBreakout = price.compareTo(feature.getDonchianLower20()) <= 0;
+        boolean nearLowerBreakout = price.compareTo(feature.getDonchianLower20().add(buffer)) <= 0;
+
+        boolean result = lowerBreakout || nearLowerBreakout;
+
+        log.debug("Bearish breakout analysis: price={} lower={} lowerBreakout={} nearLowerBreakout={} final={}",
+                price, feature.getDonchianLower20(), lowerBreakout, nearLowerBreakout, result);
+
+        return result;
     }
 
     private String resolveEntryBias(FeatureStore feature) {

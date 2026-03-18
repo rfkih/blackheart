@@ -136,11 +136,17 @@ public class FeatureStore {
     @Column(name = "volatility_regime", length = 10)
     private String volatilityRegime;
 
-    @Column(name = "is_breakout")
-    private Boolean isBreakout;
+    @Column(name = "is_bullish_breakout")
+    private Boolean isBullishBreakout;
 
-    @Column(name = "is_pullback")
-    private Boolean isPullback;
+    @Column(name = "is_bearish_breakout")
+    private Boolean isBearishBreakout;
+
+    @Column(name = "is_bullish_pullback")
+    private Boolean isBullishPullback;
+
+    @Column(name = "is_bearish_pullback")
+    private Boolean isBearishPullback;
 
     @Column(name = "entry_bias", length = 10)
     private String entryBias;

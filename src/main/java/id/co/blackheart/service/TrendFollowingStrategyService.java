@@ -25,6 +25,14 @@ public class TrendFollowingStrategyService {
     private static final String STRATEGY_NAME = "TREND_FOLLOWING_4H";
     private static final String STRATEGY_INTERVAL = "4h";
 
+    private static final String SIDE_LONG = "LONG";
+    private static final String SIDE_SHORT = "SHORT";
+
+    private static final String EXIT_STOP_LOSS = "STOP_LOSS";
+    private static final String EXIT_TAKE_PROFIT = "TAKE_PROFIT";
+    private static final String EXIT_REGIME_REVERSAL = "REGIME_REVERSAL";
+    private static final String EXIT_MOMENTUM_BREAKDOWN = "MOMENTUM_BREAKDOWN";
+
     private static final BigDecimal MIN_ADX = new BigDecimal("20");
     private static final BigDecimal MIN_EFFICIENCY_RATIO = new BigDecimal("0.30");
     private static final BigDecimal MIN_RELATIVE_VOLUME = new BigDecimal("0.80");
@@ -40,10 +48,16 @@ public class TrendFollowingStrategyService {
     private final TradeUtil tradeUtil;
     private final PortfolioService portfolioService;
 
-    public void execute(MarketData marketData,FeatureStore featureStore,Users user, String asset) throws JsonProcessingException {
+    public void execute(MarketData marketData, FeatureStore featureStore, Users user, String asset)
+            throws JsonProcessingException {
 
         if (marketData == null || featureStore == null || user == null) {
             log.warn("Trend following skipped because marketData/featureStore/user is null.");
+            return;
+        }
+
+        if (marketData.getClosePrice() == null) {
+            log.warn("Trend following skipped because closePrice is null. asset={}", asset);
             return;
         }
 
@@ -53,7 +67,9 @@ public class TrendFollowingStrategyService {
             return;
         }
 
-        Optional<Trades> activeTradeOpt = tradesRepository.findLatestOpenTrade(user.getId(),asset,STRATEGY_NAME,STRATEGY_INTERVAL);
+        Optional<Trades> activeTradeOpt = tradesRepository.findLatestOpenTrade(
+                user.getId(), asset, STRATEGY_NAME, STRATEGY_INTERVAL
+        );
 
         if (activeTradeOpt.isPresent()) {
             manageOpenTrade(user, asset, marketData, featureStore, activeTradeOpt.get());
@@ -70,68 +86,93 @@ public class TrendFollowingStrategyService {
 
         BigDecimal closePrice = marketData.getClosePrice();
 
-        if (shouldOpenLong(featureStore, closePrice)) {
-            TradeDecision decision = buildLongDecision(closePrice, featureStore);
-            executeLongEntry(user, asset, decision, featureStore);
+        boolean bullishRegime = isBullishRegime(featureStore, closePrice);
+        boolean strongTrend = hasStrongTrend(featureStore);
+        boolean bullishMomentum = hasBullishMomentum(featureStore);
+        boolean acceptableVolume = hasAcceptableVolume(featureStore);
+        boolean validLongTrigger = isValidLongTrigger(featureStore);
+
+        log.info(
+                "Long entry check | asset={} strategy={} bullishRegime={} strongTrend={} bullishMomentum={} acceptableVolume={} validLongTrigger={}",
+                asset, STRATEGY_NAME, bullishRegime, strongTrend, bullishMomentum, acceptableVolume, validLongTrigger
+        );
+
+        if (bullishRegime && strongTrend && bullishMomentum && acceptableVolume && validLongTrigger) {
+            Optional<TradeDecision> decisionOpt = buildLongDecision(closePrice, featureStore);
+            if (decisionOpt.isEmpty()) {
+                log.warn("LONG skipped because ATR is invalid. asset={} closePrice={}", asset, closePrice);
+                return;
+            }
+
+            executeLongEntry(user, asset, decisionOpt.get());
             return;
         }
 
-        if (shouldOpenShort(featureStore, closePrice)) {
-            TradeDecision decision = buildShortDecision(closePrice, featureStore);
-            executeShortEntry(user, asset, decision, featureStore);
+        boolean bearishRegime = isBearishRegime(featureStore, closePrice);
+        boolean bearishMomentum = hasBearishMomentum(featureStore);
+        boolean validShortTrigger = isValidShortTrigger(featureStore);
+
+        log.info(
+                "Short entry check | asset={} strategy={} bearishRegime={} strongTrend={} bearishMomentum={} acceptableVolume={} validShortTrigger={}",
+                asset, STRATEGY_NAME, bearishRegime, strongTrend, bearishMomentum, acceptableVolume, validShortTrigger
+        );
+
+        if (bearishRegime && strongTrend && bearishMomentum && acceptableVolume && validShortTrigger) {
+            Optional<TradeDecision> decisionOpt = buildShortDecision(closePrice, featureStore);
+            if (decisionOpt.isEmpty()) {
+                log.warn("SHORT skipped because ATR is invalid. asset={} closePrice={}", asset, closePrice);
+                return;
+            }
+
+            executeShortEntry(user, asset, decisionOpt.get());
             return;
         }
 
-        log.info("⏳ HOLD | strategy={} asset={} price={} regime={} bias={}",
-                STRATEGY_NAME,
-                asset,
-                closePrice,
-                featureStore.getTrendRegime(),
-                featureStore.getEntryBias());
+        log.info("⏳ HOLD | strategy={} asset={} price={} regime={} bias={}",STRATEGY_NAME,asset,closePrice,featureStore.getTrendRegime(),featureStore.getEntryBias());
     }
 
-    private void manageOpenTrade(Users user,String asset, MarketData marketData,FeatureStore featureStore,Trades activeTrade) throws JsonProcessingException {
+    private void manageOpenTrade(Users user,String asset,MarketData marketData,FeatureStore featureStore,Trades activeTrade) throws JsonProcessingException {
 
         BigDecimal closePrice = marketData.getClosePrice();
 
-        updateTrailingStop(activeTrade, closePrice, featureStore);
+        if (SIDE_LONG.equalsIgnoreCase(activeTrade.getSide())) {
+            String exitReason = getLongExitReason(activeTrade, marketData, featureStore);
+            if (exitReason != null) {
+                closeLongTrade(user, asset, marketData, activeTrade, exitReason);
+                return;
+            }
 
-        if ("LONG".equalsIgnoreCase(activeTrade.getSide()) && shouldCloseLong(activeTrade, marketData, featureStore)) {
-            closeLongTrade(user, asset, marketData, activeTrade, featureStore);
+            updateTrailingStop(activeTrade, closePrice, featureStore);
+            log.info("Open LONG remains valid | strategy={} asset={} close={} stop={} takeProfit={}",
+                    STRATEGY_NAME,
+                    asset,
+                    closePrice,
+                    activeTrade.getCurrentStopLossPrice(),
+                    activeTrade.getTakeProfitPrice());
             return;
         }
 
-        if ("SHORT".equalsIgnoreCase(activeTrade.getSide()) && shouldCloseShort(activeTrade, marketData, featureStore)) {
-            closeShortTrade(user, asset, marketData, activeTrade, featureStore);
+        if (SIDE_SHORT.equalsIgnoreCase(activeTrade.getSide())) {
+            String exitReason = getShortExitReason(activeTrade, marketData, featureStore);
+            if (exitReason != null) {
+                closeShortTrade(user, asset, marketData, activeTrade, exitReason);
+                return;
+            }
+
+            updateTrailingStop(activeTrade, closePrice, featureStore);
+            log.info("Open SHORT remains valid | strategy={} asset={} close={} stop={} takeProfit={}",
+                    STRATEGY_NAME,
+                    asset,
+                    closePrice,
+                    activeTrade.getCurrentStopLossPrice(),
+                    activeTrade.getTakeProfitPrice());
             return;
         }
 
-        log.info("Open trade remains valid | strategy={} asset={} side={} close={} stop={} takeProfit={}",
-                STRATEGY_NAME,
-                asset,
-                activeTrade.getSide(),
-                closePrice,
-                activeTrade.getCurrentStopLossPrice(),
-                activeTrade.getTakeProfitPrice());
+        log.warn("Unknown trade side found. asset={} side={}", asset, activeTrade.getSide());
     }
 
-    private boolean shouldOpenLong(FeatureStore featureStore, BigDecimal closePrice) {
-        return isBullishRegime(featureStore, closePrice)
-                && hasStrongTrend(featureStore)
-                && hasBullishMomentum(featureStore)
-                && hasAcceptableVolume(featureStore)
-                && isValidLongTrigger(featureStore, closePrice);
-    }
-
-    private boolean shouldOpenShort(FeatureStore featureStore, BigDecimal closePrice) {
-        return isBearishRegime(featureStore, closePrice)
-                && hasStrongTrend(featureStore)
-                && hasBearishMomentum(featureStore)
-                && hasAcceptableVolume(featureStore)
-                && isValidShortTrigger(featureStore, closePrice);
-    }
-
-    private boolean shouldCloseLong(Trades trade, MarketData marketData, FeatureStore featureStore) {
+    private String getLongExitReason(Trades trade, MarketData marketData, FeatureStore featureStore) {
         BigDecimal closePrice = marketData.getClosePrice();
 
         boolean stopLossHit = trade.getCurrentStopLossPrice() != null
@@ -147,10 +188,37 @@ public class TrendFollowingStrategyService {
                 && featureStore.getEma50() != null
                 && closePrice.compareTo(featureStore.getEma50()) < 0;
 
-        return stopLossHit || takeProfitHit || regimeBroken || momentumBroken;
+        log.info(
+                "Long exit check | asset={} stopLossHit={} takeProfitHit={} regimeBroken={} momentumBroken={} closePrice={} stopLoss={} takeProfit={} trendRegime={} macdHistogram={} ema50={}",
+                trade.getAsset(),
+                stopLossHit,
+                takeProfitHit,
+                regimeBroken,
+                momentumBroken,
+                closePrice,
+                trade.getCurrentStopLossPrice(),
+                trade.getTakeProfitPrice(),
+                featureStore.getTrendRegime(),
+                featureStore.getMacdHistogram(),
+                featureStore.getEma50()
+        );
+
+        if (stopLossHit) {
+            return EXIT_STOP_LOSS;
+        }
+        if (takeProfitHit) {
+            return EXIT_TAKE_PROFIT;
+        }
+        if (regimeBroken) {
+            return EXIT_REGIME_REVERSAL;
+        }
+        if (momentumBroken) {
+            return EXIT_MOMENTUM_BREAKDOWN;
+        }
+        return null;
     }
 
-    private boolean shouldCloseShort(Trades trade, MarketData marketData, FeatureStore featureStore) {
+    private String getShortExitReason(Trades trade, MarketData marketData, FeatureStore featureStore) {
         BigDecimal closePrice = marketData.getClosePrice();
 
         boolean stopLossHit = trade.getCurrentStopLossPrice() != null
@@ -166,90 +234,141 @@ public class TrendFollowingStrategyService {
                 && featureStore.getEma50() != null
                 && closePrice.compareTo(featureStore.getEma50()) > 0;
 
-        return stopLossHit || takeProfitHit || regimeBroken || momentumBroken;
+        log.info(
+                "Short exit check | asset={} stopLossHit={} takeProfitHit={} regimeBroken={} momentumBroken={} closePrice={} stopLoss={} takeProfit={} trendRegime={} macdHistogram={} ema50={}",
+                trade.getAsset(),
+                stopLossHit,
+                takeProfitHit,
+                regimeBroken,
+                momentumBroken,
+                closePrice,
+                trade.getCurrentStopLossPrice(),
+                trade.getTakeProfitPrice(),
+                featureStore.getTrendRegime(),
+                featureStore.getMacdHistogram(),
+                featureStore.getEma50()
+        );
+
+        if (stopLossHit) {
+            return EXIT_STOP_LOSS;
+        }
+        if (takeProfitHit) {
+            return EXIT_TAKE_PROFIT;
+        }
+        if (regimeBroken) {
+            return EXIT_REGIME_REVERSAL;
+        }
+        if (momentumBroken) {
+            return EXIT_MOMENTUM_BREAKDOWN;
+        }
+        return null;
     }
 
     private void updateTrailingStop(Trades activeTrade, BigDecimal closePrice, FeatureStore featureStore) {
         if (featureStore.getAtr() == null || featureStore.getAtr().compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("Trailing stop skipped because ATR is null/invalid. asset={}", activeTrade.getAsset());
             return;
         }
 
         BigDecimal trailingDistance = featureStore.getAtr().multiply(TRAILING_ATR_MULTIPLIER);
 
-        if ("LONG".equalsIgnoreCase(activeTrade.getSide())) {
+        if (SIDE_LONG.equalsIgnoreCase(activeTrade.getSide())) {
             BigDecimal candidateStop = closePrice.subtract(trailingDistance);
 
-            if (activeTrade.getCurrentStopLossPrice() == null || candidateStop.compareTo(activeTrade.getCurrentStopLossPrice()) > 0) {
+            if (activeTrade.getCurrentStopLossPrice() == null
+                    || candidateStop.compareTo(activeTrade.getCurrentStopLossPrice()) > 0) {
 
                 activeTrade.setTrailingStopPrice(candidateStop);
                 activeTrade.setCurrentStopLossPrice(candidateStop);
                 tradesRepository.save(activeTrade);
 
-                log.info("Updated LONG trailing stop | asset={} newStop={}", activeTrade.getAsset(), candidateStop);
+                log.info("Updated LONG trailing stop | asset={} oldStop={} newStop={} closePrice={} trailingDistance={}",
+                        activeTrade.getAsset(),
+                        activeTrade.getCurrentStopLossPrice(),
+                        candidateStop,
+                        closePrice,
+                        trailingDistance);
             }
             return;
         }
 
-        if ("SHORT".equalsIgnoreCase(activeTrade.getSide())) {BigDecimal candidateStop = closePrice.add(trailingDistance);
+        if (SIDE_SHORT.equalsIgnoreCase(activeTrade.getSide())) {
+            BigDecimal candidateStop = closePrice.add(trailingDistance);
 
-            if (activeTrade.getCurrentStopLossPrice() == null || candidateStop.compareTo(activeTrade.getCurrentStopLossPrice()) < 0) {
+            if (activeTrade.getCurrentStopLossPrice() == null
+                    || candidateStop.compareTo(activeTrade.getCurrentStopLossPrice()) < 0) {
 
                 activeTrade.setTrailingStopPrice(candidateStop);
                 activeTrade.setCurrentStopLossPrice(candidateStop);
                 tradesRepository.save(activeTrade);
 
-                log.info("Updated SHORT trailing stop | asset={} newStop={}",
-                        activeTrade.getAsset(), candidateStop);
+                log.info("Updated SHORT trailing stop | asset={} oldStop={} newStop={} closePrice={} trailingDistance={}",
+                        activeTrade.getAsset(),
+                        activeTrade.getCurrentStopLossPrice(),
+                        candidateStop,
+                        closePrice,
+                        trailingDistance);
             }
         }
     }
 
-    private TradeDecision buildLongDecision(BigDecimal closePrice, FeatureStore featureStore) {
-        BigDecimal atr = requireAtr(featureStore);
+    private Optional<TradeDecision> buildLongDecision(BigDecimal closePrice, FeatureStore featureStore) {
+        Optional<BigDecimal> atrOpt = getValidAtr(featureStore);
+        if (atrOpt.isEmpty()) {
+            return Optional.empty();
+        }
 
+        BigDecimal atr = atrOpt.get();
         BigDecimal stopLossPrice = closePrice.subtract(atr.multiply(STOP_ATR_MULTIPLIER));
         BigDecimal takeProfitPrice = closePrice.add(atr.multiply(TAKE_PROFIT_ATR_MULTIPLIER));
 
-        return TradeDecision.builder()
-                .action("BUY")
-                .positionSize(BigDecimal.ONE)
-                .stopLossPrice(stopLossPrice)
-                .takeProfitPrice(takeProfitPrice)
-                .build();
+        return Optional.of(
+                TradeDecision.builder()
+                        .action("BUY")
+                        .positionSize(BigDecimal.ONE)
+                        .stopLossPrice(stopLossPrice)
+                        .takeProfitPrice(takeProfitPrice)
+                        .build()
+        );
     }
 
-    private TradeDecision buildShortDecision(BigDecimal closePrice, FeatureStore featureStore) {
-        BigDecimal atr = requireAtr(featureStore);
+    private Optional<TradeDecision> buildShortDecision(BigDecimal closePrice, FeatureStore featureStore) {
+        Optional<BigDecimal> atrOpt = getValidAtr(featureStore);
+        if (atrOpt.isEmpty()) {
+            return Optional.empty();
+        }
 
+        BigDecimal atr = atrOpt.get();
         BigDecimal stopLossPrice = closePrice.add(atr.multiply(STOP_ATR_MULTIPLIER));
         BigDecimal takeProfitPrice = closePrice.subtract(atr.multiply(TAKE_PROFIT_ATR_MULTIPLIER));
 
-        return TradeDecision.builder()
-                .action("SELL")
-                .positionSize(BigDecimal.ONE)
-                .stopLossPrice(stopLossPrice)
-                .takeProfitPrice(takeProfitPrice)
-                .build();
+        return Optional.of(
+                TradeDecision.builder()
+                        .action("SELL")
+                        .positionSize(BigDecimal.ONE)
+                        .stopLossPrice(stopLossPrice)
+                        .takeProfitPrice(takeProfitPrice)
+                        .build()
+        );
     }
 
     private void executeLongEntry(Users user,
                                   String asset,
-                                  TradeDecision decision,
-                                  FeatureStore featureStore) throws JsonProcessingException {
+                                  TradeDecision decision) throws JsonProcessingException {
 
         Portfolio usdtPortfolio = portfolioService.updateAndGetAssetBalance("USDT", user);
-        BigDecimal tradeAmount = calculateLongTradeAmount(usdtPortfolio.getBalance(), user);
+        BigDecimal balance = usdtPortfolio.getBalance();
+        BigDecimal tradeAmount = calculateLongTradeAmount(balance, user);
 
-        if (usdtPortfolio.getBalance().compareTo(tradeAmount) < 0) {
+        log.info("LONG sizing | asset={} exchange={} balanceUSDT={} riskAmount={} finalTradeAmount={} minNotional={}",
+                asset, user.getExchange(), balance, user.getRiskAmount(), tradeAmount, MIN_USDT_NOTIONAL);
+
+        if (balance.compareTo(tradeAmount) < 0) {
             log.info("Insufficient USDT balance for LONG entry. balance={} required={}",
-                    usdtPortfolio.getBalance(), tradeAmount);
+                    balance, tradeAmount);
             return;
         }
 
-        if ("TKO".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.openLongMarketOrder(user, asset, decision, STRATEGY_NAME, tradeAmount);
-            return;
-        }
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
             tradeUtil.binanceOpenLongMarketOrder(user, asset, decision, STRATEGY_NAME, tradeAmount);
@@ -261,26 +380,24 @@ public class TrendFollowingStrategyService {
 
     private void executeShortEntry(Users user,
                                    String asset,
-                                   TradeDecision decision,
-                                   FeatureStore featureStore) throws JsonProcessingException {
+                                   TradeDecision decision) throws JsonProcessingException {
 
         String baseAsset = resolveBaseAsset(asset);
         Portfolio basePortfolio = portfolioService.updateAndGetAssetBalance(baseAsset, user);
-        BigDecimal tradeAmount = calculateShortTradeAmount(basePortfolio.getBalance(), user);
+        BigDecimal balance = basePortfolio.getBalance();
+        BigDecimal tradeAmount = calculateShortTradeAmount(balance, user);
 
-        if (basePortfolio.getBalance().compareTo(tradeAmount) < 0) {
+        log.info("SHORT sizing | asset={} baseAsset={} exchange={} baseBalance={} riskAmount={} finalTradeAmount={} minBaseQty={}",
+                asset, baseAsset, user.getExchange(), balance, user.getRiskAmount(), tradeAmount, MIN_BASE_ASSET_QTY);
+
+        if (balance.compareTo(tradeAmount) < 0) {
             log.info("Insufficient {} balance for SHORT entry. balance={} required={}",
-                    baseAsset, basePortfolio.getBalance(), tradeAmount);
-            return;
-        }
-
-        if ("TKO".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.openShortMarketOrder(user, asset, decision, STRATEGY_NAME, tradeAmount);
+                    baseAsset, balance, tradeAmount);
             return;
         }
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceOpenShortMarketOrder(user, asset, decision, STRATEGY_NAME, tradeAmount);
+            tradeUtil.binanceOpenShortMarketOrder(user, asset, decision, STRATEGY_NAME, tradeAmount,"4h");
             return;
         }
 
@@ -291,18 +408,19 @@ public class TrendFollowingStrategyService {
                                 String asset,
                                 MarketData marketData,
                                 Trades activeTrade,
-                                FeatureStore featureStore) throws JsonProcessingException {
+                                String exitReason) throws JsonProcessingException {
 
-        markExitReason(activeTrade, marketData.getClosePrice(), featureStore);
+        activeTrade.setExitReason(exitReason);
+        tradesRepository.save(activeTrade);
+
+        log.info("Closing LONG | asset={} exchange={} exitReason={} closePrice={}",
+                asset, user.getExchange(), exitReason, marketData.getClosePrice());
+
         Optional<Trades> activeTradeOpt = Optional.of(activeTrade);
 
-        if ("TKO".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.tokocryptoCloseLongMarketOrder(user, activeTradeOpt, marketData, asset);
-            return;
-        }
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceCloseLongMarketOrder(user, activeTradeOpt, marketData, asset);
+            tradeUtil.binanceCloseLongMarketOrder(user, activeTradeOpt.get(), asset);
             return;
         }
 
@@ -313,127 +431,227 @@ public class TrendFollowingStrategyService {
                                  String asset,
                                  MarketData marketData,
                                  Trades activeTrade,
-                                 FeatureStore featureStore) throws JsonProcessingException {
+                                 String exitReason) throws JsonProcessingException {
 
-        markExitReason(activeTrade, marketData.getClosePrice(), featureStore);
+        activeTrade.setExitReason(exitReason);
+        tradesRepository.save(activeTrade);
+
+        log.info("Closing SHORT | asset={} exchange={} exitReason={} closePrice={}", asset, user.getExchange(), exitReason, marketData.getClosePrice());
+
         Optional<Trades> activeTradeOpt = Optional.of(activeTrade);
 
-        if ("TKO".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.tokocryptoCloseShortMarketOrder(user, activeTradeOpt, marketData, asset);
-            return;
-        }
-
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceCloseShortMarketOrder(user, activeTradeOpt, marketData, asset);
+            tradeUtil.binanceCloseShortMarketOrder(user, activeTradeOpt.get(), asset);
             return;
         }
 
         log.warn("Unsupported exchange for SHORT close: {}", user.getExchange());
     }
 
-    private void markExitReason(Trades activeTrade, BigDecimal closePrice, FeatureStore featureStore) {
-        if ("LONG".equalsIgnoreCase(activeTrade.getSide())) {
-            if (activeTrade.getCurrentStopLossPrice() != null
-                    && closePrice.compareTo(activeTrade.getCurrentStopLossPrice()) <= 0) {
-                activeTrade.setExitReason("STOP_LOSS");
-            } else if (activeTrade.getTakeProfitPrice() != null
-                    && closePrice.compareTo(activeTrade.getTakeProfitPrice()) >= 0) {
-                activeTrade.setExitReason("TAKE_PROFIT");
-            } else {
-                activeTrade.setExitReason("REGIME_REVERSAL");
-            }
-            tradesRepository.save(activeTrade);
-            return;
-        }
-
-        if ("SHORT".equalsIgnoreCase(activeTrade.getSide())) {
-            if (activeTrade.getCurrentStopLossPrice() != null
-                    && closePrice.compareTo(activeTrade.getCurrentStopLossPrice()) >= 0) {
-                activeTrade.setExitReason("STOP_LOSS");
-            } else if (activeTrade.getTakeProfitPrice() != null
-                    && closePrice.compareTo(activeTrade.getTakeProfitPrice()) <= 0) {
-                activeTrade.setExitReason("TAKE_PROFIT");
-            } else {
-                activeTrade.setExitReason("REGIME_REVERSAL");
-            }
-            tradesRepository.save(activeTrade);
-        }
-    }
-
     private boolean isBullishRegime(FeatureStore f, BigDecimal closePrice) {
-        return "BULL".equalsIgnoreCase(f.getTrendRegime())
-                && f.getEma20() != null
-                && f.getEma50() != null
-                && f.getEma200() != null
-                && f.getEma20().compareTo(f.getEma50()) > 0
-                && f.getEma50().compareTo(f.getEma200()) > 0
-                && closePrice.compareTo(f.getEma20()) >= 0
-                && positiveOrZero(f.getEma50Slope())
-                && positiveOrZero(f.getEma200Slope());
+        boolean bullRegime = "BULL".equalsIgnoreCase(f.getTrendRegime());
+        boolean ema20Exists = f.getEma20() != null;
+        boolean ema50Exists = f.getEma50() != null;
+        boolean ema200Exists = f.getEma200() != null;
+        boolean ema20AboveEma50 = ema20Exists && ema50Exists && f.getEma20().compareTo(f.getEma50()) > 0;
+        boolean ema50AboveEma200 = ema50Exists && ema200Exists && f.getEma50().compareTo(f.getEma200()) > 0;
+        boolean priceAboveEma20 = ema20Exists && closePrice != null && closePrice.compareTo(f.getEma20()) >= 0;
+        boolean ema50SlopePositive = positiveOrZero(f.getEma50Slope());
+        boolean ema200SlopePositive = positiveOrZero(f.getEma200Slope());
+
+        if (!bullRegime) {
+            log.info("Bullish regime failed: trendRegime is not BULL, actual={}", f.getTrendRegime());
+        }
+        if (!ema20Exists) {
+            log.info("Bullish regime failed: ema20 is null");
+        }
+        if (!ema50Exists) {
+            log.info("Bullish regime failed: ema50 is null");
+        }
+        if (!ema200Exists) {
+            log.info("Bullish regime failed: ema200 is null");
+        }
+        if (!ema20AboveEma50) {
+            log.info("Bullish regime failed: ema20 <= ema50 | ema20={} ema50={}", f.getEma20(), f.getEma50());
+        }
+        if (!ema50AboveEma200) {
+            log.info("Bullish regime failed: ema50 <= ema200 | ema50={} ema200={}", f.getEma50(), f.getEma200());
+        }
+        if (!priceAboveEma20) {
+            log.info("Bullish regime failed: closePrice < ema20 | closePrice={} ema20={}", closePrice, f.getEma20());
+        }
+        if (!ema50SlopePositive) {
+            log.info("Bullish regime failed: ema50Slope is negative/null | ema50Slope={}", f.getEma50Slope());
+        }
+        if (!ema200SlopePositive) {
+            log.info("Bullish regime failed: ema200Slope is negative/null | ema200Slope={}", f.getEma200Slope());
+        }
+
+        return bullRegime
+                && ema20Exists
+                && ema50Exists
+                && ema200Exists
+                && ema20AboveEma50
+                && ema50AboveEma200
+                && priceAboveEma20
+                && ema50SlopePositive
+                && ema200SlopePositive;
     }
 
     private boolean isBearishRegime(FeatureStore f, BigDecimal closePrice) {
-        return "BEAR".equalsIgnoreCase(f.getTrendRegime())
-                && f.getEma20() != null
-                && f.getEma50() != null
-                && f.getEma200() != null
-                && f.getEma20().compareTo(f.getEma50()) < 0
-                && f.getEma50().compareTo(f.getEma200()) < 0
-                && closePrice.compareTo(f.getEma20()) <= 0
-                && negativeOrZero(f.getEma50Slope())
-                && negativeOrZero(f.getEma200Slope());
+        boolean bearRegime = "BEAR".equalsIgnoreCase(f.getTrendRegime());
+        boolean ema20Exists = f.getEma20() != null;
+        boolean ema50Exists = f.getEma50() != null;
+        boolean ema200Exists = f.getEma200() != null;
+        boolean ema20BelowEma50 = ema20Exists && ema50Exists && f.getEma20().compareTo(f.getEma50()) < 0;
+        boolean ema50BelowEma200 = ema50Exists && ema200Exists && f.getEma50().compareTo(f.getEma200()) < 0;
+        boolean priceBelowEma20 = ema20Exists && closePrice != null && closePrice.compareTo(f.getEma20()) <= 0;
+        boolean ema50SlopeNegative = negativeOrZero(f.getEma50Slope());
+        boolean ema200SlopeNegative = negativeOrZero(f.getEma200Slope());
+
+        if (!bearRegime) {
+            log.info("Bearish regime failed: trendRegime is not BEAR, actual={}", f.getTrendRegime());
+        }
+        if (!ema20Exists) {
+            log.info("Bearish regime failed: ema20 is null");
+        }
+        if (!ema50Exists) {
+            log.info("Bearish regime failed: ema50 is null");
+        }
+        if (!ema200Exists) {
+            log.info("Bearish regime failed: ema200 is null");
+        }
+        if (!ema20BelowEma50) {
+            log.info("Bearish regime failed: ema20 >= ema50 | ema20={} ema50={}", f.getEma20(), f.getEma50());
+        }
+        if (!ema50BelowEma200) {
+            log.info("Bearish regime failed: ema50 >= ema200 | ema50={} ema200={}", f.getEma50(), f.getEma200());
+        }
+        if (!priceBelowEma20) {
+            log.info("Bearish regime failed: closePrice > ema20 | closePrice={} ema20={}", closePrice, f.getEma20());
+        }
+        if (!ema50SlopeNegative) {
+            log.info("Bearish regime failed: ema50Slope is positive/null | ema50Slope={}", f.getEma50Slope());
+        }
+        if (!ema200SlopeNegative) {
+            log.info("Bearish regime failed: ema200Slope is positive/null | ema200Slope={}", f.getEma200Slope());
+        }
+
+        return bearRegime
+                && ema20Exists
+                && ema50Exists
+                && ema200Exists
+                && ema20BelowEma50
+                && ema50BelowEma200
+                && priceBelowEma20
+                && ema50SlopeNegative
+                && ema200SlopeNegative;
     }
 
     private boolean hasStrongTrend(FeatureStore f) {
-        return f.getAdx() != null
-                && f.getAdx().compareTo(MIN_ADX) >= 0
-                && f.getEfficiencyRatio20() != null
+        boolean adxValid = f.getAdx() != null && f.getAdx().compareTo(MIN_ADX) >= 0;
+        boolean efficiencyValid = f.getEfficiencyRatio20() != null
                 && f.getEfficiencyRatio20().compareTo(MIN_EFFICIENCY_RATIO) >= 0;
+
+        if (!adxValid) {
+            log.info("Strong trend failed: adx is null/below minimum | adx={} minimum={}", f.getAdx(), MIN_ADX);
+        }
+        if (!efficiencyValid) {
+            log.info("Strong trend failed: efficiencyRatio20 is null/below minimum | efficiencyRatio20={} minimum={}",
+                    f.getEfficiencyRatio20(), MIN_EFFICIENCY_RATIO);
+        }
+
+        return adxValid && efficiencyValid;
     }
 
     private boolean hasBullishMomentum(FeatureStore f) {
-        return f.getPlusDI() != null
-                && f.getMinusDI() != null
-                && f.getPlusDI().compareTo(f.getMinusDI()) > 0
-                && f.getMacd() != null
-                && f.getMacdSignal() != null
-                && f.getMacd().compareTo(f.getMacdSignal()) > 0
-                && f.getMacdHistogram() != null
+        boolean plusDIExists = f.getPlusDI() != null;
+        boolean minusDIExists = f.getMinusDI() != null;
+        boolean plusDiAboveMinusDi = plusDIExists && minusDIExists && f.getPlusDI().compareTo(f.getMinusDI()) > 0;
+
+        boolean macdExists = f.getMacd() != null;
+        boolean macdSignalExists = f.getMacdSignal() != null;
+        boolean macdAboveSignal = macdExists && macdSignalExists && f.getMacd().compareTo(f.getMacdSignal()) > 0;
+
+        boolean histogramPositive = f.getMacdHistogram() != null
                 && f.getMacdHistogram().compareTo(BigDecimal.ZERO) > 0;
+
+        if (!plusDiAboveMinusDi) {
+            log.info("Bullish momentum failed: plusDI <= minusDI | plusDI={} minusDI={}", f.getPlusDI(), f.getMinusDI());
+        }
+        if (!macdAboveSignal) {
+            log.info("Bullish momentum failed: macd <= macdSignal | macd={} macdSignal={}", f.getMacd(), f.getMacdSignal());
+        }
+        if (!histogramPositive) {
+            log.info("Bullish momentum failed: macdHistogram <= 0/null | macdHistogram={}", f.getMacdHistogram());
+        }
+
+        return plusDiAboveMinusDi && macdAboveSignal && histogramPositive;
     }
 
     private boolean hasBearishMomentum(FeatureStore f) {
-        return f.getPlusDI() != null
-                && f.getMinusDI() != null
-                && f.getPlusDI().compareTo(f.getMinusDI()) < 0
-                && f.getMacd() != null
-                && f.getMacdSignal() != null
-                && f.getMacd().compareTo(f.getMacdSignal()) < 0
-                && f.getMacdHistogram() != null
+        boolean plusDIExists = f.getPlusDI() != null;
+        boolean minusDIExists = f.getMinusDI() != null;
+        boolean plusDiBelowMinusDi = plusDIExists && minusDIExists && f.getPlusDI().compareTo(f.getMinusDI()) < 0;
+
+        boolean macdExists = f.getMacd() != null;
+        boolean macdSignalExists = f.getMacdSignal() != null;
+        boolean macdBelowSignal = macdExists && macdSignalExists && f.getMacd().compareTo(f.getMacdSignal()) < 0;
+
+        boolean histogramNegative = f.getMacdHistogram() != null
                 && f.getMacdHistogram().compareTo(BigDecimal.ZERO) < 0;
+
+        if (!plusDiBelowMinusDi) {
+            log.info("Bearish momentum failed: plusDI >= minusDI | plusDI={} minusDI={}", f.getPlusDI(), f.getMinusDI());
+        }
+        if (!macdBelowSignal) {
+            log.info("Bearish momentum failed: macd >= macdSignal | macd={} macdSignal={}", f.getMacd(), f.getMacdSignal());
+        }
+        if (!histogramNegative) {
+            log.info("Bearish momentum failed: macdHistogram >= 0/null | macdHistogram={}", f.getMacdHistogram());
+        }
+
+        return plusDiBelowMinusDi && macdBelowSignal && histogramNegative;
     }
 
     private boolean hasAcceptableVolume(FeatureStore f) {
-        return f.getRelativeVolume20() == null
+        boolean result = f.getRelativeVolume20() == null
                 || f.getRelativeVolume20().compareTo(MIN_RELATIVE_VOLUME) >= 0;
+
+        if (!result) {
+            log.info("Volume failed: relativeVolume20 below minimum | relativeVolume20={} minimum={}",
+                    f.getRelativeVolume20(), MIN_RELATIVE_VOLUME);
+        }
+
+        return result;
     }
 
-    private boolean isValidLongTrigger(FeatureStore f, BigDecimal closePrice) {
-        boolean breakout = Boolean.TRUE.equals(f.getIsBreakout());
-        boolean pullback = Boolean.TRUE.equals(f.getIsPullback())
-                && f.getEma20() != null
-                && closePrice.compareTo(f.getEma20()) >= 0;
+    private boolean isValidLongTrigger(FeatureStore f) {
+        boolean breakout = Boolean.TRUE.equals(f.getIsBullishBreakout());
+        boolean pullback = Boolean.TRUE.equals(f.getIsBullishPullback());
+        boolean entryBiasLong = "LONG".equalsIgnoreCase(f.getEntryBias());
 
-        return breakout || pullback || "LONG".equalsIgnoreCase(f.getEntryBias());
+        boolean result = breakout || pullback || entryBiasLong;
+
+
+        if (!result) {
+            log.info("Long trigger failed | breakout={} pullback={} entryBias={}", breakout, pullback, f.getEntryBias());
+        }
+
+        return result;
     }
 
-    private boolean isValidShortTrigger(FeatureStore f, BigDecimal closePrice) {
-        boolean breakout = Boolean.TRUE.equals(f.getIsBreakout());
-        boolean pullback = Boolean.TRUE.equals(f.getIsPullback())
-                && f.getEma20() != null
-                && closePrice.compareTo(f.getEma20()) <= 0;
+    private boolean isValidShortTrigger(FeatureStore f) {
+        boolean breakout = Boolean.TRUE.equals(f.getIsBearishBreakout());
+        boolean pullback = Boolean.TRUE.equals(f.getIsBearishPullback());
+        boolean entryBiasShort = SIDE_SHORT.equalsIgnoreCase(f.getEntryBias());
 
-        return breakout || pullback || "SHORT".equalsIgnoreCase(f.getEntryBias());
+        boolean result =  breakout || pullback || entryBiasShort;
+        if (!result) {
+            log.info("Short trigger failed | breakout={} pullback={} entryBias={}", breakout, pullback, f.getEntryBias());
+        }
+
+        return result;
     }
 
     private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Users user) {
@@ -452,11 +670,11 @@ public class TrendFollowingStrategyService {
         return tradeAmount.compareTo(MIN_BASE_ASSET_QTY) < 0 ? MIN_BASE_ASSET_QTY : tradeAmount;
     }
 
-    private BigDecimal requireAtr(FeatureStore featureStore) {
+    private Optional<BigDecimal> getValidAtr(FeatureStore featureStore) {
         if (featureStore.getAtr() == null || featureStore.getAtr().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalStateException("ATR is required for trend following strategy.");
+            return Optional.empty();
         }
-        return featureStore.getAtr();
+        return Optional.of(featureStore.getAtr());
     }
 
     private boolean positiveOrZero(BigDecimal value) {

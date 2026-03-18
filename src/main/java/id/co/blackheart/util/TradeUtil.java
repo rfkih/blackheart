@@ -25,7 +25,6 @@ import java.util.Optional;
 @AllArgsConstructor
 @Slf4j
 public class TradeUtil {
-    private final BinanceClientService binanceClientService;
     TradesRepository tradesRepository;
     TradeExecutionService tradeExecutionService;
 
@@ -34,410 +33,382 @@ public class TradeUtil {
     }
 
 
-    public void binanceOpenLongMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
+    public void binanceOpenLongMarketOrder(
+            Users user,
+            String asset,
+            TradeDecision decision,
+            String tradePlan,
+            BigDecimal tradeAmount
+    ) {
         try {
-            log.info("trade amount : " + tradeAmount);
+            log.info("trade amount : {}", tradeAmount);
 
-            // 1. Place market order (ensure "FULL" response is set at API call level in your nodejs service)
-            BinanceOrderRequest binanceOrderRequest = BinanceOrderRequest.builder()
-                    .symbol("BTCUSDT")
+            BinanceOrderRequest request = BinanceOrderRequest.builder()
+                    .symbol(asset)
                     .side("BUY")
                     .amount(tradeAmount)
                     .apiKey(user.getApiKey())
                     .apiSecret(user.getApiSecret())
                     .build();
 
-            BinanceOrderResponse binanceOrderResponse = tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
+            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
 
-            // 2. Calculate weighted average price & total commission from fills[]
             BigDecimal totalQty = BigDecimal.ZERO;
             BigDecimal totalCost = BigDecimal.ZERO;
             BigDecimal totalFee = BigDecimal.ZERO;
+            String feeCurrency = null;
 
-            for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
-                BigDecimal qty = new BigDecimal(fill.getQty());
-                BigDecimal price = new BigDecimal(fill.getPrice());
-                BigDecimal commission = new BigDecimal(fill.getCommission());
+            if (response.getFills() != null && !response.getFills().isEmpty()) {
+                for (BinanceOrderFill fill : response.getFills()) {
+                    BigDecimal qty = new BigDecimal(fill.getQty());
+                    BigDecimal price = new BigDecimal(fill.getPrice());
+                    BigDecimal commission = new BigDecimal(fill.getCommission());
 
-                totalQty = totalQty.add(qty);
-                totalCost = totalCost.add(price.multiply(qty));
-                totalFee = totalFee.add(commission);
+                    totalQty = totalQty.add(qty);
+                    totalCost = totalCost.add(price.multiply(qty));
+                    totalFee = totalFee.add(commission);
+
+                    if (feeCurrency == null) {
+                        feeCurrency = fill.getCommissionAsset();
+                    }
+                }
+            }
+
+            if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalStateException("Order executed but total filled quantity is zero.");
             }
 
             BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
 
-            // 3. Save to DB
-            Trades newTrade = new Trades();
-            newTrade.setUserId(user.getId());
-            newTrade.setAsset(asset);
-//            newTrade.setTradePlan(tradePlan);
-            newTrade.setEntryOrderId(binanceOrderResponse.getOrderId());
-//            newTrade.setAction("LONG");
-            newTrade.setEntryPrice(avgEntryPrice);
-            newTrade.setEntryExecutedQty(totalQty);
-            newTrade.setEntryExecutedQuoteQty(totalCost);
-            newTrade.setEntryFee(totalFee);
-//            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
-//            newTrade.setStopLossPrice(decision.getStopLossPrice());
-            newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-//            newTrade.setIsActive("1");
-            newTrade.setEntryTime(LocalDateTime.now());
+            Trades newTrade = Trades.builder()
+                    .userId(user.getId())
+                    .strategyName(tradePlan)
+                    .interval("4h")
+                    .exchange("BINANCE")
+                    .asset(asset)
+                    .side("LONG")
+                    .status("OPEN")
+                    .entryOrderId(response.getOrderId())
+                    .entryExecutedQty(totalQty)
+                    .entryExecutedQuoteQty(totalCost)
+                    .entryFee(totalFee)
+                    .entryFeeCurrency(feeCurrency)
+                    .entryPrice(avgEntryPrice)
+                    .initialStopLossPrice(decision.getStopLossPrice())
+                    .currentStopLossPrice(decision.getStopLossPrice())
+                    .takeProfitPrice(decision.getTakeProfitPrice())
+                    .entryTime(LocalDateTime.now())
+                    .build();
 
             tradesRepository.save(newTrade);
 
             log.info("✅ Long order placed for {} at weighted average price: {}", asset, avgEntryPrice);
 
         } catch (Exception e) {
-            log.error("❌ Error placing market order: ", e);
+            log.error("❌ Error placing long market order for {}", asset, e);
         }
     }
 
 
-    public void binanceCloseLongMarketOrder(Users user, Optional<Trades> activeTradeOpt, MarketData marketData, String asset) {
-        activeTradeOpt.ifPresent(trade -> {
-            try {
-                // 1. Send Market Sell Order
-                BinanceOrderRequest binanceOrderRequest = BinanceOrderRequest.builder()
-                        .symbol("BTCUSDT")
-                        .side("SELL")
-                        .amount(trade.getEntryExecutedQty()) // Sell same qty as entry
-                        .apiKey(user.getApiKey())
-                        .apiSecret(user.getApiSecret())
-                        .build();
+    private Trades validateCloseLongOrderInputs(Users user, Trades trade, String asset) {
+        if (user == null) {
+            log.info("User data is null!");
+            return null;
+        }
 
-                BinanceOrderResponse binanceOrderResponse = tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
+        if (null == trade) {
+            log.info("No active trade found for asset {}", asset);
+            return null;
+        }
 
-                // 2. Calculate weighted average exit price from fills
-                BigDecimal totalQty = BigDecimal.ZERO;
-                BigDecimal totalCost = BigDecimal.ZERO;
-                BigDecimal totalFee = BigDecimal.ZERO;
+        BigDecimal closeQty = trade.getEntryExecutedQty();
 
-                for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
-                    BigDecimal qty = new BigDecimal(fill.getQty());
-                    BigDecimal price = new BigDecimal(fill.getPrice());
-                    BigDecimal commission = new BigDecimal(fill.getCommission());
+        if (closeQty == null || closeQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("Entry executed quantity is invalid for closing long trade.");
+        }
 
-                    totalQty = totalQty.add(qty);
-                    totalCost = totalCost.add(price.multiply(qty));
-                    totalFee = totalFee.add(commission);
+        return trade;
+    }
+
+    private FillProcessingResult processOrderFills(BinanceOrderResponse response) {
+        BigDecimal totalQty = BigDecimal.ZERO;
+        BigDecimal totalCost = BigDecimal.ZERO;
+        BigDecimal totalFee = BigDecimal.ZERO;
+        String feeCurrency = null;
+
+        if (response.getFills() != null && !response.getFills().isEmpty()) {
+            for (BinanceOrderFill fill : response.getFills()) {
+                BigDecimal qty = new BigDecimal(fill.getQty());
+                BigDecimal price = new BigDecimal(fill.getPrice());
+                BigDecimal commission = new BigDecimal(fill.getCommission());
+
+                totalQty = totalQty.add(qty);
+                totalCost = totalCost.add(price.multiply(qty));
+                totalFee = totalFee.add(commission);
+
+                if (feeCurrency == null && fill.getCommissionAsset() != null) {
+                    feeCurrency = fill.getCommissionAsset();
                 }
-
-                BigDecimal avgExitPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
-
-                // 3. Close trade record
-                trade.setExitOrderId(binanceOrderResponse.getOrderId());
-                trade.setExitExecutedQuoteQty(totalCost);
-                trade.setExitExecutedQty(totalQty);
-                trade.setExitFee(totalFee);
-//                trade.setIsActive("0");
-                trade.setExitTime(LocalDateTime.now());
-                trade.setExitPrice(avgExitPrice);
-                trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), avgExitPrice, trade.getEntryExecutedQty(), TradeType.LONG));
-                trade.setPlPercent(calculatePLPercentage(trade.getEntryPrice(), avgExitPrice, TradeType.LONG));
-
-                tradesRepository.save(trade);
-
-                log.info("✅ Long position closed for {} at avg price: {}", asset, avgExitPrice);
-
-            } catch (Exception e) {
-                log.error("❌ Error closing market order: ", e);
             }
-        });
+        }
+
+        if (totalQty.compareTo(BigDecimal.ZERO) <= 0 && response.getExecutedQty() != null) {
+            totalQty = new BigDecimal(response.getExecutedQty());
+        }
+
+        if (totalCost.compareTo(BigDecimal.ZERO) <= 0 && response.getCummulativeQuoteQty() != null) {
+            totalCost = new BigDecimal(response.getCummulativeQuoteQty());
+        }
+
+        if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("Executed quantity is zero, cannot close trade.");
+        }
+
+        BigDecimal avgExitPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
+        return new FillProcessingResult(totalQty, totalCost, totalFee, feeCurrency, avgExitPrice);
     }
 
+    private static class FillProcessingResult {
+        final BigDecimal totalQty;
+        final BigDecimal totalCost;
+        final BigDecimal totalFee;
+        final String feeCurrency;
+        final BigDecimal avgExitPrice;
 
-
-    public void openLongMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
-        try {
-            log.info("trade amount : " +  tradeAmount);
-            MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
-                    .symbol("BTC_USDT")
-                    .side(0)
-                    .amount(tradeAmount)
-                    .isQuoteQty(true)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
-                    .build();
-
-            MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
-
-            OrderDetailRequest orderDetailRequest = OrderDetailRequest.builder()
-                    .orderId(String.valueOf(marketOrderResponse.getOrderId()))
-                    .recvWindow(5000)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
-                    .build();
-
-            OrderDetailResponse orderDetailResponse = tradeExecutionService.getOrderDetail(orderDetailRequest);
-
-            Trades newTrade = new Trades();
-            newTrade.setUserId(user.getId());
-            newTrade.setAsset(asset);
-//            newTrade.setTradePlan(tradePlan);
-            newTrade.setEntryOrderId(marketOrderResponse.getOrderId());
-//            newTrade.setAction("LONG");
-            newTrade.setEntryPrice(new BigDecimal(orderDetailResponse.getExecutedPrice()));
-            newTrade.setEntryExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
-            newTrade.setEntryExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
-//            newTrade.setStopLossPrice(decision.getStopLossPrice());
-            newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-//            newTrade.setIsActive("1");
-            newTrade.setEntryTime(LocalDateTime.now());
-
-            tradesRepository.save(newTrade);
-
-            log.info("✅ Long order placed for {} at {}", asset, orderDetailResponse.getExecutedPrice());
-        } catch (Exception e) {
-            log.error("❌ Error placing market order: ", e);
+        FillProcessingResult(BigDecimal totalQty, BigDecimal totalCost, BigDecimal totalFee, String feeCurrency, BigDecimal avgExitPrice) {
+            this.totalQty = totalQty;
+            this.totalCost = totalCost;
+            this.totalFee = totalFee;
+            this.feeCurrency = feeCurrency;
+            this.avgExitPrice = avgExitPrice;
         }
     }
 
-    public void tokocryptoCloseLongMarketOrder(Users user, Optional<Trades> activeTradeOpt, MarketData marketData, String asset) {
-        activeTradeOpt.ifPresent(trade -> {
-            try {
-                MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
-                        .symbol("BTC_USDT")
-                        .side(1)
-                        .amount(trade.getEntryExecutedQty())
-                        .isQuoteQty(false)
-                        .apiKey(user.getApiKey())
-                        .apiSecret(user.getApiSecret())
-                        .build();
+    public void binanceCloseLongMarketOrder(
+            Users user,
+           Trades activeTradeOpt,
+            String asset
+    ) {
+        Trades trade = validateCloseLongOrderInputs(user, activeTradeOpt, asset);
+        if (trade == null) {
+            return;
+        }
 
-                MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
+        try {
+            BigDecimal closeQty = trade.getEntryExecutedQty();
 
-                OrderDetailRequest orderDetailRequest = OrderDetailRequest.builder()
-                        .orderId(String.valueOf(marketOrderResponse.getOrderId()))
-                        .recvWindow(5000)
-                        .apiKey(user.getApiKey())
-                        .apiSecret(user.getApiSecret())
-                        .build();
+            BinanceOrderRequest request = BinanceOrderRequest.builder()
+                    .symbol(asset)
+                    .side("SELL")
+                    .amount(closeQty)
+                    .apiKey(user.getApiKey())
+                    .apiSecret(user.getApiSecret())
+                    .build();
 
-                OrderDetailResponse orderDetailResponse = tradeExecutionService.getOrderDetail(orderDetailRequest);
+            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
+            
+            FillProcessingResult result = processOrderFills(response);
+            updateTradeWithExitData(trade, response, result);
+            tradesRepository.save(trade);
 
-                trade.setExitOrderId(marketOrderResponse.getOrderId());
-                trade.setExitExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
-                trade.setExitExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
-//                trade.setIsActive("0");
-                trade.setExitTime(LocalDateTime.now());
-                trade.setExitPrice(marketData.getClosePrice());
-                trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), trade.getExitPrice(), trade.getEntryExecutedQty(), TradeType.LONG));
-                trade.setPlPercent(calculatePLPercentage(trade.getEntryPrice(), trade.getExitPrice() ,TradeType.LONG));
+            log.info("✅ Long position closed for {} | orderId={} | avgExitPrice={}",
+                    asset, response.getOrderId(), result.avgExitPrice);
 
-                tradesRepository.save(trade);
-                log.info("❌ Long order executed. Long Trade closed for {} at {}", asset, orderDetailResponse.getExecutedPrice());
-            } catch (Exception e) {
-                log.error("❌ Error closing market order: ", e);
-            }
-        });
+        } catch (Exception e) {
+            log.error("❌ Error closing long market order for {}", asset, e);
+        }
     }
 
-    public void binanceOpenShortMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
+    private void updateTradeWithExitData(Trades trade, BinanceOrderResponse response, FillProcessingResult result) {
+        trade.setExitOrderId(response.getOrderId());
+        trade.setExitExecutedQty(result.totalQty);
+        trade.setExitExecutedQuoteQty(result.totalCost);
+        trade.setExitFee(result.totalFee);
+        trade.setExitFeeCurrency(result.feeCurrency);
+        trade.setExitPrice(result.avgExitPrice);
+        trade.setExitTime(LocalDateTime.now());
+        trade.setStatus("CLOSED");
+        trade.setPlAmount(
+                calculatePLAmount(
+                        trade.getEntryPrice(),
+                        result.avgExitPrice,
+                        trade.getEntryExecutedQty(),
+                        TradeType.LONG
+                )
+        );
+        trade.setPlPercent(
+                calculatePLPercentage(
+                        trade.getEntryPrice(),
+                        result.avgExitPrice,
+                        TradeType.LONG
+                )
+        );
+    }
+
+    public void binanceOpenShortMarketOrder( Users user,
+            String asset,
+            TradeDecision decision,
+            String tradePlan,
+            BigDecimal tradeAmount,
+                                             String interval
+    ) {
         try {
             BinanceOrderRequest binanceOrderRequest = BinanceOrderRequest.builder()
-                    .symbol("BTCUSDT")
+                    .symbol(asset)
                     .side("SELL")
                     .amount(tradeAmount)
                     .apiKey(user.getApiKey())
                     .apiSecret(user.getApiSecret())
                     .build();
 
-            BinanceOrderResponse binanceOrderResponse = tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
+            BinanceOrderResponse binanceOrderResponse =
+                    tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
 
             BigDecimal totalQty = BigDecimal.ZERO;
             BigDecimal totalCost = BigDecimal.ZERO;
             BigDecimal totalFee = BigDecimal.ZERO;
+            String feeCurrency = null;
 
-            for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
-                BigDecimal qty = new BigDecimal(fill.getQty());
-                BigDecimal price = new BigDecimal(fill.getPrice());
-                BigDecimal commission = new BigDecimal(fill.getCommission());
-                totalQty = totalQty.add(qty);
-                totalCost = totalCost.add(price.multiply(qty));
-                totalFee = totalFee.add(commission);
-            }
-
-            BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
-
-            // 3. Save trade record
-            Trades newTrade = new Trades();
-            newTrade.setUserId(user.getId());
-            newTrade.setAsset(asset);
-//            newTrade.setTradePlan(tradePlan);
-            newTrade.setEntryOrderId(binanceOrderResponse.getOrderId());
-//            newTrade.setAction("SHORT");
-            newTrade.setEntryPrice(avgEntryPrice);
-            newTrade.setEntryExecutedQty(totalQty);
-            newTrade.setEntryExecutedQuoteQty(totalCost);
-//            newTrade.setFeeCurrency(binanceOrderResponse.getFills().getFirst().getCommissionAsset());
-            newTrade.setEntryFee(totalFee);
-//            newTrade.setStopLossPrice(decision.getStopLossPrice());
-            newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-//            newTrade.setIsActive("1");
-            newTrade.setEntryTime(LocalDateTime.now());
-
-            tradesRepository.save(newTrade);
-            log.info("✅ Short order placed for {} at avg price: {}", asset, avgEntryPrice);
-        } catch (Exception e) {
-            log.error("❌ Error placing short market order: ", e);
-        }
-    }
-
-    public void binanceCloseShortMarketOrder(Users user, Optional<Trades> activeTradeOpt, MarketData marketData, String asset) {
-        if (user == null) {
-            log.info("User Data is Null!");
-            return;
-        }
-
-        activeTradeOpt.ifPresent(trade -> {
-            try {
-                double currentBtcPrice = binanceClientService.getCurrentBtcPrice();
-                BigDecimal btcAmount = trade.getEntryExecutedQty();
-
-                BigDecimal usdtAmountWithBuffer = btcAmount
-                        .multiply(BigDecimal.valueOf(currentBtcPrice))
-                        .multiply(new BigDecimal("1.01"))
-                        .setScale(2, RoundingMode.UP);
-
-                BinanceOrderRequest binanceOrderRequest = BinanceOrderRequest.builder()
-                        .symbol("BTCUSDT")
-                        .side("BUY") // Buying back to close short
-                        .amount(usdtAmountWithBuffer)
-                        .apiKey(user.getApiKey())
-                        .apiSecret(user.getApiSecret())
-                        .build();
-
-                BinanceOrderResponse binanceOrderResponse = tradeExecutionService.binanceMarketOrder(binanceOrderRequest);
-
-                // 2. Weighted average from fills
-                BigDecimal totalQty = BigDecimal.ZERO;
-                BigDecimal totalCost = BigDecimal.ZERO;
-                BigDecimal totalFee = BigDecimal.ZERO;
-
-
+            if (binanceOrderResponse.getFills() != null && !binanceOrderResponse.getFills().isEmpty()) {
                 for (BinanceOrderFill fill : binanceOrderResponse.getFills()) {
                     BigDecimal qty = new BigDecimal(fill.getQty());
                     BigDecimal price = new BigDecimal(fill.getPrice());
                     BigDecimal commission = new BigDecimal(fill.getCommission());
+
                     totalQty = totalQty.add(qty);
                     totalCost = totalCost.add(price.multiply(qty));
                     totalFee = totalFee.add(commission);
+
+                    if (feeCurrency == null) {
+                        feeCurrency = fill.getCommissionAsset();
+                    }
                 }
-
-                BigDecimal avgExitPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
-
-                // 3. Close trade record
-                trade.setExitOrderId(binanceOrderResponse.getOrderId());
-                trade.setExitExecutedQuoteQty(totalCost);
-                trade.setExitExecutedQty(totalQty);
-                trade.setExitFee(totalFee);
-//                trade.setIsActive("0");
-                trade.setExitTime(LocalDateTime.now());
-                trade.setExitPrice(avgExitPrice);
-                trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), avgExitPrice, trade.getEntryExecutedQty(), TradeType.SHORT));
-                trade.setPlPercent(calculatePLPercentage(trade.getEntryPrice(), avgExitPrice, TradeType.SHORT));
-
-                tradesRepository.save(trade);
-
-                log.info("✅ Short position closed for {} at avg price: {}", asset, avgExitPrice);
-
-            } catch (Exception e) {
-                log.error("❌ Error closing short market order: ", e);
             }
-        });
-    }
 
+            if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalStateException("Order executed but total filled quantity is zero.");
+            }
 
+            BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
 
-    public void openShortMarketOrder(Users user, String asset, TradeDecision decision, String tradePlan, BigDecimal tradeAmount) {
-        try {
-            MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
-                    .symbol("BTC_USDT")
-                    .side(1)
-                    .amount(tradeAmount)
-                    .isQuoteQty(false)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
+            Trades newTrade = Trades.builder()
+                    .userId(user.getId())
+                    .strategyName(tradePlan) // assuming tradePlan = strategy name for now
+                    .interval(interval) // replace later with real interval from your strategy/decision
+                    .exchange("BINANCE")
+                    .asset(asset)
+                    .side("SHORT")
+                    .status("OPEN")
+                    .entryOrderId(binanceOrderResponse.getOrderId())
+                    .entryExecutedQty(totalQty)
+                    .entryExecutedQuoteQty(totalCost)
+                    .entryFee(totalFee)
+                    .entryFeeCurrency(feeCurrency)
+                    .entryPrice(avgEntryPrice)
+                    .initialStopLossPrice(decision.getStopLossPrice())
+                    .currentStopLossPrice(decision.getStopLossPrice())
+                    .takeProfitPrice(decision.getTakeProfitPrice())
+                    .entryTime(LocalDateTime.now())
                     .build();
-
-            MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
-
-            OrderDetailRequest orderDetailRequest = OrderDetailRequest.builder()
-                    .orderId(String.valueOf(marketOrderResponse.getOrderId()))
-                    .recvWindow(5000)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
-                    .build();
-
-            OrderDetailResponse orderDetailResponse = tradeExecutionService.getOrderDetail(orderDetailRequest);
-
-            Trades newTrade = new Trades();
-            newTrade.setUserId(user.getId());
-            newTrade.setAsset(asset);
-//            newTrade.setTradePlan(tradePlan);
-            newTrade.setEntryOrderId(marketOrderResponse.getOrderId());
-//            newTrade.setAction("SHORT");
-            newTrade.setEntryPrice(new BigDecimal(orderDetailResponse.getExecutedPrice()));
-            newTrade.setEntryExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
-            newTrade.setEntryExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
-//            newTrade.setStopLossPrice(decision.getStopLossPrice());
-            newTrade.setTakeProfitPrice(decision.getTakeProfitPrice());
-//            newTrade.setIsActive("1");
-            newTrade.setEntryTime(LocalDateTime.now());
 
             tradesRepository.save(newTrade);
 
-            log.info("✅ Short order placed for {} at {}", asset, orderDetailResponse.getExecutedPrice());
+            log.info("✅ Short order placed for {} at avg price: {}", asset, avgEntryPrice);
+
         } catch (Exception e) {
-            log.error("❌ Error placing market order: ", e);
+            log.error("❌ Error placing short market order for asset {}", asset, e);
         }
     }
 
-    public void tokocryptoCloseShortMarketOrder(Users user, Optional<Trades> activeTradeOpt, MarketData marketData, String asset) {
 
-        if (user == null){
-            log.info("User Data is Null!");
+    public void binanceCloseShortMarketOrder(
+            Users user,
+            Trades trade,
+            String asset
+    ) {
+        if (user == null) {
+            log.info("User data is null!");
             return;
         }
-        activeTradeOpt.ifPresent(trade -> {
-            try {
-                MarketOrderRequest marketOrderRequest = MarketOrderRequest.builder()
-                        .symbol("BTC_USDT")
-                        .side(0)
-                        .amount(trade.getEntryExecutedQty())
-                        .isQuoteQty(false)
-                        .apiKey(user.getApiKey())
-                        .apiSecret(user.getApiSecret())
-                        .build();
 
-                MarketOrderResponse marketOrderResponse = tradeExecutionService.placeMarketOrder(marketOrderRequest);
+        if (null == trade) {
+            log.info("No active short trade found for {}", asset);
+            return;
+        }
 
-                OrderDetailRequest orderDetailRequest = OrderDetailRequest.builder()
-                        .orderId(String.valueOf(marketOrderResponse.getOrderId()))
-                        .recvWindow(5000)
-                        .apiKey(user.getApiKey())
-                        .apiSecret(user.getApiSecret())
-                        .build();
+        try {
+            BigDecimal closeQty = trade.getEntryExecutedQty();
 
-                OrderDetailResponse orderDetailResponse = tradeExecutionService.getOrderDetail(orderDetailRequest);
-
-                trade.setExitOrderId(marketOrderResponse.getOrderId());
-                trade.setExitExecutedQuoteQty(new BigDecimal(orderDetailResponse.getExecutedQuoteQty()));
-                trade.setExitExecutedQty(new BigDecimal(orderDetailResponse.getExecutedQty()));
-//                trade.setIsActive("0");
-
-                trade.setExitTime(LocalDateTime.now());
-                trade.setExitPrice(marketData.getClosePrice());
-                trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), trade.getExitPrice(), trade.getEntryExecutedQty(), TradeType.SHORT));
-                trade.setPlPercent(calculatePLPercentage(trade.getEntryPrice(), trade.getExitPrice() ,TradeType.SHORT));
-
-                tradesRepository.save(trade);
-                log.info("❌ Short order executed. Short Trade closed for {} at {}", asset, orderDetailResponse.getExecutedPrice());
-            } catch (Exception e) {
-                log.error("❌ Error closing market order: ", e);
+            if (closeQty == null || closeQty.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalStateException("Entry executed quantity is invalid for closing short trade.");
             }
-        });
+
+            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(
+                    BinanceOrderRequest.builder()
+                            .symbol(asset)
+                            .side("BUY")
+                            .amount(closeQty)
+                            .apiKey(user.getApiKey())
+                            .apiSecret(user.getApiSecret())
+                            .build()
+            );
+
+            OrderSummary summary = summarizeOrderResponse(response);
+            BigDecimal avgExitPrice = summary.getTotalCost().divide(summary.getTotalQty(), 8, RoundingMode.HALF_UP);
+
+            trade.setExitOrderId(response.getOrderId());
+            trade.setExitExecutedQty(summary.getTotalQty());
+            trade.setExitExecutedQuoteQty(summary.getTotalCost());
+            trade.setExitFee(summary.getTotalFee());
+            trade.setExitFeeCurrency(summary.getFeeCurrency());
+            trade.setExitPrice(avgExitPrice);
+            trade.setExitTime(LocalDateTime.now());
+            trade.setStatus("CLOSED");
+            trade.setPlAmount(calculatePLAmount(trade.getEntryPrice(), avgExitPrice, trade.getEntryExecutedQty(), TradeType.SHORT));
+            trade.setPlPercent(calculatePLPercentage(trade.getEntryPrice(), avgExitPrice, TradeType.SHORT));
+
+            tradesRepository.save(trade);
+
+            log.info("✅ Short position closed for {} at avg price: {}", asset, avgExitPrice);
+
+        } catch (Exception e) {
+            log.error("❌ Error closing short market order for {}", asset, e);
+        }
     }
+
+
+
+
+    public OrderSummary summarizeOrderResponse(BinanceOrderResponse response) {
+        BigDecimal totalQty = BigDecimal.ZERO;
+        BigDecimal totalCost = BigDecimal.ZERO;
+        BigDecimal totalFee = BigDecimal.ZERO;
+        String feeCurrency = null;
+
+        if (response.getFills() != null && !response.getFills().isEmpty()) {
+            for (BinanceOrderFill fill : response.getFills()) {
+                BigDecimal qty = new BigDecimal(fill.getQty());
+                BigDecimal price = new BigDecimal(fill.getPrice());
+                BigDecimal commission = new BigDecimal(fill.getCommission());
+
+                totalQty = totalQty.add(qty);
+                totalCost = totalCost.add(price.multiply(qty));
+                totalFee = totalFee.add(commission);
+
+                if (feeCurrency == null) {
+                    feeCurrency = fill.getCommissionAsset();
+                }
+            }
+        }
+
+        if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("Close order executed but total filled quantity is zero.");
+        }
+
+        return new OrderSummary(totalQty, totalCost, totalFee, feeCurrency);
+    }
+
+
 
     public static BigDecimal calculatePLAmount(BigDecimal entryPrice, BigDecimal exitPrice, BigDecimal quantity, TradeType tradeType) {
         BigDecimal profitLoss;
@@ -465,15 +436,6 @@ public class TradeUtil {
         }
 
         return profitLoss.multiply(BigDecimal.valueOf(100)).setScale(4, RoundingMode.HALF_UP);
-    }
-
-    public TradeDecision createTradeDecision(String action, BigDecimal positionSize, BigDecimal stopLoss, BigDecimal takeProfit) {
-        return TradeDecision.builder()
-                .action(action)
-                .positionSize(positionSize)
-                .stopLossPrice(stopLoss)
-                .takeProfitPrice(takeProfit)
-                .build();
     }
 
 }

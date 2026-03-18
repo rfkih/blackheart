@@ -28,26 +28,5 @@ public interface TradesRepository extends JpaRepository<Trades, Long> {
             @Param("strategyName") String strategyName,
             @Param("interval") String interval
     );
-
-
-    @Query(value = """
-        SELECT *
-        FROM trades
-        WHERE user_id = :userId
-          AND asset = :asset
-          AND is_active = :isActive
-          AND trade_plan = :tradePlan
-        ORDER BY entry_time DESC
-        LIMIT 1
-        """, nativeQuery = true)
-    Optional<Trades> findByUserIdAndAssetAndIsActiveAndTradePlan(
-            @Param("userId") Long userId,
-            @Param("asset") String asset,
-            @Param("isActive") String isActive,
-            @Param("tradePlan") String tradePlan
-    );
-//    Optional<Trades> findByUserIdAndAssetAndIsActiveAndTradePlanAndAction(Long userId, String asset, String isActive, String tradePlan, String Action);
-//    Optional<Trades> findByUserIdAndAssetAndIsActiveAndTradePlan(Long userId, String asset, String isActive, String tradePlan);
-//    List<Trades> findByAssetAndIsActive(String asset, String isActive);
 }
 
