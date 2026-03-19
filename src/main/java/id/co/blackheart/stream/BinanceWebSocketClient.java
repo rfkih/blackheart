@@ -5,6 +5,7 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
 import id.co.blackheart.service.marketdata.MarketDataService;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
@@ -53,6 +54,7 @@ public class BinanceWebSocketClient {
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
+    private final LiveTradeListenerService liveTradeListenerService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
@@ -275,6 +277,8 @@ public class BinanceWebSocketClient {
                 }
             }
         }
+
+        liveTradeListenerService.process(SYMBOL, marketData);
     }
 
     private boolean requiresFeatureComputation(String interval) {

@@ -6,11 +6,23 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface TradesRepository extends JpaRepository<Trades, Long> {
+
+    @Query(value = """
+    SELECT *
+    FROM trades
+    WHERE asset = :asset
+      AND status = 'OPEN'
+    ORDER BY entry_time ASC
+    """, nativeQuery = true)
+    List<Trades> findAllOpenTradesByAsset(
+            @Param("asset") String asset
+    );
 
     @Query(value = """
         SELECT *

@@ -3,6 +3,7 @@ package id.co.blackheart.service.live;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
+import id.co.blackheart.dto.tradelistener.ListenerDecision;
 import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.model.Users;
@@ -15,6 +16,9 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+
+import static id.co.blackheart.service.strategy.TrendFollowingStrategyService.SIDE_LONG;
+import static id.co.blackheart.service.strategy.TrendFollowingStrategyService.SIDE_SHORT;
 
 @Slf4j
 @Service
@@ -37,6 +41,44 @@ public class LiveTradingDecisionExecutorService {
             case UPDATE_TRAILING_STOP -> executeUpdateTrailingStop(activeTrade, decision);
             case HOLD -> log.debug("No execution for HOLD");
         }
+    }
+
+    public void executeListenerClose(Users user,Trades activeTrade,String asset,ListenerDecision listenerDecision) throws JsonProcessingException {
+        if (activeTrade == null) {
+            log.warn("Listener close skipped because activeTrade is null");
+            return;
+        }
+
+        if (listenerDecision == null || !listenerDecision.isTriggered()) {
+            log.debug("Listener close skipped because decision is not triggered");
+            return;
+        }
+
+        activeTrade.setExitReason(listenerDecision.getExitReason());
+        tradesRepository.save(activeTrade);
+
+        if (SIDE_LONG.equalsIgnoreCase(activeTrade.getSide())) {
+            if ("BNC".equalsIgnoreCase(user.getExchange())) {
+                tradeUtil.binanceCloseLongMarketOrder(user, activeTrade, asset);
+                return;
+            }
+
+            log.warn("Unsupported exchange for LONG listener close: {}", user.getExchange());
+            return;
+        }
+
+        if (SIDE_SHORT.equalsIgnoreCase(activeTrade.getSide())) {
+            if ("BNC".equalsIgnoreCase(user.getExchange())) {
+                tradeUtil.binanceCloseShortMarketOrder(user, activeTrade, asset);
+                return;
+            }
+
+            log.warn("Unsupported exchange for SHORT listener close: {}", user.getExchange());
+            return;
+        }
+
+        log.warn("Listener close skipped because trade side is unknown | tradeId={} side={}",
+                activeTrade.getTradeId(), activeTrade.getSide());
     }
 
     private void executeOpenLong(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {

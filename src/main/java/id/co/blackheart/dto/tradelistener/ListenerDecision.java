@@ -16,13 +16,17 @@ import java.time.LocalDateTime;
 public class ListenerDecision {
 
     private boolean triggered;
+    private String decisionType;
     private String exitReason;
+    private String source;
     private BigDecimal exitPrice;
     private LocalDateTime exitTime;
 
     public static ListenerDecision none() {
         return ListenerDecision.builder()
                 .triggered(false)
+                .decisionType("NONE")
+                .source("LISTENER")
                 .build();
     }
 }

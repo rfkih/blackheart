@@ -21,8 +21,8 @@ public class TrendFollowingStrategyService {
 
     public static final String STRATEGY_NAME = "TREND_FOLLOWING";
 
-    private static final String SIDE_LONG = "LONG";
-    private static final String SIDE_SHORT = "SHORT";
+    public static final String SIDE_LONG = "LONG";
+    public static final String SIDE_SHORT = "SHORT";
 
     private static final String EXIT_STOP_LOSS = "STOP_LOSS";
     private static final String EXIT_TAKE_PROFIT = "TAKE_PROFIT";
