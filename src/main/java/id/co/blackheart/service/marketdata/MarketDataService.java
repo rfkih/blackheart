@@ -125,11 +125,13 @@ public class MarketDataService {
 
                 log.info("✅ Inserted missing candlestick. symbol={} interval={} startTime={} endTime={}",
                         symbol, interval, marketData.getStartTime(), marketData.getEndTime());
+
+                if (shouldComputeIndicators(interval)) {
+                    technicalIndicatorService.computeIndicatorsAndStore(symbol, interval, marketData.getStartTime());
+                }
             }
 
-            if (insertedCount > 0 && shouldComputeIndicators(interval)) {
-                technicalIndicatorService.computeIndicatorsAndStore(symbol, interval);
-            }
+
 
             log.info("Missing candle fetch completed. symbol={} interval={} inserted={}",symbol, interval, insertedCount);
 

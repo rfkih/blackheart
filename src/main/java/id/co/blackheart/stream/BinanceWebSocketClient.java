@@ -186,7 +186,7 @@ public class BinanceWebSocketClient {
                 persistMarketData(interval, incomingMarketData);
             }
 
-            processPostPersist(interval, incomingMarketData);
+            processPostPersist(interval, incomingMarketData, incomingMarketData.getStartTime());
 
             return Mono.empty();
 
@@ -255,11 +255,11 @@ public class BinanceWebSocketClient {
         log.info("Inserted candle | symbol={} interval={} endTime={} close={}",SYMBOL,interval,marketData.getEndTime(),marketData.getClosePrice());
     }
 
-    private void processPostPersist(String interval, MarketData marketData) {
+    private void processPostPersist(String interval, MarketData marketData, LocalDateTime startTIme) {
         FeatureStore featureStore = null;
 
         if (requiresFeatureComputation(interval)) {
-            featureStore = technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval);
+            featureStore = technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval, startTIme);
         }
 
         if ("4h".equals(interval) && featureStore != null) {

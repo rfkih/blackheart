@@ -12,6 +12,24 @@ import java.util.List;
 @Repository
 public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
 
+
+
+    @Query(value = """
+    SELECT *
+    FROM market_data
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND start_time >= :startTime
+      AND end_time <= :endTime
+    ORDER BY start_time ASC
+    """, nativeQuery = true)
+    List<MarketData> findBySymbolIntervalAndRange(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
     @Query(
             value = """
                     SELECT *
@@ -26,6 +44,39 @@ public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
     List<MarketData> findLast300BySymbolAndInterval(
             @Param("symbol") String symbol,
             @Param("interval") String interval
+    );
+
+    @Query(value = """
+    SELECT *
+    FROM market_data
+    WHERE symbol = :symbol
+      AND interval = :interval
+    ORDER BY start_time DESC
+    LIMIT :limit
+    """, nativeQuery = true)
+    List<MarketData> findLatestCandles(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("limit") int limit
+    );
+
+
+    @Query(
+            value = """
+                    SELECT *
+                    FROM market_data
+                    WHERE symbol = :symbol
+                      AND "interval" = :interval
+                      AND start_time <= :startTime
+                    ORDER BY start_time DESC
+                    LIMIT 300
+                    """,
+            nativeQuery = true
+    )
+    List<MarketData> findLast300BySymbolAndIntervalAndTime(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime
     );
 
     @Query(

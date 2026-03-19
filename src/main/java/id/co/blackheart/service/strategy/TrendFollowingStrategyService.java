@@ -1,11 +1,11 @@
 package id.co.blackheart.service.strategy;
 
+import id.co.blackheart.dto.strategy.PositionSnapshot;
 import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
-import id.co.blackheart.model.Trades;
-import id.co.blackheart.util.TradeConstant.*;
+import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -47,17 +47,13 @@ public class TrendFollowingStrategyService {
             return hold(null, "Context / marketData / featureStore / user is null");
         }
 
-        String interval = context.getInterval();
+        String interval = resolveInterval(context);
         MarketData marketData = context.getMarketData();
         FeatureStore featureStore = context.getFeatureStore();
-        Trades activeTrade = context.getActiveTrade();
+        PositionSnapshot positionSnapshot = context.getPositionSnapshot();
 
         if (marketData.getClosePrice() == null) {
             return hold(interval, "Close price is null");
-        }
-
-        if (interval == null || interval.isBlank()) {
-            interval = featureStore.getInterval();
         }
 
         if (interval == null || interval.isBlank()) {
@@ -69,10 +65,13 @@ public class TrendFollowingStrategyService {
         }
 
         if (!interval.equalsIgnoreCase(featureStore.getInterval())) {
-            return hold(interval, "Feature interval mismatch. expected=" + interval + ", actual=" + featureStore.getInterval());
+            return hold(
+                    interval,
+                    "Feature interval mismatch. expected=" + interval + ", actual=" + featureStore.getInterval()
+            );
         }
 
-        if (activeTrade != null) {
+        if (hasOpenPosition(positionSnapshot)) {
             return evaluateOpenTrade(context, interval);
         }
 
@@ -128,15 +127,17 @@ public class TrendFollowingStrategyService {
         }
 
         boolean bearishRegime = isBearishRegime(featureStore, closePrice);
+        boolean strongTrendForShort = hasStrongTrend(featureStore);
         boolean bearishMomentum = hasBearishMomentum(featureStore);
+        boolean acceptableVolumeForShort = hasAcceptableVolume(featureStore);
         boolean validShortTrigger = isValidShortTrigger(featureStore);
 
         log.info(
                 "Short entry check | asset={} strategy={} interval={} bearishRegime={} strongTrend={} bearishMomentum={} acceptableVolume={} validShortTrigger={}",
-                asset, STRATEGY_NAME, interval, bearishRegime, strongTrend, bearishMomentum, acceptableVolume, validShortTrigger
+                asset, STRATEGY_NAME, interval, bearishRegime, strongTrendForShort, bearishMomentum, acceptableVolumeForShort, validShortTrigger
         );
 
-        if (bearishRegime && strongTrend && bearishMomentum && acceptableVolume && validShortTrigger) {
+        if (bearishRegime && strongTrendForShort && bearishMomentum && acceptableVolumeForShort && validShortTrigger) {
             Optional<BigDecimal> atrOpt = getValidAtr(featureStore);
             if (atrOpt.isEmpty()) {
                 return hold(interval, "ATR invalid for short entry");
@@ -166,15 +167,15 @@ public class TrendFollowingStrategyService {
     }
 
     private StrategyDecision evaluateOpenTrade(StrategyContext context, String interval) {
-        Trades activeTrade = context.getActiveTrade();
+        PositionSnapshot position = context.getPositionSnapshot();
         MarketData marketData = context.getMarketData();
         FeatureStore featureStore = context.getFeatureStore();
         String asset = context.getAsset();
 
         BigDecimal closePrice = marketData.getClosePrice();
 
-        if (SIDE_LONG.equalsIgnoreCase(activeTrade.getSide())) {
-            String exitReason = getLongExitReason(activeTrade, marketData, featureStore);
+        if (SIDE_LONG.equalsIgnoreCase(position.getSide())) {
+            String exitReason = getLongExitReason(position, marketData, featureStore);
             if (exitReason != null) {
                 return StrategyDecision.builder()
                         .decisionType(DecisionType.CLOSE_LONG)
@@ -186,11 +187,8 @@ public class TrendFollowingStrategyService {
                         .build();
             }
 
-            BigDecimal trailingStop = calculateTrailingStop(activeTrade, closePrice, featureStore);
-            if (trailingStop != null
-                    && (activeTrade.getCurrentStopLossPrice() == null
-                    || trailingStop.compareTo(activeTrade.getCurrentStopLossPrice()) > 0)) {
-
+            BigDecimal trailingStop = calculateTrailingStop(position, closePrice, featureStore);
+            if (shouldRaiseLongStop(position, trailingStop)) {
                 return StrategyDecision.builder()
                         .decisionType(DecisionType.UPDATE_TRAILING_STOP)
                         .strategyName(STRATEGY_NAME)
@@ -207,14 +205,14 @@ public class TrendFollowingStrategyService {
                     interval,
                     asset,
                     closePrice,
-                    activeTrade.getCurrentStopLossPrice(),
-                    activeTrade.getTakeProfitPrice());
+                    position.getCurrentStopLossPrice(),
+                    position.getTakeProfitPrice());
 
             return hold(interval, "Open long remains valid");
         }
 
-        if (SIDE_SHORT.equalsIgnoreCase(activeTrade.getSide())) {
-            String exitReason = getShortExitReason(activeTrade, marketData, featureStore);
+        if (SIDE_SHORT.equalsIgnoreCase(position.getSide())) {
+            String exitReason = getShortExitReason(position, marketData, featureStore);
             if (exitReason != null) {
                 return StrategyDecision.builder()
                         .decisionType(DecisionType.CLOSE_SHORT)
@@ -226,11 +224,8 @@ public class TrendFollowingStrategyService {
                         .build();
             }
 
-            BigDecimal trailingStop = calculateTrailingStop(activeTrade, closePrice, featureStore);
-            if (trailingStop != null
-                    && (activeTrade.getCurrentStopLossPrice() == null
-                    || trailingStop.compareTo(activeTrade.getCurrentStopLossPrice()) < 0)) {
-
+            BigDecimal trailingStop = calculateTrailingStop(position, closePrice, featureStore);
+            if (shouldLowerShortStop(position, trailingStop)) {
                 return StrategyDecision.builder()
                         .decisionType(DecisionType.UPDATE_TRAILING_STOP)
                         .strategyName(STRATEGY_NAME)
@@ -247,8 +242,8 @@ public class TrendFollowingStrategyService {
                     interval,
                     asset,
                     closePrice,
-                    activeTrade.getCurrentStopLossPrice(),
-                    activeTrade.getTakeProfitPrice());
+                    position.getCurrentStopLossPrice(),
+                    position.getTakeProfitPrice());
 
             return hold(interval, "Open short remains valid");
         }
@@ -256,14 +251,14 @@ public class TrendFollowingStrategyService {
         return hold(interval, "Unknown trade side");
     }
 
-    private String getLongExitReason(Trades trade, MarketData marketData, FeatureStore featureStore) {
+    private String getLongExitReason(PositionSnapshot position, MarketData marketData, FeatureStore featureStore) {
         BigDecimal closePrice = marketData.getClosePrice();
 
-        boolean stopLossHit = trade.getCurrentStopLossPrice() != null
-                && closePrice.compareTo(trade.getCurrentStopLossPrice()) <= 0;
+        boolean stopLossHit = position.getCurrentStopLossPrice() != null
+                && closePrice.compareTo(position.getCurrentStopLossPrice()) <= 0;
 
-        boolean takeProfitHit = trade.getTakeProfitPrice() != null
-                && closePrice.compareTo(trade.getTakeProfitPrice()) >= 0;
+        boolean takeProfitHit = position.getTakeProfitPrice() != null
+                && closePrice.compareTo(position.getTakeProfitPrice()) >= 0;
 
         boolean regimeBroken = !"BULL".equalsIgnoreCase(featureStore.getTrendRegime());
 
@@ -280,14 +275,14 @@ public class TrendFollowingStrategyService {
         return null;
     }
 
-    private String getShortExitReason(Trades trade, MarketData marketData, FeatureStore featureStore) {
+    private String getShortExitReason(PositionSnapshot position, MarketData marketData, FeatureStore featureStore) {
         BigDecimal closePrice = marketData.getClosePrice();
 
-        boolean stopLossHit = trade.getCurrentStopLossPrice() != null
-                && closePrice.compareTo(trade.getCurrentStopLossPrice()) >= 0;
+        boolean stopLossHit = position.getCurrentStopLossPrice() != null
+                && closePrice.compareTo(position.getCurrentStopLossPrice()) >= 0;
 
-        boolean takeProfitHit = trade.getTakeProfitPrice() != null
-                && closePrice.compareTo(trade.getTakeProfitPrice()) <= 0;
+        boolean takeProfitHit = position.getTakeProfitPrice() != null
+                && closePrice.compareTo(position.getTakeProfitPrice()) <= 0;
 
         boolean regimeBroken = !"BEAR".equalsIgnoreCase(featureStore.getTrendRegime());
 
@@ -304,22 +299,36 @@ public class TrendFollowingStrategyService {
         return null;
     }
 
-    private BigDecimal calculateTrailingStop(Trades activeTrade, BigDecimal closePrice, FeatureStore featureStore) {
-        if (featureStore.getAtr() == null || featureStore.getAtr().compareTo(BigDecimal.ZERO) <= 0) {
+    private BigDecimal calculateTrailingStop(PositionSnapshot position, BigDecimal closePrice, FeatureStore featureStore) {
+        if (position == null
+                || featureStore.getAtr() == null
+                || featureStore.getAtr().compareTo(BigDecimal.ZERO) <= 0) {
             return null;
         }
 
         BigDecimal trailingDistance = featureStore.getAtr().multiply(TRAILING_ATR_MULTIPLIER);
 
-        if (SIDE_LONG.equalsIgnoreCase(activeTrade.getSide())) {
+        if (SIDE_LONG.equalsIgnoreCase(position.getSide())) {
             return closePrice.subtract(trailingDistance);
         }
 
-        if (SIDE_SHORT.equalsIgnoreCase(activeTrade.getSide())) {
+        if (SIDE_SHORT.equalsIgnoreCase(position.getSide())) {
             return closePrice.add(trailingDistance);
         }
 
         return null;
+    }
+
+    private boolean shouldRaiseLongStop(PositionSnapshot position, BigDecimal candidateStop) {
+        return candidateStop != null
+                && (position.getCurrentStopLossPrice() == null
+                || candidateStop.compareTo(position.getCurrentStopLossPrice()) > 0);
+    }
+
+    private boolean shouldLowerShortStop(PositionSnapshot position, BigDecimal candidateStop) {
+        return candidateStop != null
+                && (position.getCurrentStopLossPrice() == null
+                || candidateStop.compareTo(position.getCurrentStopLossPrice()) < 0);
     }
 
     private boolean isBullishRegime(FeatureStore f, BigDecimal closePrice) {
@@ -385,7 +394,7 @@ public class TrendFollowingStrategyService {
     private boolean isValidLongTrigger(FeatureStore f) {
         return Boolean.TRUE.equals(f.getIsBullishBreakout())
                 || Boolean.TRUE.equals(f.getIsBullishPullback())
-                || "LONG".equalsIgnoreCase(f.getEntryBias());
+                || SIDE_LONG.equalsIgnoreCase(f.getEntryBias());
     }
 
     private boolean isValidShortTrigger(FeatureStore f) {
@@ -407,6 +416,22 @@ public class TrendFollowingStrategyService {
 
     private boolean negativeOrZero(BigDecimal value) {
         return value != null && value.compareTo(BigDecimal.ZERO) <= 0;
+    }
+
+    private boolean hasOpenPosition(PositionSnapshot positionSnapshot) {
+        return positionSnapshot != null && positionSnapshot.isHasOpenPosition();
+    }
+
+    private String resolveInterval(StrategyContext context) {
+        if (context.getInterval() != null && !context.getInterval().isBlank()) {
+            return context.getInterval();
+        }
+
+        if (context.getFeatureStore() != null) {
+            return context.getFeatureStore().getInterval();
+        }
+
+        return null;
     }
 
     private StrategyDecision hold(String interval, String reason) {

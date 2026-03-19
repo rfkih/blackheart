@@ -19,6 +19,7 @@ import org.ta4j.core.num.Num;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
@@ -39,12 +40,24 @@ public class TechnicalIndicatorService {
     private final MapperUtil mapperUtil;
 
 
-    public FeatureStore computeIndicatorsAndStore(String symbol, String interval) {
+    public FeatureStore computeIndicatorsAndStoreByStartTime(String symbol, String interval, LocalDateTime startTime) {
+        boolean exists = featureStoreRepository.existsBySymbolAndIntervalAndStartTime(symbol, interval, startTime);
+        if (exists) {
+            log.debug("Feature already exists, skip computation | symbol={} interval={} startTime={}",
+                    symbol, interval, startTime);
+            return null;
+        }
+
+        return computeIndicatorsAndStore(symbol, interval,startTime);
+    }
+
+
+    public FeatureStore computeIndicatorsAndStore(String symbol, String interval, LocalDateTime startTime) {
 
 
 
 
-        List<MarketData> historicalData = marketDataRepository.findLast300BySymbolAndInterval(symbol, interval);
+        List<MarketData> historicalData = marketDataRepository.findLast300BySymbolAndIntervalAndTime(symbol, interval, startTime);
 
         if (historicalData == null || historicalData.size() < 250) {
             log.warn("Not enough historical data to compute indicators for {} {}", symbol, interval);

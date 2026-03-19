@@ -28,13 +28,13 @@ public class LiveTradingDecisionExecutorService {
     private final PortfolioService portfolioService;
     private final TradeUtil tradeUtil;
 
-    public void execute(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
+    public void execute(Trades activeTrade, StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
         switch (decision.getDecisionType()) {
             case OPEN_LONG -> executeOpenLong(context, decision);
             case OPEN_SHORT -> executeOpenShort(context, decision);
-            case CLOSE_LONG -> executeCloseLong(context, decision);
-            case CLOSE_SHORT -> executeCloseShort(context, decision);
-            case UPDATE_TRAILING_STOP -> executeUpdateTrailingStop(context, decision);
+            case CLOSE_LONG -> executeCloseLong(activeTrade, context, decision);
+            case CLOSE_SHORT -> executeCloseShort(activeTrade, context, decision);
+            case UPDATE_TRAILING_STOP -> executeUpdateTrailingStop(activeTrade, decision);
             case HOLD -> log.debug("No execution for HOLD");
         }
     }
@@ -95,9 +95,8 @@ public class LiveTradingDecisionExecutorService {
         log.warn("Unsupported exchange for SHORT entry: {}", user.getExchange());
     }
 
-    private void executeCloseLong(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
+    private void executeCloseLong(Trades activeTrade, StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
         Users user = context.getUser();
-        Trades activeTrade = context.getActiveTrade();
 
         if (activeTrade == null) {
             log.warn("CLOSE_LONG skipped because activeTrade is null");
@@ -115,9 +114,8 @@ public class LiveTradingDecisionExecutorService {
         log.warn("Unsupported exchange for LONG close: {}", user.getExchange());
     }
 
-    private void executeCloseShort(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
+    private void executeCloseShort(Trades activeTrade, StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
         Users user = context.getUser();
-        Trades activeTrade = context.getActiveTrade();
 
         if (activeTrade == null) {
             log.warn("CLOSE_SHORT skipped because activeTrade is null");
@@ -135,9 +133,7 @@ public class LiveTradingDecisionExecutorService {
         log.warn("Unsupported exchange for SHORT close: {}", user.getExchange());
     }
 
-    private void executeUpdateTrailingStop(StrategyContext context, StrategyDecision decision) {
-        Trades activeTrade = context.getActiveTrade();
-
+    private void executeUpdateTrailingStop(Trades activeTrade, StrategyDecision decision) {
         if (activeTrade == null) {
             log.warn("UPDATE_TRAILING_STOP skipped because activeTrade is null");
             return;
