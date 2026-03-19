@@ -68,12 +68,7 @@ public class LiveTradeListenerService {
                         listenerDecision.getExitReason(),
                         listenerDecision.getExitPrice());
 
-                liveTradingDecisionExecutorService.executeListenerClose(
-                        user,
-                        activeTrade,
-                        asset,
-                        listenerDecision
-                );
+                liveTradingDecisionExecutorService.executeListenerClose(user,activeTrade,asset,listenerDecision);
 
             } catch (Exception e) {
                 log.error("Live listener failed | tradeId={} asset={}",

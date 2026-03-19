@@ -5,7 +5,7 @@ import id.co.blackheart.model.BacktestRun;
 import org.springframework.stereotype.Service;
 
 @Service
-public class BacktestMapperService {
+public class BacktestResponseMapper {
 
     public BacktestRunResponse toRunResponse(BacktestRun run) {
         return BacktestRunResponse.builder()

@@ -22,7 +22,7 @@ public class BacktestService {
 
     private final BacktestRunRepository backtestRunRepository;
     private final BacktestCoordinatorService backtestCoordinatorService;
-    private final BacktestMapperService backtestMapperService;
+    private final BacktestResponseMapper backtestMapperService;
 
     public BacktestRunResponse runBacktest(BacktestRunRequest request) {
         validateRequest(request);
