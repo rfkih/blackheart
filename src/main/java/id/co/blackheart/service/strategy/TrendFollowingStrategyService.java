@@ -35,9 +35,9 @@ public class TrendFollowingStrategyService {
     private static final BigDecimal MIN_EFFICIENCY_RATIO = new BigDecimal("0.30");
     private static final BigDecimal MIN_RELATIVE_VOLUME = new BigDecimal("0.80");
 
-    private static final BigDecimal STOP_ATR_MULTIPLIER = new BigDecimal("1.8");
-    private static final BigDecimal TAKE_PROFIT_ATR_MULTIPLIER = new BigDecimal("3.0");
-    private static final BigDecimal TRAILING_ATR_MULTIPLIER = new BigDecimal("2.0");
+    private static final BigDecimal STOP_ATR_MULTIPLIER = new BigDecimal("2.5");
+    private static final BigDecimal TAKE_PROFIT_ATR_MULTIPLIER = new BigDecimal("4.0");
+    private static final BigDecimal TRAILING_ATR_MULTIPLIER = new BigDecimal("3.0");
 
     public StrategyDecision execute(StrategyContext context) {
         if (context == null

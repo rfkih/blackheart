@@ -16,6 +16,21 @@ public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long
 
 
     @Query(value = """
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND start_time BETWEEN :startTime AND :endTime
+    ORDER BY start_time ASC
+    """, nativeQuery = true)
+    List<FeatureStore> findBySymbolIntervalAndRange(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    @Query(value = """
     SELECT EXISTS (
         SELECT 1
         FROM feature_store

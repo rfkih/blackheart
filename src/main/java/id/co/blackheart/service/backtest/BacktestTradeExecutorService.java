@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 
 @Slf4j
@@ -42,6 +43,59 @@ public class BacktestTradeExecutorService {
             case UPDATE_TRAILING_STOP -> updateTrailingStop(state, decision);
             default -> log.debug("Unhandled decisionType={}", decision.getDecisionType());
         }
+    }
+
+
+    public void closeTradeFromListener(
+            BacktestRun run,
+            BacktestState state,
+            StrategyContext context,
+            String exitReason,
+            BigDecimal exitPrice
+    ) {
+        BacktestTrade activeTrade = state.getActiveTrade();
+        if (activeTrade == null) {
+            return;
+        }
+
+        BigDecimal exitQuoteQty = activeTrade.getEntryQty().multiply(exitPrice);
+        BigDecimal exitFee = exitQuoteQty.multiply(run.getFeeRate());
+
+        BigDecimal plAmount;
+        if ("LONG".equalsIgnoreCase(activeTrade.getSide())) {
+            plAmount = exitQuoteQty
+                    .subtract(activeTrade.getEntryQuoteQty())
+                    .subtract(activeTrade.getEntryFee() == null ? BigDecimal.ZERO : activeTrade.getEntryFee())
+                    .subtract(exitFee);
+        } else {
+            plAmount = activeTrade.getEntryQuoteQty()
+                    .subtract(exitQuoteQty)
+                    .subtract(activeTrade.getEntryFee() == null ? BigDecimal.ZERO : activeTrade.getEntryFee())
+                    .subtract(exitFee);
+        }
+
+        BigDecimal plPercent = BigDecimal.ZERO;
+        if (activeTrade.getEntryQuoteQty() != null && activeTrade.getEntryQuoteQty().signum() > 0) {
+            plPercent = plAmount
+                    .divide(activeTrade.getEntryQuoteQty(), 8, java.math.RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("100"));
+        }
+
+        activeTrade.setStatus("CLOSED");
+        activeTrade.setExitTime(context.getMarketData().getEndTime());
+        activeTrade.setExitPrice(exitPrice);
+        activeTrade.setExitQty(activeTrade.getEntryQty());
+        activeTrade.setExitQuoteQty(exitQuoteQty);
+        activeTrade.setExitFee(exitFee);
+        activeTrade.setExitReason(exitReason);
+        activeTrade.setPlAmount(plAmount);
+        activeTrade.setPlPercent(plPercent);
+
+        activeTrade = backtestTradeRepository.save(activeTrade);
+
+        state.setCashBalance(activeTrade.getEntryQuoteQty().add(plAmount));
+        state.getCompletedTrades().add(activeTrade);
+        state.setActiveTrade(null);
     }
 
     private void openLong(BacktestRun run, BacktestState state, StrategyContext context, StrategyDecision decision) {
@@ -171,7 +225,7 @@ public class BacktestTradeExecutorService {
         BigDecimal plPercent = BigDecimal.ZERO;
         if (activeTrade.getEntryQuoteQty() != null && activeTrade.getEntryQuoteQty().signum() > 0) {
             plPercent = plAmount
-                    .divide(activeTrade.getEntryQuoteQty(), 8, BigDecimal.ROUND_HALF_UP)
+                    .divide(activeTrade.getEntryQuoteQty(), 8, RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
         }
 
@@ -187,7 +241,7 @@ public class BacktestTradeExecutorService {
 
         activeTrade = backtestTradeRepository.save(activeTrade);
 
-        state.setCashBalance(exitQuoteQty.subtract(exitFee));
+        state.setCashBalance(activeTrade.getEntryQuoteQty().add(plAmount));
         state.getCompletedTrades().add(activeTrade);
         state.setActiveTrade(null);
     }
