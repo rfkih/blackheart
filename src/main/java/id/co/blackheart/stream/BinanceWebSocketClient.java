@@ -2,8 +2,11 @@ package id.co.blackheart.stream;
 
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
+import id.co.blackheart.model.UserStrategy;
 import id.co.blackheart.model.Users;
+import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.repository.UserStrategyRepository;
 import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
@@ -55,6 +58,8 @@ public class BinanceWebSocketClient {
     private final TechnicalIndicatorService technicalIndicatorService;
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
+    private final UserStrategyRepository userStrategyRepository;
+    private final FeatureStoreRepository featureStoreRepository;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
@@ -257,23 +262,42 @@ public class BinanceWebSocketClient {
         log.info("Inserted candle | symbol={} interval={} endTime={} close={}",SYMBOL,interval,marketData.getEndTime(),marketData.getClosePrice());
     }
 
-    private void processPostPersist(String interval, MarketData marketData, LocalDateTime startTIme) {
+    private void processPostPersist(String interval, MarketData marketData, LocalDateTime startTime) {
         FeatureStore featureStore = null;
 
         if (requiresFeatureComputation(interval)) {
-            featureStore = technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval, startTIme);
+            featureStore = technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval, startTime);
         }
 
-        if ("4h".equals(interval) && featureStore != null) {
-            List<Users> users = usersRepository.findByIsActive("1");
+        if (featureStore != null) {
+            List<UserStrategy> activeStrategies = userStrategyRepository
+                    .findByEnabledTrueAndIntervalName(interval);
 
-            for (Users user : users) {
+            for (UserStrategy userStrategy : activeStrategies) {
                 try {
+                    Users user = usersRepository.findByUserId(userStrategy.getUserId());
 
-                    liveTradingCoordinatorService.process(user, SYMBOL, interval, marketData, featureStore);
+                    if (user == null || !"1".equals(user.getIsActive())) {
+                        continue;
+                    }
+
+                    liveTradingCoordinatorService.process(
+                            user,
+                            userStrategy,
+                            SYMBOL,
+                            interval,
+                            marketData,
+                            featureStore
+                    );
 
                 } catch (Exception e) {
-                    log.error("Trend following strategy failed for user={} asset={}", user.getUserId(), SYMBOL, e);
+                    log.error(
+                            "Live strategy execution failed | userStrategyId={} symbol={} interval={}",
+                            userStrategy.getUserStrategyId(),
+                            SYMBOL,
+                            interval,
+                            e
+                    );
                 }
             }
         }

@@ -8,9 +8,24 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
+
+
+    @Query(value = """
+        SELECT *
+        FROM market_data md
+        WHERE md.symbol = :symbol
+          AND md.interval = :interval
+        ORDER BY md.end_time DESC
+        LIMIT 1
+        """, nativeQuery = true)
+    Optional<MarketData> findLatestBySymbolAndInterval(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval
+    );
 
 
 

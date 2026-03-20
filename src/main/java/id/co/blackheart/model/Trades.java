@@ -24,6 +24,9 @@ public class Trades {
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
+    @Column(name = "user_strategy_id")
+    private UUID userStrategyId;
+
     @Column(name = "strategy_name", nullable = false, length = 50)
     private String strategyName;
 

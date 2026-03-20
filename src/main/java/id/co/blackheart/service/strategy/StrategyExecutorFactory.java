@@ -14,8 +14,8 @@ public class StrategyExecutorFactory {
 
     public StrategyExecutor get(String strategyName) {
         return switch (strategyName) {
-            case "TSMOM_4H" -> tsmom4h;
-            case "BREAKOUT_4H" -> breakout4h;
+            case "TSMOM" -> tsmom4h;
+            case "BREAKOUT" -> breakout4h;
             case "PULLBACK_15M_WITH_4H_BIAS" -> pullback15mBias;
             case "TREND_FOLLOWING" -> trendFollowing;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyName);
