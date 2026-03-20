@@ -59,7 +59,6 @@ public class BinanceWebSocketClient {
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
     private final UserStrategyRepository userStrategyRepository;
-    private final FeatureStoreRepository featureStoreRepository;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 

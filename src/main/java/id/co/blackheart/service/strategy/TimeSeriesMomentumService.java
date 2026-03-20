@@ -16,7 +16,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class TimeSeriesMomentumService implements StrategyExecutor {
 
-    public static final String STRATEGY_NAME = "TSMOM_4H";
+    public static final String STRATEGY_NAME = "TSMOM";
     public static final String SIDE_LONG = "LONG";
 
     /**
