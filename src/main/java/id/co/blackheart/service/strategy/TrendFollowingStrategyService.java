@@ -13,406 +13,319 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
-public class TrendFollowingStrategyService {
+public class TrendFollowingStrategyService implements StrategyExecutor {
+
+    public static final String STRATEGY_NAME = "TREND_FOLLOWING";
+    public static final String SIDE_LONG = "LONG";
+    public static final String SIDE_SHORT = "SHORT";
+    private static final String INTERVAL_15M = "15m";
 
     private final StrategyConfigRepository strategyConfigRepository;
 
-    public static final String STRATEGY_NAME = "TREND_FOLLOWING";
+    /**
+     * true  = always use code config
+     * false = use DB first, fallback to code
+     */
+    private static final boolean FORCE_CODE_CONFIG = false;
 
-    public static final String SIDE_LONG = "LONG";
-    public static final String SIDE_SHORT = "SHORT";
+    private static final Map<String, LocalTrendConfig> CODE_CONFIGS = Map.of(
+            "15m", LocalTrendConfig.builder()
+                    .minAdx(new BigDecimal("25"))
+                    .minEfficiencyRatio(new BigDecimal("0.40"))
+                    .minRelativeVolume(new BigDecimal("1.05"))
+                    .stopAtrMultiplier(new BigDecimal("1.20"))
+                    .takeProfitAtrMultiplier(new BigDecimal("2.00"))
+                    .trailingAtrMultiplier(new BigDecimal("1.00"))
+                    .allowLong(true)
+                    .allowShort(false)
+                    .allowBreakoutEntry(false)
+                    .allowPullbackEntry(true)
+                    .allowBiasEntry(false)
+                    .build(),
 
-    private static final String EXIT_STOP_LOSS = "STOP_LOSS";
-    private static final String EXIT_TAKE_PROFIT = "TAKE_PROFIT";
-    private static final String EXIT_REGIME_REVERSAL = "REGIME_REVERSAL";
-    private static final String EXIT_MOMENTUM_BREAKDOWN = "MOMENTUM_BREAKDOWN";
+            "1h", LocalTrendConfig.builder()
+                    .minAdx(new BigDecimal("23"))
+                    .minEfficiencyRatio(new BigDecimal("0.35"))
+                    .minRelativeVolume(new BigDecimal("1.00"))
+                    .stopAtrMultiplier(new BigDecimal("1.80"))
+                    .takeProfitAtrMultiplier(new BigDecimal("3.00"))
+                    .trailingAtrMultiplier(new BigDecimal("1.50"))
+                    .allowLong(true)
+                    .allowShort(false)
+                    .allowBreakoutEntry(false)
+                    .allowPullbackEntry(true)
+                    .allowBiasEntry(false)
+                    .build(),
 
+            "4h", LocalTrendConfig.builder()
+                    .minAdx(new BigDecimal("22"))
+                    .minEfficiencyRatio(new BigDecimal("0.30"))
+                    .minRelativeVolume(new BigDecimal("0.80"))
+                    .stopAtrMultiplier(new BigDecimal("2.50"))
+                    .takeProfitAtrMultiplier(new BigDecimal("4.00"))
+                    .trailingAtrMultiplier(new BigDecimal("2.00"))
+                    .allowLong(true)
+                    .allowShort(false)
+                    .allowBreakoutEntry(false)
+                    .allowPullbackEntry(false)
+                    .allowBiasEntry(false)
+                    .build()
+    );
+
+    @Override
     public StrategyDecision execute(StrategyContext context) {
         if (context == null
+                || context.getUser() == null
                 || context.getMarketData() == null
-                || context.getFeatureStore() == null
-                || context.getUser() == null) {
-            return hold(null, "Context / marketData / featureStore / user is null");
+                || context.getFeatureStore() == null) {
+            return hold(null, "Invalid context");
         }
 
         String interval = resolveInterval(context);
         MarketData marketData = context.getMarketData();
         FeatureStore featureStore = context.getFeatureStore();
-        PositionSnapshot positionSnapshot = context.getPositionSnapshot();
-        String asset = context.getAsset();
-
-        if (marketData.getClosePrice() == null) {
-            return hold(interval, "Close price is null");
-        }
 
         if (interval == null || interval.isBlank()) {
             return hold(null, "Interval is null");
         }
 
-        if (!interval.equalsIgnoreCase(featureStore.getInterval())) {
-            return hold(interval,"Feature interval mismatch. expected=" + interval + ", actual=" + featureStore.getInterval());
+        if (marketData.getClosePrice() == null) {
+            return hold(interval, "Close price is null");
         }
 
-        Optional<TrendFollowingConfigProjection> configOpt = findConfig(interval, asset);
+        if (featureStore.getInterval() != null
+                && !interval.equalsIgnoreCase(featureStore.getInterval())) {
+            return hold(interval,
+                    "Feature interval mismatch. expected=" + interval + ", actual=" + featureStore.getInterval());
+        }
+
+        if (hasOpenPosition(context.getPositionSnapshot())) {
+            return hold(interval, "Open trade managed by listener");
+        }
+
+        Optional<LocalTrendConfig> configOpt = resolveConfig(interval, context.getAsset());
         if (configOpt.isEmpty()) {
-            return hold(interval, "No active trend following config found");
+            return hold(interval, "No config found from DB or code");
         }
 
-        TrendFollowingConfigProjection config = configOpt.get();
+        LocalTrendConfig config = configOpt.get();
 
-        if (hasOpenPosition(positionSnapshot)) {
-            return evaluateOpenTrade(context, interval, config);
+        boolean effectiveAllowLong =
+                Boolean.TRUE.equals(context.isAllowLong()) && config.allowLong();
+
+        log.info(
+                "Loaded config | source={} asset={} interval={} allowLong={} allowShort={} breakout={} pullback={} bias={} minAdx={} minER={} minRVOL={} stopATR={} tpATR={} trailATR={}",
+                config.source(),
+                context.getAsset(),
+                interval,
+                config.allowLong(),
+                config.allowShort(),
+                config.allowBreakoutEntry(),
+                config.allowPullbackEntry(),
+                config.allowBiasEntry(),
+                config.minAdx(),
+                config.minEfficiencyRatio(),
+                config.minRelativeVolume(),
+                config.stopAtrMultiplier(),
+                config.takeProfitAtrMultiplier(),
+                config.trailingAtrMultiplier()
+        );
+
+        if (!effectiveAllowLong) {
+            return hold(interval, "Long disabled");
         }
 
-        return evaluateNewEntry(context, interval, config);
+        if (INTERVAL_15M.equalsIgnoreCase(interval)) {
+            return evaluate15mWith4hBias(context, config);
+        }
+
+        return evaluateBaselineLongOnly(context, config);
     }
 
-    private Optional<TrendFollowingConfigProjection> findConfig(String interval, String symbol) {
-        if (symbol != null && !symbol.isBlank()) {
-            Optional<TrendFollowingConfigProjection> exact =
-                    strategyConfigRepository.findActiveBySymbol(STRATEGY_NAME, interval, symbol);
-            if (exact.isPresent()) {
-                return exact;
-            }
-        }
-
-        return strategyConfigRepository.findActiveDefault(STRATEGY_NAME, interval);
-    }
-
-    private StrategyDecision evaluateNewEntry(
+    private StrategyDecision evaluateBaselineLongOnly(
             StrategyContext context,
-            String interval,
-            TrendFollowingConfigProjection config
+            LocalTrendConfig config
     ) {
-        MarketData marketData = context.getMarketData();
+        String interval = resolveInterval(context);
         FeatureStore featureStore = context.getFeatureStore();
-        String asset = context.getAsset();
+        BigDecimal close = context.getMarketData().getClosePrice();
 
-        BigDecimal closePrice = marketData.getClosePrice();
-
-        boolean bullishRegime = isBullishRegime(featureStore, closePrice);
+        boolean bullishRegime = isBullishRegime(featureStore, close);
         boolean strongTrend = hasStrongTrend(featureStore, config);
-        boolean bullishMomentum = hasBullishMomentum(featureStore);
         boolean acceptableVolume = hasAcceptableVolume(featureStore, config);
-        boolean validLongTrigger = isValidLongTrigger(featureStore, config);
 
-        log.info(
-                "Long entry check | asset={} strategy={} interval={} configId={} bullishRegime={} strongTrend={} bullishMomentum={} acceptableVolume={} validLongTrigger={}",
-                asset,
-                STRATEGY_NAME,
-                interval,
-                config.getStrategyConfigId(),
-                bullishRegime,
-                strongTrend,
-                bullishMomentum,
-                acceptableVolume,
-                validLongTrigger
-        );
+        if (!bullishRegime) return hold(interval, "Rejected long: bullishRegime=false");
+        if (!strongTrend) return hold(interval, "Rejected long: strongTrend=false");
+        if (!acceptableVolume) return hold(interval, "Rejected long: acceptableVolume=false");
 
-        if (Boolean.TRUE.equals(config.getAllowLong())
-                && bullishRegime
-                && strongTrend
-                && bullishMomentum
-                && acceptableVolume
-                && validLongTrigger) {
-
-            Optional<BigDecimal> atrOpt = getValidAtr(featureStore);
-            if (atrOpt.isEmpty()) {
-                return hold(interval, "ATR invalid for long entry");
-            }
-
-            BigDecimal atr = atrOpt.get();
-            BigDecimal stopLossPrice = closePrice.subtract(atr.multiply(config.getStopAtrMultiplier()));
-            BigDecimal takeProfitPrice = closePrice.add(atr.multiply(config.getTakeProfitAtrMultiplier()));
-
-            return StrategyDecision.builder()
-                    .decisionType(DecisionType.OPEN_LONG)
-                    .strategyName(STRATEGY_NAME)
-                    .strategyInterval(interval)
-                    .side(SIDE_LONG)
-                    .reason("Bullish regime + strong trend + bullish momentum + valid trigger")
-                    .positionSize(BigDecimal.ONE)
-                    .stopLossPrice(stopLossPrice)
-                    .takeProfitPrice(takeProfitPrice)
-                    .entryAdx(featureStore.getAdx())
-                    .entryAtr(featureStore.getAtr())
-                    .entryRsi(featureStore.getRsi())
-                    .entryTrendRegime(featureStore.getTrendRegime())
-                    .build();
+        Optional<BigDecimal> atrOpt = getValidAtr(featureStore);
+        if (atrOpt.isEmpty()) {
+            return hold(interval, "ATR invalid");
         }
 
-        boolean bearishRegime = isBearishRegime(featureStore, closePrice);
-        boolean strongTrendForShort = hasStrongTrend(featureStore, config);
-        boolean bearishMomentum = hasBearishMomentum(featureStore);
-        boolean acceptableVolumeForShort = hasAcceptableVolume(featureStore, config);
-        boolean validShortTrigger = isValidShortTrigger(featureStore, config);
-
-        log.info(
-                "Short entry check | asset={} strategy={} interval={} configId={} bearishRegime={} strongTrend={} bearishMomentum={} acceptableVolume={} validShortTrigger={}",
-                asset,
-                STRATEGY_NAME,
+        return buildOpenLong(
                 interval,
-                config.getStrategyConfigId(),
-                bearishRegime,
-                strongTrendForShort,
-                bearishMomentum,
-                acceptableVolumeForShort,
-                validShortTrigger
+                "Bullish regime + strong trend",
+                featureStore,
+                close,
+                atrOpt.get(),
+                config
         );
-
-        if (Boolean.TRUE.equals(config.getAllowShort())
-                && bearishRegime
-                && strongTrendForShort
-                && bearishMomentum
-                && acceptableVolumeForShort
-                && validShortTrigger) {
-
-            Optional<BigDecimal> atrOpt = getValidAtr(featureStore);
-            if (atrOpt.isEmpty()) {
-                return hold(interval, "ATR invalid for short entry");
-            }
-
-            BigDecimal atr = atrOpt.get();
-            BigDecimal stopLossPrice = closePrice.add(atr.multiply(config.getStopAtrMultiplier()));
-            BigDecimal takeProfitPrice = closePrice.subtract(atr.multiply(config.getTakeProfitAtrMultiplier()));
-
-            return StrategyDecision.builder()
-                    .decisionType(DecisionType.OPEN_SHORT)
-                    .strategyName(STRATEGY_NAME)
-                    .strategyInterval(interval)
-                    .side(SIDE_SHORT)
-                    .reason("Bearish regime + strong trend + bearish momentum + valid trigger")
-                    .positionSize(BigDecimal.ONE)
-                    .stopLossPrice(stopLossPrice)
-                    .takeProfitPrice(takeProfitPrice)
-                    .entryAdx(featureStore.getAdx())
-                    .entryAtr(featureStore.getAtr())
-                    .entryRsi(featureStore.getRsi())
-                    .entryTrendRegime(featureStore.getTrendRegime())
-                    .build();
-        }
-
-        return hold(interval, "No valid entry setup");
     }
 
-    private StrategyDecision evaluateOpenTrade(
+    private StrategyDecision evaluate15mWith4hBias(
             StrategyContext context,
+            LocalTrendConfig config
+    ) {
+        FeatureStore entry = context.getFeatureStore();
+        MarketData entryMarket = context.getMarketData();
+        FeatureStore bias = context.getBiasFeatureStore();
+        MarketData biasMarket = context.getBiasMarketData();
+
+        if (bias == null || biasMarket == null) {
+            return hold(INTERVAL_15M, "15m strategy requires 4h bias market/feature");
+        }
+
+        BigDecimal entryClose = entryMarket.getClosePrice();
+        BigDecimal biasClose = biasMarket.getClosePrice();
+
+        boolean bullishBias = isBullishRegime(bias, biasClose) && hasStrongTrend(bias, config);
+        boolean bullishMomentum = hasBullishMomentum(entry);
+        boolean acceptableVolume = hasAcceptableVolume(entry, config);
+        boolean validTrigger = isValid15mLongTrigger(entry, config);
+        boolean reclaimedTrend = reclaimsFastTrend(entry, entryClose);
+        boolean notOverextended = isNotOverextendedLong15m(entry, entryClose);
+
+        if (!bullishBias) return hold(INTERVAL_15M, "Rejected 15m long: bullishBias=false");
+        if (!bullishMomentum) return hold(INTERVAL_15M, "Rejected 15m long: bullishMomentum=false");
+        if (!acceptableVolume) return hold(INTERVAL_15M, "Rejected 15m long: acceptableVolume=false");
+        if (!validTrigger) return hold(INTERVAL_15M, "Rejected 15m long: validTrigger=false");
+        if (!reclaimedTrend) return hold(INTERVAL_15M, "Rejected 15m long: reclaimedTrend=false");
+        if (!notOverextended) return hold(INTERVAL_15M, "Rejected 15m long: notOverextended=false");
+
+        Optional<BigDecimal> atrOpt = getValidAtr(entry);
+        if (atrOpt.isEmpty()) {
+            return hold(INTERVAL_15M, "ATR invalid");
+        }
+
+        return buildOpenLong(
+                INTERVAL_15M,
+                "4h bullish bias + 15m pullback continuation",
+                entry,
+                entryClose,
+                atrOpt.get(),
+                config
+        );
+    }
+
+    private StrategyDecision buildOpenLong(
             String interval,
-            TrendFollowingConfigProjection config
-    ) {
-        PositionSnapshot position = context.getPositionSnapshot();
-        MarketData marketData = context.getMarketData();
-        FeatureStore featureStore = context.getFeatureStore();
-        String asset = context.getAsset();
-
-        BigDecimal closePrice = marketData.getClosePrice();
-
-        if (SIDE_LONG.equalsIgnoreCase(position.getSide())) {
-            String exitReason = getLongExitReason(position, marketData, featureStore);
-            if (exitReason != null) {
-                return StrategyDecision.builder()
-                        .decisionType(DecisionType.CLOSE_LONG)
-                        .strategyName(STRATEGY_NAME)
-                        .strategyInterval(interval)
-                        .side(SIDE_LONG)
-                        .exitReason(exitReason)
-                        .reason("Long exit triggered")
-                        .build();
-            }
-
-            BigDecimal trailingStop = calculateTrailingStop(position, closePrice, featureStore, config);
-            if (shouldRaiseLongStop(position, trailingStop)) {
-                return StrategyDecision.builder()
-                        .decisionType(DecisionType.UPDATE_TRAILING_STOP)
-                        .strategyName(STRATEGY_NAME)
-                        .strategyInterval(interval)
-                        .side(SIDE_LONG)
-                        .trailingStopPrice(trailingStop)
-                        .stopLossPrice(trailingStop)
-                        .reason("Update long trailing stop")
-                        .build();
-            }
-
-            log.info("Open LONG remains valid | strategy={} interval={} asset={} configId={} close={} stop={} takeProfit={}",
-                    STRATEGY_NAME,
-                    interval,
-                    asset,
-                    config.getStrategyConfigId(),
-                    closePrice,
-                    position.getCurrentStopLossPrice(),
-                    position.getTakeProfitPrice());
-
-            return hold(interval, "Open long remains valid");
-        }
-
-        if (SIDE_SHORT.equalsIgnoreCase(position.getSide())) {
-            String exitReason = getShortExitReason(position, marketData, featureStore);
-            if (exitReason != null) {
-                return StrategyDecision.builder()
-                        .decisionType(DecisionType.CLOSE_SHORT)
-                        .strategyName(STRATEGY_NAME)
-                        .strategyInterval(interval)
-                        .side(SIDE_SHORT)
-                        .exitReason(exitReason)
-                        .reason("Short exit triggered")
-                        .build();
-            }
-
-            BigDecimal trailingStop = calculateTrailingStop(position, closePrice, featureStore, config);
-            if (shouldLowerShortStop(position, trailingStop)) {
-                return StrategyDecision.builder()
-                        .decisionType(DecisionType.UPDATE_TRAILING_STOP)
-                        .strategyName(STRATEGY_NAME)
-                        .strategyInterval(interval)
-                        .side(SIDE_SHORT)
-                        .trailingStopPrice(trailingStop)
-                        .stopLossPrice(trailingStop)
-                        .reason("Update short trailing stop")
-                        .build();
-            }
-
-            log.info("Open SHORT remains valid | strategy={} interval={} asset={} configId={} close={} stop={} takeProfit={}",
-                    STRATEGY_NAME,
-                    interval,
-                    asset,
-                    config.getStrategyConfigId(),
-                    closePrice,
-                    position.getCurrentStopLossPrice(),
-                    position.getTakeProfitPrice());
-
-            return hold(interval, "Open short remains valid");
-        }
-
-        return hold(interval, "Unknown trade side");
-    }
-
-    private String getLongExitReason(PositionSnapshot position, MarketData marketData, FeatureStore featureStore) {
-        BigDecimal closePrice = marketData.getClosePrice();
-
-        boolean stopLossHit = position.getCurrentStopLossPrice() != null
-                && closePrice.compareTo(position.getCurrentStopLossPrice()) <= 0;
-
-        boolean takeProfitHit = position.getTakeProfitPrice() != null
-                && closePrice.compareTo(position.getTakeProfitPrice()) >= 0;
-
-        boolean regimeBroken = !"BULL".equalsIgnoreCase(featureStore.getTrendRegime());
-
-        boolean momentumBroken = featureStore.getMacdHistogram() != null
-                && featureStore.getMacdHistogram().compareTo(BigDecimal.ZERO) < 0
-                && featureStore.getEma50() != null
-                && closePrice.compareTo(featureStore.getEma50()) < 0;
-
-        if (stopLossHit) return EXIT_STOP_LOSS;
-        if (takeProfitHit) return EXIT_TAKE_PROFIT;
-        if (regimeBroken) return EXIT_REGIME_REVERSAL;
-        if (momentumBroken) return EXIT_MOMENTUM_BREAKDOWN;
-
-        return null;
-    }
-
-    private String getShortExitReason(PositionSnapshot position, MarketData marketData, FeatureStore featureStore) {
-        BigDecimal closePrice = marketData.getClosePrice();
-
-        boolean stopLossHit = position.getCurrentStopLossPrice() != null
-                && closePrice.compareTo(position.getCurrentStopLossPrice()) >= 0;
-
-        boolean takeProfitHit = position.getTakeProfitPrice() != null
-                && closePrice.compareTo(position.getTakeProfitPrice()) <= 0;
-
-        boolean regimeBroken = !"BEAR".equalsIgnoreCase(featureStore.getTrendRegime());
-
-        boolean momentumBroken = featureStore.getMacdHistogram() != null
-                && featureStore.getMacdHistogram().compareTo(BigDecimal.ZERO) > 0
-                && featureStore.getEma50() != null
-                && closePrice.compareTo(featureStore.getEma50()) > 0;
-
-        if (stopLossHit) return EXIT_STOP_LOSS;
-        if (takeProfitHit) return EXIT_TAKE_PROFIT;
-        if (regimeBroken) return EXIT_REGIME_REVERSAL;
-        if (momentumBroken) return EXIT_MOMENTUM_BREAKDOWN;
-
-        return null;
-    }
-
-    private BigDecimal calculateTrailingStop(
-            PositionSnapshot position,
-            BigDecimal closePrice,
+            String reason,
             FeatureStore featureStore,
-            TrendFollowingConfigProjection config
+            BigDecimal closePrice,
+            BigDecimal atr,
+            LocalTrendConfig config
     ) {
-        if (position == null
-                || featureStore.getAtr() == null
-                || featureStore.getAtr().compareTo(BigDecimal.ZERO) <= 0) {
-            return null;
-        }
+        BigDecimal stopLoss = closePrice.subtract(atr.multiply(config.stopAtrMultiplier()));
+        BigDecimal takeProfit = closePrice.add(atr.multiply(config.takeProfitAtrMultiplier()));
 
-        BigDecimal trailingDistance = featureStore.getAtr().multiply(config.getTrailingAtrMultiplier());
-
-        if (SIDE_LONG.equalsIgnoreCase(position.getSide())) {
-            return closePrice.subtract(trailingDistance);
-        }
-
-        if (SIDE_SHORT.equalsIgnoreCase(position.getSide())) {
-            return closePrice.add(trailingDistance);
-        }
-
-        return null;
+        return StrategyDecision.builder()
+                .decisionType(DecisionType.OPEN_LONG)
+                .strategyName(STRATEGY_NAME)
+                .strategyInterval(interval)
+                .side(SIDE_LONG)
+                .reason(reason)
+                .positionSize(BigDecimal.ONE)
+                .stopLossPrice(stopLoss)
+                .takeProfitPrice(takeProfit)
+                .entryAdx(featureStore.getAdx())
+                .entryAtr(featureStore.getAtr())
+                .entryRsi(featureStore.getRsi())
+                .entryTrendRegime(featureStore.getTrendRegime())
+                .build();
     }
 
-    private boolean shouldRaiseLongStop(PositionSnapshot position, BigDecimal candidateStop) {
-        return candidateStop != null
-                && (position.getCurrentStopLossPrice() == null
-                || candidateStop.compareTo(position.getCurrentStopLossPrice()) > 0);
+    private Optional<LocalTrendConfig> resolveConfig(String interval, String symbol) {
+        if (FORCE_CODE_CONFIG) {
+            return Optional.ofNullable(CODE_CONFIGS.get(interval))
+                    .map(c -> c.withSource("CODE"));
+        }
+
+        Optional<LocalTrendConfig> dbConfig = findDbConfig(interval, symbol);
+        if (dbConfig.isPresent()) {
+            return dbConfig;
+        }
+
+        return Optional.ofNullable(CODE_CONFIGS.get(interval))
+                .map(c -> c.withSource("CODE"));
     }
 
-    private boolean shouldLowerShortStop(PositionSnapshot position, BigDecimal candidateStop) {
-        return candidateStop != null
-                && (position.getCurrentStopLossPrice() == null
-                || candidateStop.compareTo(position.getCurrentStopLossPrice()) < 0);
+    private Optional<LocalTrendConfig> findDbConfig(String interval, String symbol) {
+        Optional<TrendFollowingConfigProjection> configOpt;
+
+        if (symbol != null && !symbol.isBlank()) {
+            configOpt = strategyConfigRepository.findActiveBySymbol(STRATEGY_NAME, interval, symbol);
+            if (configOpt.isPresent()) {
+                return Optional.of(mapProjection(configOpt.get(), "DB_SYMBOL"));
+            }
+        }
+
+        configOpt = strategyConfigRepository.findActiveDefault(STRATEGY_NAME, interval);
+        return configOpt.map(cfg -> mapProjection(cfg, "DB_DEFAULT"));
+    }
+
+    private LocalTrendConfig mapProjection(TrendFollowingConfigProjection p, String source) {
+        return LocalTrendConfig.builder()
+                .source(source)
+                .strategyConfigId(p.getStrategyConfigId())
+                .minAdx(p.getMinAdx())
+                .minEfficiencyRatio(p.getMinEfficiencyRatio())
+                .minRelativeVolume(p.getMinRelativeVolume())
+                .stopAtrMultiplier(p.getStopAtrMultiplier())
+                .takeProfitAtrMultiplier(p.getTakeProfitAtrMultiplier())
+                .trailingAtrMultiplier(p.getTrailingAtrMultiplier())
+                .allowLong(Boolean.TRUE.equals(p.getAllowLong()))
+                .allowShort(Boolean.TRUE.equals(p.getAllowShort()))
+                .allowBreakoutEntry(Boolean.TRUE.equals(p.getAllowBreakoutEntry()))
+                .allowPullbackEntry(Boolean.TRUE.equals(p.getAllowPullbackEntry()))
+                .allowBiasEntry(Boolean.TRUE.equals(p.getAllowBiasEntry()))
+                .build();
     }
 
     private boolean isBullishRegime(FeatureStore f, BigDecimal closePrice) {
-        return "BULL".equalsIgnoreCase(f.getTrendRegime())
+        return f != null
+                && "BULL".equalsIgnoreCase(f.getTrendRegime())
                 && f.getEma20() != null
                 && f.getEma50() != null
                 && f.getEma200() != null
+                && closePrice != null
                 && f.getEma20().compareTo(f.getEma50()) > 0
                 && f.getEma50().compareTo(f.getEma200()) > 0
-                && closePrice != null
                 && closePrice.compareTo(f.getEma20()) >= 0
                 && positiveOrZero(f.getEma50Slope())
                 && positiveOrZero(f.getEma200Slope());
     }
 
-    private boolean isBearishRegime(FeatureStore f, BigDecimal closePrice) {
-        return "BEAR".equalsIgnoreCase(f.getTrendRegime())
-                && f.getEma20() != null
-                && f.getEma50() != null
-                && f.getEma200() != null
-                && f.getEma20().compareTo(f.getEma50()) < 0
-                && f.getEma50().compareTo(f.getEma200()) < 0
-                && closePrice != null
-                && closePrice.compareTo(f.getEma20()) <= 0
-                && negativeOrZero(f.getEma50Slope())
-                && negativeOrZero(f.getEma200Slope());
-    }
-
-    private boolean hasStrongTrend(FeatureStore f, TrendFollowingConfigProjection config) {
-        return f.getAdx() != null
-                && config.getMinAdx() != null
-                && f.getAdx().compareTo(config.getMinAdx()) >= 0
+    private boolean hasStrongTrend(FeatureStore f, LocalTrendConfig config) {
+        return f != null
+                && f.getAdx() != null
+                && config.minAdx() != null
+                && f.getAdx().compareTo(config.minAdx()) >= 0
                 && f.getEfficiencyRatio20() != null
-                && config.getMinEfficiencyRatio() != null
-                && f.getEfficiencyRatio20().compareTo(config.getMinEfficiencyRatio()) >= 0;
+                && config.minEfficiencyRatio() != null
+                && f.getEfficiencyRatio20().compareTo(config.minEfficiencyRatio()) >= 0;
     }
 
     private boolean hasBullishMomentum(FeatureStore f) {
-        return f.getPlusDI() != null
+        return f != null
+                && f.getPlusDI() != null
                 && f.getMinusDI() != null
                 && f.getPlusDI().compareTo(f.getMinusDI()) > 0
                 && f.getMacd() != null
@@ -422,51 +335,40 @@ public class TrendFollowingStrategyService {
                 && f.getMacdHistogram().compareTo(BigDecimal.ZERO) > 0;
     }
 
-    private boolean hasBearishMomentum(FeatureStore f) {
-        return f.getPlusDI() != null
-                && f.getMinusDI() != null
-                && f.getPlusDI().compareTo(f.getMinusDI()) < 0
-                && f.getMacd() != null
-                && f.getMacdSignal() != null
-                && f.getMacd().compareTo(f.getMacdSignal()) < 0
-                && f.getMacdHistogram() != null
-                && f.getMacdHistogram().compareTo(BigDecimal.ZERO) < 0;
+    private boolean hasAcceptableVolume(FeatureStore f, LocalTrendConfig config) {
+        return f != null
+                && (f.getRelativeVolume20() == null
+                || (config.minRelativeVolume() != null
+                && f.getRelativeVolume20().compareTo(config.minRelativeVolume()) >= 0));
     }
 
-    private boolean hasAcceptableVolume(FeatureStore f, TrendFollowingConfigProjection config) {
-        return f.getRelativeVolume20() == null
-                || (config.getMinRelativeVolume() != null
-                && f.getRelativeVolume20().compareTo(config.getMinRelativeVolume()) >= 0);
-    }
-
-    private boolean isValidLongTrigger(FeatureStore f, TrendFollowingConfigProjection config) {
-        boolean breakout = Boolean.TRUE.equals(config.getAllowBreakoutEntry())
-                && Boolean.TRUE.equals(f.getIsBullishBreakout());
-
-        boolean pullback = Boolean.TRUE.equals(config.getAllowPullbackEntry())
+    private boolean isValid15mLongTrigger(FeatureStore f, LocalTrendConfig config) {
+        return f != null
+                && config.allowPullbackEntry()
                 && Boolean.TRUE.equals(f.getIsBullishPullback());
-
-        boolean bias = Boolean.TRUE.equals(config.getAllowBiasEntry())
-                && SIDE_LONG.equalsIgnoreCase(f.getEntryBias());
-
-        return breakout || pullback || bias;
     }
 
-    private boolean isValidShortTrigger(FeatureStore f, TrendFollowingConfigProjection config) {
-        boolean breakout = Boolean.TRUE.equals(config.getAllowBreakoutEntry())
-                && Boolean.TRUE.equals(f.getIsBearishBreakout());
+    private boolean reclaimsFastTrend(FeatureStore f, BigDecimal closePrice) {
+        return f != null
+                && closePrice != null
+                && f.getEma20() != null
+                && f.getEma50() != null
+                && closePrice.compareTo(f.getEma20()) >= 0
+                && closePrice.compareTo(f.getEma50()) >= 0;
+    }
 
-        boolean pullback = Boolean.TRUE.equals(config.getAllowPullbackEntry())
-                && Boolean.TRUE.equals(f.getIsBearishPullback());
-
-        boolean bias = Boolean.TRUE.equals(config.getAllowBiasEntry())
-                && SIDE_SHORT.equalsIgnoreCase(f.getEntryBias());
-
-        return breakout || pullback || bias;
+    private boolean isNotOverextendedLong15m(FeatureStore f, BigDecimal closePrice) {
+        if (f == null || closePrice == null || f.getEma20() == null || f.getAtr() == null) {
+            return true;
+        }
+        BigDecimal maxAllowed = f.getEma20().add(f.getAtr().multiply(new BigDecimal("0.80")));
+        return closePrice.compareTo(maxAllowed) <= 0;
     }
 
     private Optional<BigDecimal> getValidAtr(FeatureStore featureStore) {
-        if (featureStore.getAtr() == null || featureStore.getAtr().compareTo(BigDecimal.ZERO) <= 0) {
+        if (featureStore == null
+                || featureStore.getAtr() == null
+                || featureStore.getAtr().compareTo(BigDecimal.ZERO) <= 0) {
             return Optional.empty();
         }
         return Optional.of(featureStore.getAtr());
@@ -476,23 +378,18 @@ public class TrendFollowingStrategyService {
         return value != null && value.compareTo(BigDecimal.ZERO) >= 0;
     }
 
-    private boolean negativeOrZero(BigDecimal value) {
-        return value != null && value.compareTo(BigDecimal.ZERO) <= 0;
-    }
-
     private boolean hasOpenPosition(PositionSnapshot positionSnapshot) {
         return positionSnapshot != null && positionSnapshot.isHasOpenPosition();
     }
 
     private String resolveInterval(StrategyContext context) {
+        if (context == null) return null;
         if (context.getInterval() != null && !context.getInterval().isBlank()) {
             return context.getInterval();
         }
-
         if (context.getFeatureStore() != null) {
             return context.getFeatureStore().getInterval();
         }
-
         return null;
     }
 
@@ -503,5 +400,40 @@ public class TrendFollowingStrategyService {
                 .strategyInterval(interval)
                 .reason(reason)
                 .build();
+    }
+
+    @lombok.Builder
+    private record LocalTrendConfig(
+            String source,
+            UUID strategyConfigId,
+            BigDecimal minAdx,
+            BigDecimal minEfficiencyRatio,
+            BigDecimal minRelativeVolume,
+            BigDecimal stopAtrMultiplier,
+            BigDecimal takeProfitAtrMultiplier,
+            BigDecimal trailingAtrMultiplier,
+            boolean allowLong,
+            boolean allowShort,
+            boolean allowBreakoutEntry,
+            boolean allowPullbackEntry,
+            boolean allowBiasEntry
+    ) {
+        private LocalTrendConfig withSource(String newSource) {
+            return new LocalTrendConfig(
+                    newSource,
+                    strategyConfigId,
+                    minAdx,
+                    minEfficiencyRatio,
+                    minRelativeVolume,
+                    stopAtrMultiplier,
+                    takeProfitAtrMultiplier,
+                    trailingAtrMultiplier,
+                    allowLong,
+                    allowShort,
+                    allowBreakoutEntry,
+                    allowPullbackEntry,
+                    allowBiasEntry
+            );
+        }
     }
 }

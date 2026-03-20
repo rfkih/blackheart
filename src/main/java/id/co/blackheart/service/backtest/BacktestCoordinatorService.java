@@ -14,6 +14,8 @@ import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.service.strategy.StrategyExecutor;
+import id.co.blackheart.service.strategy.StrategyExecutorFactory;
 import id.co.blackheart.service.strategy.TrendFollowingStrategyService;
 import id.co.blackheart.service.tradelistener.TradeListenerService;
 import id.co.blackheart.util.TradeConstant.DecisionType;
@@ -22,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -34,11 +37,13 @@ import java.util.stream.Collectors;
 public class BacktestCoordinatorService {
 
     private static final String MONITOR_INTERVAL = "15m";
+    private static final String BIAS_INTERVAL = "4h";
 
     private final UsersRepository usersRepository;
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
     private final TrendFollowingStrategyService trendFollowingStrategyService;
+    private final StrategyExecutorFactory strategyExecutorFactory;
     private final TradeListenerService tradeListenerService;
     private final BacktestTradeExecutorService backtestTradeExecutorService;
     private final BacktestMetricsService backtestMetricsService;
@@ -54,6 +59,7 @@ public class BacktestCoordinatorService {
         }
 
         String strategyInterval = backtestRun.getInterval();
+        boolean use4hBiasFor15m = MONITOR_INTERVAL.equalsIgnoreCase(strategyInterval);
 
         List<MarketData> monitorCandles = marketDataRepository.findBySymbolIntervalAndRange(
                 backtestRun.getSymbol(),
@@ -104,14 +110,63 @@ public class BacktestCoordinatorService {
                         (existing, replacement) -> existing
                 ));
 
+        List<MarketData> biasCandles = List.of();
+        Map<LocalDateTime, FeatureStore> biasFeatureByStartTime = Map.of();
+
+        if (use4hBiasFor15m) {
+            biasCandles = marketDataRepository.findBySymbolIntervalAndRange(
+                    backtestRun.getSymbol(),
+                    BIAS_INTERVAL,
+                    backtestRun.getStartTime(),
+                    backtestRun.getEndTime()
+            );
+
+            List<FeatureStore> biasFeatures = featureStoreRepository.findBySymbolIntervalAndRange(
+                    backtestRun.getSymbol(),
+                    BIAS_INTERVAL,
+                    backtestRun.getStartTime(),
+                    backtestRun.getEndTime()
+            );
+
+            if (biasCandles == null || biasCandles.isEmpty()) {
+                throw new IllegalArgumentException("No bias market data found for interval: " + BIAS_INTERVAL);
+            }
+
+            if (biasFeatures == null || biasFeatures.isEmpty()) {
+                throw new IllegalArgumentException("No bias feature store found for interval: " + BIAS_INTERVAL);
+            }
+
+            biasCandles = biasCandles.stream()
+                    .filter(Objects::nonNull)
+                    .sorted(Comparator.comparing(MarketData::getEndTime))
+                    .toList();
+
+            biasFeatureByStartTime = biasFeatures.stream()
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toMap(
+                            FeatureStore::getStartTime,
+                            Function.identity(),
+                            (existing, replacement) -> existing
+                    ));
+        }
+
         BacktestState state = BacktestState.initial(backtestRun);
 
         for (MarketData monitorCandle : monitorCandles) {
             boolean closedByListener = handleListenerStep(backtestRun, user, state, monitorCandle);
 
             if (!closedByListener) {
-                handleStrategyStep(backtestRun, user, state, strategyInterval, strategyCandleByEndTime,
-                        strategyFeatureByStartTime, monitorCandle);
+                handleStrategyStep(
+                        backtestRun,
+                        user,
+                        state,
+                        strategyInterval,
+                        strategyCandleByEndTime,
+                        strategyFeatureByStartTime,
+                        biasCandles,
+                        biasFeatureByStartTime,
+                        monitorCandle
+                );
             }
 
             backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
@@ -154,11 +209,6 @@ public class BacktestCoordinatorService {
                 .positionSnapshot(positionSnapshot)
                 .build();
 
-        log.info("Backtest listener triggered | runId={} time={} exitReason={} exitPrice={}",
-                backtestRun.getBacktestRunId(),
-                monitorCandle.getEndTime(),
-                listenerDecision.getExitReason(),
-                listenerDecision.getExitPrice());
 
         backtestTradeExecutorService.closeTradeFromListener(
                 backtestRun,
@@ -178,6 +228,8 @@ public class BacktestCoordinatorService {
             String strategyInterval,
             Map<LocalDateTime, MarketData> strategyCandleByEndTime,
             Map<LocalDateTime, FeatureStore> strategyFeatureByStartTime,
+            List<MarketData> biasCandles,
+            Map<LocalDateTime, FeatureStore> biasFeatureByStartTime,
             MarketData monitorCandle
     ) {
         MarketData strategyCandle = strategyCandleByEndTime.get(monitorCandle.getEndTime());
@@ -194,6 +246,26 @@ public class BacktestCoordinatorService {
             return;
         }
 
+        MarketData biasMarketData = null;
+        FeatureStore biasFeatureStore = null;
+
+        if (MONITOR_INTERVAL.equalsIgnoreCase(strategyInterval)) {
+            biasMarketData = resolveLatestCompletedBiasCandle(biasCandles, monitorCandle.getEndTime());
+
+            if (biasMarketData == null) {
+                log.warn("Bias market data missing for symbol={} biasInterval={} monitorEndTime={}",
+                        backtestRun.getSymbol(), BIAS_INTERVAL, monitorCandle.getEndTime());
+                return;
+            }
+
+            biasFeatureStore = biasFeatureByStartTime.get(biasMarketData.getStartTime());
+            if (biasFeatureStore == null) {
+                log.warn("Bias feature store missing for symbol={} biasInterval={} startTime={}",
+                        backtestRun.getSymbol(), BIAS_INTERVAL, biasMarketData.getStartTime());
+                return;
+            }
+        }
+
         PositionSnapshot positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade());
 
         StrategyContext strategyContext = StrategyContext.builder()
@@ -202,10 +274,16 @@ public class BacktestCoordinatorService {
                 .interval(strategyInterval)
                 .marketData(strategyCandle)
                 .featureStore(strategyFeature)
+                .biasMarketData(biasMarketData)
+                .biasFeatureStore(biasFeatureStore)
+                .allowLong(backtestRun.getAllowLong())
+                .allowShort(backtestRun.getAllowShort())
                 .positionSnapshot(positionSnapshot)
                 .build();
 
-        StrategyDecision decision = trendFollowingStrategyService.execute(strategyContext);
+
+        StrategyExecutor executor = strategyExecutorFactory.get(backtestRun.getStrategyName());
+        StrategyDecision decision = executor.execute(strategyContext);
 
         if (!DecisionType.HOLD.equals(decision.getDecisionType())) {
             log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
@@ -217,6 +295,28 @@ public class BacktestCoordinatorService {
         }
 
         backtestTradeExecutorService.execute(backtestRun, state, strategyContext, decision);
+    }
+
+    private MarketData resolveLatestCompletedBiasCandle(
+            List<MarketData> biasCandles,
+            LocalDateTime monitorEndTime
+    ) {
+        if (biasCandles == null || biasCandles.isEmpty() || monitorEndTime == null) {
+            return null;
+        }
+
+        MarketData latest = null;
+        for (MarketData candle : biasCandles) {
+            if (candle.getEndTime() == null) {
+                continue;
+            }
+            if (!candle.getEndTime().isAfter(monitorEndTime)) {
+                latest = candle;
+            } else {
+                break;
+            }
+        }
+        return latest;
     }
 
     private void validateBacktestRun(BacktestRun backtestRun) {

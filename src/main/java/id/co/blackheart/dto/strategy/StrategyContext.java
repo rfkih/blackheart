@@ -12,6 +12,10 @@ public class StrategyContext {
     private String interval;
     private MarketData marketData;
     private FeatureStore featureStore;
+    private boolean allowLong;
+    private boolean allowShort;
+    private MarketData biasMarketData;
+    private FeatureStore biasFeatureStore;
     private PositionSnapshot positionSnapshot;
     private Portfolio portfolio;
 }
