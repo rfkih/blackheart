@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -31,6 +32,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class BacktestCoordinatorService {
+
+    private static final String MONITOR_INTERVAL = "15m";
 
     private final UsersRepository usersRepository;
     private final MarketDataRepository marketDataRepository;
@@ -43,117 +46,202 @@ public class BacktestCoordinatorService {
     private final BacktestStateService backtestStateService;
 
     public BacktestExecutionSummary execute(BacktestRun backtestRun) {
+        validateBacktestRun(backtestRun);
+
         Users user = usersRepository.findByUserId(backtestRun.getUserId());
-
-        List<MarketData> candles15m = marketDataRepository.findBySymbolIntervalAndRange(
-                backtestRun.getSymbol(),
-                "15m",
-                backtestRun.getStartTime(),
-                backtestRun.getEndTime()
-        );
-
-        List<MarketData> candles4h = marketDataRepository.findBySymbolIntervalAndRange(
-                backtestRun.getSymbol(),
-                backtestRun.getInterval(),
-                backtestRun.getStartTime(),
-                backtestRun.getEndTime()
-        );
-
-        List<FeatureStore> featureStores4h = featureStoreRepository.findBySymbolIntervalAndRange(
-                backtestRun.getSymbol(),
-                backtestRun.getInterval(),
-                backtestRun.getStartTime(),
-                backtestRun.getEndTime()
-        );
-
-        if (candles15m == null || candles15m.isEmpty()) {
-            throw new IllegalArgumentException("No 15m market data found for backtest");
+        if (user == null) {
+            throw new IllegalArgumentException("User not found for id: " + backtestRun.getUserId());
         }
 
-        if (candles4h == null || candles4h.isEmpty()) {
-            throw new IllegalArgumentException("No 4h market data found for backtest");
+        String strategyInterval = backtestRun.getInterval();
+
+        List<MarketData> monitorCandles = marketDataRepository.findBySymbolIntervalAndRange(
+                backtestRun.getSymbol(),
+                MONITOR_INTERVAL,
+                backtestRun.getStartTime(),
+                backtestRun.getEndTime()
+        );
+
+        List<MarketData> strategyCandles = marketDataRepository.findBySymbolIntervalAndRange(
+                backtestRun.getSymbol(),
+                strategyInterval,
+                backtestRun.getStartTime(),
+                backtestRun.getEndTime()
+        );
+
+        List<FeatureStore> strategyFeatures = featureStoreRepository.findBySymbolIntervalAndRange(
+                backtestRun.getSymbol(),
+                strategyInterval,
+                backtestRun.getStartTime(),
+                backtestRun.getEndTime()
+        );
+
+        if (monitorCandles == null || monitorCandles.isEmpty()) {
+            throw new IllegalArgumentException("No monitor market data found for interval: " + MONITOR_INTERVAL);
         }
 
-        Map<LocalDateTime, MarketData> candle4hByEndTime = candles4h.stream()
-                .collect(Collectors.toMap(MarketData::getEndTime, Function.identity(), (a, b) -> a));
+        if (strategyCandles == null || strategyCandles.isEmpty()) {
+            throw new IllegalArgumentException("No strategy market data found for interval: " + strategyInterval);
+        }
 
-        Map<LocalDateTime, FeatureStore> feature4hByStartTime = featureStores4h.stream()
-                .collect(Collectors.toMap(FeatureStore::getStartTime, Function.identity(), (a, b) -> a));
+        if (strategyFeatures == null || strategyFeatures.isEmpty()) {
+            throw new IllegalArgumentException("No feature store found for interval: " + strategyInterval);
+        }
+
+        Map<LocalDateTime, MarketData> strategyCandleByEndTime = strategyCandles.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(
+                        MarketData::getEndTime,
+                        Function.identity(),
+                        (existing, replacement) -> existing
+                ));
+
+        Map<LocalDateTime, FeatureStore> strategyFeatureByStartTime = strategyFeatures.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(
+                        FeatureStore::getStartTime,
+                        Function.identity(),
+                        (existing, replacement) -> existing
+                ));
 
         BacktestState state = BacktestState.initial(backtestRun);
 
-        for (MarketData candle15m : candles15m) {
-            // 1) listener reacts on every 15m candle
-            if (state.getActiveTrade() != null) {
-                PositionSnapshot positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade());
+        for (MarketData monitorCandle : monitorCandles) {
+            boolean closedByListener = handleListenerStep(backtestRun, user, state, monitorCandle);
 
-                ListenerContext listenerContext = ListenerContext.builder()
-                        .asset(backtestRun.getSymbol())
-                        .interval("15m")
-                        .positionSnapshot(positionSnapshot)
-                        .monitorCandle(candle15m)
-                        .build();
-
-                ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
-
-                if (listenerDecision.isTriggered()) {
-                    StrategyContext listenerCloseContext = StrategyContext.builder()
-                            .user(user)
-                            .asset(backtestRun.getSymbol())
-                            .interval("15m")
-                            .marketData(candle15m)
-                            .featureStore(null)
-                            .positionSnapshot(positionSnapshot)
-                            .build();
-
-                    backtestTradeExecutorService.closeTradeFromListener(
-                            backtestRun,
-                            state,
-                            listenerCloseContext,
-                            listenerDecision.getExitReason(),
-                            listenerDecision.getExitPrice()
-                    );
-                }
+            if (!closedByListener) {
+                handleStrategyStep(backtestRun, user, state, strategyInterval, strategyCandleByEndTime,
+                        strategyFeatureByStartTime, monitorCandle);
             }
 
-            // 2) if this 15m candle is also a 4h boundary, strategy reacts
-            MarketData candle4h = candle4hByEndTime.get(candle15m.getEndTime());
-            if (candle4h != null) {
-                FeatureStore featureStore4h = feature4hByStartTime.get(candle4h.getStartTime());
-
-                if (featureStore4h == null) {
-                    log.warn("FeatureStore missing for symbol={} interval={} startTime={}",
-                            backtestRun.getSymbol(), backtestRun.getInterval(), candle4h.getStartTime());
-                } else {
-                    PositionSnapshot positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade());
-
-                    StrategyContext strategyContext = StrategyContext.builder()
-                            .user(user)
-                            .asset(backtestRun.getSymbol())
-                            .interval(backtestRun.getInterval())
-                            .marketData(candle4h)
-                            .featureStore(featureStore4h)
-                            .positionSnapshot(positionSnapshot)
-                            .build();
-
-                    StrategyDecision decision = trendFollowingStrategyService.execute(strategyContext);
-
-                    if (!DecisionType.HOLD.equals(decision.getDecisionType())) {
-                        log.info("Backtest strategy decision | runId={} time={} decisionType={} reason={}",
-                                backtestRun.getBacktestRunId(),
-                                candle4h.getEndTime(),
-                                decision.getDecisionType(),
-                                decision.getReason());
-                    }
-
-                    backtestTradeExecutorService.execute(backtestRun, state, strategyContext, decision);
-                }
-            }
-
-            // 3) update equity/drawdown on every 15m step
-            backtestStateService.updateEquityAndDrawdown(state, candle15m.getClosePrice());
+            backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
         }
 
         return backtestMetricsService.buildSummary(backtestRun, state);
+    }
+
+    private boolean handleListenerStep(
+            BacktestRun backtestRun,
+            Users user,
+            BacktestState state,
+            MarketData monitorCandle
+    ) {
+        if (state.getActiveTrade() == null) {
+            return false;
+        }
+
+        PositionSnapshot positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade());
+
+        ListenerContext listenerContext = ListenerContext.builder()
+                .asset(backtestRun.getSymbol())
+                .interval(MONITOR_INTERVAL)
+                .positionSnapshot(positionSnapshot)
+                .monitorCandle(monitorCandle)
+                .build();
+
+        ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
+
+        if (!listenerDecision.isTriggered()) {
+            return false;
+        }
+
+        StrategyContext listenerCloseContext = StrategyContext.builder()
+                .user(user)
+                .asset(backtestRun.getSymbol())
+                .interval(MONITOR_INTERVAL)
+                .marketData(monitorCandle)
+                .featureStore(null)
+                .positionSnapshot(positionSnapshot)
+                .build();
+
+        log.info("Backtest listener triggered | runId={} time={} exitReason={} exitPrice={}",
+                backtestRun.getBacktestRunId(),
+                monitorCandle.getEndTime(),
+                listenerDecision.getExitReason(),
+                listenerDecision.getExitPrice());
+
+        backtestTradeExecutorService.closeTradeFromListener(
+                backtestRun,
+                state,
+                listenerCloseContext,
+                listenerDecision.getExitReason(),
+                listenerDecision.getExitPrice()
+        );
+
+        return true;
+    }
+
+    private void handleStrategyStep(
+            BacktestRun backtestRun,
+            Users user,
+            BacktestState state,
+            String strategyInterval,
+            Map<LocalDateTime, MarketData> strategyCandleByEndTime,
+            Map<LocalDateTime, FeatureStore> strategyFeatureByStartTime,
+            MarketData monitorCandle
+    ) {
+        MarketData strategyCandle = strategyCandleByEndTime.get(monitorCandle.getEndTime());
+        if (strategyCandle == null) {
+            return;
+        }
+
+        FeatureStore strategyFeature = strategyFeatureByStartTime.get(strategyCandle.getStartTime());
+        if (strategyFeature == null) {
+            log.warn("FeatureStore missing for symbol={} interval={} startTime={}",
+                    backtestRun.getSymbol(),
+                    strategyInterval,
+                    strategyCandle.getStartTime());
+            return;
+        }
+
+        PositionSnapshot positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade());
+
+        StrategyContext strategyContext = StrategyContext.builder()
+                .user(user)
+                .asset(backtestRun.getSymbol())
+                .interval(strategyInterval)
+                .marketData(strategyCandle)
+                .featureStore(strategyFeature)
+                .positionSnapshot(positionSnapshot)
+                .build();
+
+        StrategyDecision decision = trendFollowingStrategyService.execute(strategyContext);
+
+        if (!DecisionType.HOLD.equals(decision.getDecisionType())) {
+            log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
+                    backtestRun.getBacktestRunId(),
+                    strategyCandle.getEndTime(),
+                    strategyInterval,
+                    decision.getDecisionType(),
+                    decision.getReason());
+        }
+
+        backtestTradeExecutorService.execute(backtestRun, state, strategyContext, decision);
+    }
+
+    private void validateBacktestRun(BacktestRun backtestRun) {
+        if (backtestRun == null) {
+            throw new IllegalArgumentException("Backtest run must not be null");
+        }
+
+        if (backtestRun.getUserId() == null) {
+            throw new IllegalArgumentException("Backtest userId must not be null");
+        }
+
+        if (backtestRun.getSymbol() == null || backtestRun.getSymbol().isBlank()) {
+            throw new IllegalArgumentException("Backtest symbol must not be blank");
+        }
+
+        if (backtestRun.getInterval() == null || backtestRun.getInterval().isBlank()) {
+            throw new IllegalArgumentException("Backtest interval must not be blank");
+        }
+
+        if (backtestRun.getStartTime() == null || backtestRun.getEndTime() == null) {
+            throw new IllegalArgumentException("Backtest startTime and endTime must not be null");
+        }
+
+        if (!backtestRun.getStartTime().isBefore(backtestRun.getEndTime())) {
+            throw new IllegalArgumentException("Backtest startTime must be before endTime");
+        }
     }
 }

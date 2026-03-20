@@ -44,7 +44,7 @@ public class BacktestMetricsService {
                 ? BigDecimal.ZERO
                 : grossProfit.divide(grossLoss, 6, RoundingMode.HALF_UP);
 
-        BigDecimal finalCapital = state.getCashBalance();
+        BigDecimal finalCapital = state.getCashBalance().setScale(3, RoundingMode.HALF_UP);
 
         BigDecimal totalReturnPercent = finalCapital.subtract(run.getInitialCapital())
                 .divide(run.getInitialCapital(), 6, RoundingMode.HALF_UP)

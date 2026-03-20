@@ -55,10 +55,7 @@ public class TrendFollowingStrategyService {
         }
 
         if (!interval.equalsIgnoreCase(featureStore.getInterval())) {
-            return hold(
-                    interval,
-                    "Feature interval mismatch. expected=" + interval + ", actual=" + featureStore.getInterval()
-            );
+            return hold(interval,"Feature interval mismatch. expected=" + interval + ", actual=" + featureStore.getInterval());
         }
 
         Optional<TrendFollowingConfigProjection> configOpt = findConfig(interval, asset);
