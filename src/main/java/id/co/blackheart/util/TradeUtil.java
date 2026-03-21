@@ -32,7 +32,6 @@ public class TradeUtil {
     public void binanceOpenLongMarketOrder(
             StrategyContext context,
             TradeDecision decision,
-            String tradePlan,
             BigDecimal tradeAmount
     ) {
         try {
@@ -77,7 +76,7 @@ public class TradeUtil {
 
             Trades newTrade = Trades.builder()
                     .userId(context.getUser().getUserId())
-                    .strategyName(tradePlan)
+                    .strategyName(context.getStrategyCode())
                     .interval(context.getInterval())
                     .exchange("BINANCE")
                     .asset(context.getAsset())
@@ -245,7 +244,6 @@ public class TradeUtil {
             StrategyContext context,
             String asset,
             TradeDecision decision,
-            String tradePlan,
             BigDecimal tradeAmount
     ) {
         try {
@@ -289,7 +287,7 @@ public class TradeUtil {
 
             Trades newTrade = Trades.builder()
                     .userId(context.getUser().getUserId())
-                    .strategyName(tradePlan)
+                    .strategyName(context.getStrategyCode())
                     .interval(context.getInterval())
                     .exchange("BINANCE")
                     .asset(context.getAsset())

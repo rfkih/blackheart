@@ -11,6 +11,7 @@ import java.util.UUID;
 public class StrategyContext {
     private Users user;
     private UUID userStrategyId;
+    private String strategyCode;
     private String asset;
     private String interval;
     private Trades activeTrade;

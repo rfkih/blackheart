@@ -76,7 +76,7 @@ public class TimeSeriesMomentumService implements StrategyExecutor {
             return hold(interval, "Open trade managed by listener");
         }
 
-        if (!Boolean.TRUE.equals(context.isAllowLong())) {
+        if (!context.isAllowLong()) {
             return hold(interval, "Long disabled");
         }
 

@@ -98,7 +98,6 @@ public class LiveTradingDecisionExecutorService {
             tradeUtil.binanceOpenLongMarketOrder(
                     context,
                     mapToTradeDecision(decision),
-                    decision.getStrategyName() + "_" + decision.getStrategyInterval().toUpperCase(),
                     tradeAmount
             );
             return;
@@ -126,7 +125,6 @@ public class LiveTradingDecisionExecutorService {
                     context,
                     asset,
                     mapToTradeDecision(decision),
-                    decision.getStrategyName() + "_" + decision.getStrategyInterval().toUpperCase(),
                     tradeAmount
             );
             return;

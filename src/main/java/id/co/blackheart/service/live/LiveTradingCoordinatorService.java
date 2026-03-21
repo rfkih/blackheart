@@ -44,12 +44,10 @@ public class LiveTradingCoordinatorService {
         if (!interval.equals(userStrategy.getIntervalName())){
             return;
         }
-        log.info("Start Real Trading at interval {}", userStrategy.getIntervalName());
 
         try {
             StrategyExecutor executor = strategyExecutorFactory.get(strategyCode);
 
-            log.info("strategy Code");
 
             Optional<Trades> activeTradeOpt = tradesRepository.findLatestOpenTrade(
                     user.getUserId(),
@@ -83,6 +81,7 @@ public class LiveTradingCoordinatorService {
                     .marketData(marketData)
                     .activeTrade(activeTrade)
                     .userStrategyId(userStrategy.getUserStrategyId())
+                    .strategyCode(userStrategy.getStrategyCode())
                     .featureStore(featureStore)
                     .positionSnapshot(positionSnapshot)
                     .biasFeatureStore(biasFeatureStore)
