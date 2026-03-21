@@ -49,6 +49,8 @@ public class LiveTradingCoordinatorService {
         try {
             StrategyExecutor executor = strategyExecutorFactory.get(strategyCode);
 
+            log.info("strategy Code");
+
             Optional<Trades> activeTradeOpt = tradesRepository.findLatestOpenTrade(
                     user.getUserId(),
                     asset,
@@ -79,6 +81,8 @@ public class LiveTradingCoordinatorService {
                     .asset(asset)
                     .interval(interval)
                     .marketData(marketData)
+                    .activeTrade(activeTrade)
+                    .userStrategyId(userStrategy.getUserStrategyId())
                     .featureStore(featureStore)
                     .positionSnapshot(positionSnapshot)
                     .biasFeatureStore(biasFeatureStore)

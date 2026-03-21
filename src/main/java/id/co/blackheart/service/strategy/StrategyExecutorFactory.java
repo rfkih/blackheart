@@ -11,6 +11,7 @@ public class StrategyExecutorFactory {
     private final Breakout4hStrategyService breakout;
     private final Pullback15mWith4hBiasStrategyService pullback15mBias;
     private final TrendFollowingStrategyService trendFollowing;
+    private final ExecutionTestService executionTestService;
 
     public StrategyExecutor get(String strategyName) {
         return switch (strategyName) {
@@ -18,6 +19,7 @@ public class StrategyExecutorFactory {
             case "BREAKOUT" -> breakout;
             case "PULLBACK_15M_WITH_4H_BIAS" -> pullback15mBias;
             case "TREND_FOLLOWING" -> trendFollowing;
+            case "TEST" -> executionTestService;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyName);
         };
     }

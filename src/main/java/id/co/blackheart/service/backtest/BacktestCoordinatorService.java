@@ -191,7 +191,7 @@ public class BacktestCoordinatorService {
                 .asset(backtestRun.getSymbol())
                 .interval(MONITOR_INTERVAL)
                 .positionSnapshot(positionSnapshot)
-                .monitorCandle(monitorCandle)
+                .latestPrice(monitorCandle.getClosePrice())
                 .build();
 
         ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);

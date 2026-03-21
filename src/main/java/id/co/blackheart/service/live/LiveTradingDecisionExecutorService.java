@@ -1,6 +1,7 @@
 package id.co.blackheart.service.live;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import id.co.blackheart.dto.TradeDecision;
 import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
@@ -83,7 +84,6 @@ public class LiveTradingDecisionExecutorService {
 
     private void executeOpenLong(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
         Users user = context.getUser();
-        String asset = context.getAsset();
 
         Portfolio usdtPortfolio = portfolioService.updateAndGetAssetBalance("USDT", user);
         BigDecimal balance = usdtPortfolio.getBalance();
@@ -96,8 +96,7 @@ public class LiveTradingDecisionExecutorService {
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
             tradeUtil.binanceOpenLongMarketOrder(
-                    user,
-                    asset,
+                    context,
                     mapToTradeDecision(decision),
                     decision.getStrategyName() + "_" + decision.getStrategyInterval().toUpperCase(),
                     tradeAmount
@@ -124,12 +123,11 @@ public class LiveTradingDecisionExecutorService {
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
             tradeUtil.binanceOpenShortMarketOrder(
-                    user,
+                    context,
                     asset,
                     mapToTradeDecision(decision),
                     decision.getStrategyName() + "_" + decision.getStrategyInterval().toUpperCase(),
-                    tradeAmount,
-                    decision.getStrategyInterval()
+                    tradeAmount
             );
             return;
         }
@@ -191,8 +189,8 @@ public class LiveTradingDecisionExecutorService {
                 decision.getStopLossPrice());
     }
 
-    private id.co.blackheart.dto.TradeDecision mapToTradeDecision(StrategyDecision decision) {
-        return id.co.blackheart.dto.TradeDecision.builder()
+    private TradeDecision mapToTradeDecision(StrategyDecision decision) {
+        return TradeDecision.builder()
                 .action("LONG".equalsIgnoreCase(decision.getSide()) ? "BUY" : "SELL")
                 .positionSize(decision.getPositionSize())
                 .stopLossPrice(decision.getStopLossPrice())

@@ -4,6 +4,7 @@ package id.co.blackheart.util;
 import id.co.blackheart.dto.*;
 import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.response.*;
+import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.TradesRepository;
@@ -29,8 +30,7 @@ public class TradeUtil {
 
 
     public void binanceOpenLongMarketOrder(
-            Users user,
-            String asset,
+            StrategyContext context,
             TradeDecision decision,
             String tradePlan,
             BigDecimal tradeAmount
@@ -39,11 +39,11 @@ public class TradeUtil {
             log.info("trade amount : {}", tradeAmount);
 
             BinanceOrderRequest request = BinanceOrderRequest.builder()
-                    .symbol(asset)
+                    .symbol(context.getAsset())
                     .side("BUY")
                     .amount(tradeAmount)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
+                    .apiKey(context.getUser().getApiKey())
+                    .apiSecret(context.getUser().getApiSecret())
                     .build();
 
             BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
@@ -76,11 +76,11 @@ public class TradeUtil {
             BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
 
             Trades newTrade = Trades.builder()
-                    .userId(user.getUserId())
+                    .userId(context.getUser().getUserId())
                     .strategyName(tradePlan)
-                    .interval("4h")
+                    .interval(context.getInterval())
                     .exchange("BINANCE")
-                    .asset(asset)
+                    .asset(context.getAsset())
                     .side("LONG")
                     .status("OPEN")
                     .entryOrderId(response.getOrderId())
@@ -93,14 +93,15 @@ public class TradeUtil {
                     .currentStopLossPrice(decision.getStopLossPrice())
                     .takeProfitPrice(decision.getTakeProfitPrice())
                     .entryTime(LocalDateTime.now())
+                    .userStrategyId(context.getUserStrategyId())
                     .build();
 
             tradesRepository.save(newTrade);
 
-            log.info("✅ Long order placed for {} at weighted average price: {}", asset, avgEntryPrice);
+            log.info("✅ Long order placed for {} at weighted average price: {}", context.getAsset(), avgEntryPrice);
 
         } catch (Exception e) {
-            log.error("❌ Error placing long market order for {}", asset, e);
+            log.error("❌ Error placing long market order for {}", context.getAsset(), e);
         }
     }
 
@@ -240,20 +241,20 @@ public class TradeUtil {
         );
     }
 
-    public void binanceOpenShortMarketOrder( Users user,
+    public void binanceOpenShortMarketOrder(
+            StrategyContext context,
             String asset,
             TradeDecision decision,
             String tradePlan,
-            BigDecimal tradeAmount,
-                                             String interval
+            BigDecimal tradeAmount
     ) {
         try {
             BinanceOrderRequest binanceOrderRequest = BinanceOrderRequest.builder()
-                    .symbol(asset)
+                    .symbol(context.getAsset())
                     .side("SELL")
                     .amount(tradeAmount)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
+                    .apiKey(context.getUser().getApiKey())
+                    .apiSecret(context.getUser().getApiSecret())
                     .build();
 
             BinanceOrderResponse binanceOrderResponse =
@@ -287,11 +288,11 @@ public class TradeUtil {
             BigDecimal avgEntryPrice = totalCost.divide(totalQty, 8, RoundingMode.HALF_UP);
 
             Trades newTrade = Trades.builder()
-                    .userId(user.getUserId())
-                    .strategyName(tradePlan) // assuming tradePlan = strategy name for now
-                    .interval(interval) // replace later with real interval from your strategy/decision
+                    .userId(context.getUser().getUserId())
+                    .strategyName(tradePlan)
+                    .interval(context.getInterval())
                     .exchange("BINANCE")
-                    .asset(asset)
+                    .asset(context.getAsset())
                     .side("SHORT")
                     .status("OPEN")
                     .entryOrderId(binanceOrderResponse.getOrderId())
@@ -304,6 +305,7 @@ public class TradeUtil {
                     .currentStopLossPrice(decision.getStopLossPrice())
                     .takeProfitPrice(decision.getTakeProfitPrice())
                     .entryTime(LocalDateTime.now())
+                    .userStrategyId(context.getUserStrategyId())
                     .build();
 
             tradesRepository.save(newTrade);

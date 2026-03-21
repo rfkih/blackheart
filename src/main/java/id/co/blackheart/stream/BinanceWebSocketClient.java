@@ -163,11 +163,16 @@ public class BinanceWebSocketClient {
             String interval = kline.getString("i");
             boolean finalCandle = kline.getBoolean("x");
 
+            BigDecimal latestPrice =  new BigDecimal(kline.getString("c"));
+
+            liveTradeListenerService.process(SYMBOL, latestPrice);
+
             if (!isProcessable(interval, finalCandle)) {
                 return Mono.empty();
             }
 
             MarketData incomingMarketData = buildMarketData(container, kline, interval);
+
 
             MarketData latestBeforeInsert = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
 
@@ -301,7 +306,7 @@ public class BinanceWebSocketClient {
             }
         }
 
-        liveTradeListenerService.process(SYMBOL, marketData);
+
     }
 
     private boolean requiresFeatureComputation(String interval) {

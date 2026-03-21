@@ -57,8 +57,14 @@ public class TimeSeriesMomentumService implements StrategyExecutor {
         PositionSnapshot positionSnapshot = context.getPositionSnapshot();
 
         String interval = resolveInterval(context, featureStore);
+
+
         if (interval == null || interval.isBlank()) {
             return hold(null, "Interval is null");
+        }
+
+        if (context.getActiveTrade() != null){
+            return hold( interval,"Active trades exist");
         }
 
         IntervalProfile profile = INTERVAL_PROFILES.get(interval);

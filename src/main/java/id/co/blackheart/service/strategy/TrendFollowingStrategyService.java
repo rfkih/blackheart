@@ -92,6 +92,10 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
         MarketData marketData = context.getMarketData();
         FeatureStore featureStore = context.getFeatureStore();
 
+        if (context.getActiveTrade() != null){
+            return hold(null, "Active trades exist");
+        }
+
         if (interval == null || interval.isBlank()) {
             return hold(null, "Interval is null");
         }

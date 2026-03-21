@@ -1,10 +1,8 @@
 package id.co.blackheart.service.live;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
 import id.co.blackheart.dto.tradelistener.ListenerContext;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
-import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.TradesRepository;
@@ -14,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Slf4j
@@ -27,11 +26,11 @@ public class LiveTradeListenerService {
     private final TradeListenerService tradeListenerService;
     private final LiveTradingDecisionExecutorService liveTradingDecisionExecutorService;
 
-    public void process(String asset, MarketData marketData) {
+    public void process(String asset, BigDecimal latestPrice) {
 
         List<Trades> activeTrades = tradesRepository.findAllOpenTradesByAsset(asset);
 
-        if (activeTrades == null || activeTrades.isEmpty()) {
+        if (activeTrades.isEmpty()) {
             return;
         }
 
@@ -43,7 +42,7 @@ public class LiveTradeListenerService {
                         .asset(asset)
                         .interval("15m")
                         .positionSnapshot(positionSnapshot)
-                        .monitorCandle(marketData)
+                        .latestPrice(latestPrice)
                         .build();
 
                 ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
