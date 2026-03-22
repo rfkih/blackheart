@@ -352,7 +352,11 @@ public class TradeUtil {
 
         BigDecimal estimatedNotional = estimatedQty.multiply(bufferedPrice);
         if (estimatedNotional.compareTo(MIN_USDT_NOTIONAL) < 0) {
-            return PreTradeValidationResult.invalid("Estimated notional below minimum notional");
+            return PreTradeValidationResult.invalid(String.format(
+                    "Estimated notional below minimum notional. min=%s, estimated=%s",
+                    MIN_USDT_NOTIONAL,
+                    estimatedNotional
+            ));
         }
 
         SplitPlan estimatedPlan = buildSplitPlan(estimatedQty, bufferedPrice, decision, tradeType);
