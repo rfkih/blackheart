@@ -17,13 +17,11 @@ public class BacktestRunResponse {
 
     private UUID backtestRunId;
 
-    private UUID userId;
-
-    private String runName;
+    private UUID userStrategyId;
 
     private String strategyName;
 
-    private String symbol;
+    private String asset;
 
     private String interval;
 
@@ -35,35 +33,37 @@ public class BacktestRunResponse {
 
     private BigDecimal initialCapital;
 
-    private BigDecimal finalCapital;
+    private BigDecimal endingBalance;
 
-    private BigDecimal feeRate;
+    private BigDecimal riskPerTradePct;
 
-    private BigDecimal slippageRate;
+    private BigDecimal feePct;
 
-    private Boolean allowLong;
+    private BigDecimal slippagePct;
 
-    private Boolean allowShort;
+    private BigDecimal minNotional;
 
-    private Integer maxOpenPositions;
+    private BigDecimal minQty;
+
+    private BigDecimal qtyStep;
 
     private Integer totalTrades;
 
-    private Integer winningTrades;
+    private Integer totalWins;
 
-    private Integer losingTrades;
+    private Integer totalLosses;
 
     private BigDecimal winRate;
 
-    private BigDecimal profitFactor;
+    private BigDecimal grossProfit;
 
-    private BigDecimal maxDrawdownPercent;
+    private BigDecimal grossLoss;
 
-    private BigDecimal totalReturnPercent;
+    private BigDecimal netProfit;
 
-    private BigDecimal sharpeRatio;
+    private BigDecimal maxDrawdownPct;
 
-    private LocalDateTime createdAt;
+    private LocalDateTime createdTime;
 
-    private LocalDateTime updatedAt;
+    private LocalDateTime updatedTime;
 }

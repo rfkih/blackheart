@@ -3,9 +3,9 @@ package id.co.blackheart.service.live;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
 import id.co.blackheart.dto.tradelistener.ListenerContext;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
-import id.co.blackheart.model.Trades;
+import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Users;
-import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.tradelistener.TradeListenerService;
 import lombok.RequiredArgsConstructor;
@@ -20,7 +20,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class LiveTradeListenerService {
 
-    private final TradesRepository tradesRepository;
+    private final TradePositionRepository tradePositionRepository;
     private final UsersRepository usersRepository;
     private final LivePositionSnapshotMapper livePositionSnapshotMapper;
     private final TradeListenerService tradeListenerService;
@@ -28,19 +28,20 @@ public class LiveTradeListenerService {
 
     public void process(String asset, BigDecimal latestPrice) {
 
-        List<Trades> activeTrades = tradesRepository.findAllOpenTradesByAsset(asset);
+        List<TradePosition> activeTradePositions =
+                tradePositionRepository.findAllByAssetAndStatus(asset, "OPEN");
 
-        if (activeTrades.isEmpty()) {
+        if (activeTradePositions.isEmpty()) {
             return;
         }
 
-        for (Trades activeTrade : activeTrades) {
+        for (TradePosition activeTradePosition : activeTradePositions) {
             try {
-                PositionSnapshot positionSnapshot = livePositionSnapshotMapper.toSnapshot(activeTrade);
+                PositionSnapshot positionSnapshot = livePositionSnapshotMapper.toSnapshot(activeTradePosition);
 
                 ListenerContext listenerContext = ListenerContext.builder()
                         .asset(asset)
-                        .interval("15m")
+                        .interval(activeTradePosition.getInterval())
                         .positionSnapshot(positionSnapshot)
                         .latestPrice(latestPrice)
                         .build();
@@ -51,27 +52,24 @@ public class LiveTradeListenerService {
                     continue;
                 }
 
-                Users user = usersRepository.findByUserId(activeTrade.getUserId());
+                Users user = usersRepository.findByUserId(activeTradePosition.getUserId());
 
                 if (user == null) {
-                    log.warn("Listener close skipped because user not found | tradeId={} userId={}",
-                            activeTrade.getTradeId(), activeTrade.getUserId());
+                    log.warn("Listener close skipped because user not found | tradePositionId={} userId={}",
+                            activeTradePosition.getTradePositionId(), activeTradePosition.getUserId());
                     continue;
                 }
 
-                log.info("Listener triggered | tradeId={} userId={} asset={} side={} reason={} exitPrice={}",
-                        activeTrade.getTradeId(),
-                        activeTrade.getUserId(),
+                liveTradingDecisionExecutorService.executeListenerClosePosition(
+                        user,
+                        activeTradePosition,
                         asset,
-                        activeTrade.getSide(),
-                        listenerDecision.getExitReason(),
-                        listenerDecision.getExitPrice());
-
-                liveTradingDecisionExecutorService.executeListenerClose(user,activeTrade,asset,listenerDecision);
+                        listenerDecision
+                );
 
             } catch (Exception e) {
-                log.error("Live listener failed | tradeId={} asset={}",
-                        activeTrade.getTradeId(), asset, e);
+                log.error("Live listener failed | tradePositionId={} asset={}",
+                        activeTradePosition.getTradePositionId(), asset, e);
             }
         }
     }

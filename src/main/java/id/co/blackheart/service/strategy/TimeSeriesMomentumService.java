@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Map;
 
 @Service
@@ -18,6 +19,8 @@ public class TimeSeriesMomentumService implements StrategyExecutor {
 
     public static final String STRATEGY_NAME = "TSMOM";
     public static final String SIDE_LONG = "LONG";
+
+    private static final BigDecimal ONE_HUNDRED = new BigDecimal("100");
 
     /**
      * Dynamic profile by interval.
@@ -58,13 +61,14 @@ public class TimeSeriesMomentumService implements StrategyExecutor {
 
         String interval = resolveInterval(context, featureStore);
 
-
         if (interval == null || interval.isBlank()) {
             return hold(null, "Interval is null");
         }
 
-        if (context.getActiveTrade() != null){
-            return hold( interval,"Active trades exist");
+        if (context.getCurrentOpenTradeCount() != null
+                && context.getMaxOpenPositions() != null
+                && context.getCurrentOpenTradeCount() >= context.getMaxOpenPositions()) {
+            return hold(interval, "Max open parent trades reached");
         }
 
         IntervalProfile profile = INTERVAL_PROFILES.get(interval);
@@ -103,19 +107,50 @@ public class TimeSeriesMomentumService implements StrategyExecutor {
         BigDecimal stopLoss = close.subtract(atr.multiply(profile.stopAtrMultiplier()));
         BigDecimal takeProfit = close.add(atr.multiply(profile.takeProfitAtrMultiplier()));
 
+        BigDecimal positionSize = calculatePositionSize(context, SIDE_LONG);
+        if (positionSize.compareTo(BigDecimal.ZERO) <= 0) {
+            return hold(interval, "Calculated position size is zero or invalid");
+        }
+
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_LONG)
                 .strategyName(STRATEGY_NAME)
                 .strategyInterval(interval)
                 .side(SIDE_LONG)
                 .reason(interval + " time-series momentum long")
-                .positionSize(BigDecimal.ONE)
+                .positionSize(positionSize)
                 .stopLossPrice(stopLoss)
                 .takeProfitPrice(takeProfit)
                 .entryAdx(featureStore.getAdx())
                 .entryAtr(featureStore.getAtr())
                 .entryTrendRegime(featureStore.getTrendRegime())
                 .build();
+    }
+
+    private BigDecimal calculatePositionSize(StrategyContext context, String side) {
+        if (context == null || side == null || side.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal riskPerTradePct = context.getRiskPerTradePct();
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal baseAmount;
+        if ("SHORT".equalsIgnoreCase(side)) {
+            baseAmount = context.getAssetBalance();
+        } else {
+            baseAmount = context.getCashBalance();
+        }
+
+        if (baseAmount == null || baseAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        return baseAmount
+                .multiply(riskPerTradePct)
+                .divide(ONE_HUNDRED, 8, RoundingMode.HALF_UP);
     }
 
     private boolean isValidLongBias(FeatureStore f, BigDecimal close, IntervalProfile profile) {

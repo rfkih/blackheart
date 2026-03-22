@@ -1,4 +1,5 @@
 package id.co.blackheart.service.tradelistener;
+
 import id.co.blackheart.dto.strategy.PositionSnapshot;
 import id.co.blackheart.dto.tradelistener.ListenerContext;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
@@ -17,6 +18,7 @@ public class TradeListenerService {
 
     private static final String EXIT_STOP_LOSS = "STOP_LOSS";
     private static final String EXIT_TAKE_PROFIT = "TAKE_PROFIT";
+    private static final String EXIT_TRAILING_STOP = "TRAILING_STOP";
 
     public ListenerDecision evaluate(ListenerContext context) {
         if (context == null || context.getPositionSnapshot() == null || context.getLatestPrice() == null) {
@@ -42,14 +44,21 @@ public class TradeListenerService {
 
     private ListenerDecision evaluateLong(PositionSnapshot position, BigDecimal latestPrice) {
         BigDecimal stopLoss = position.getCurrentStopLossPrice();
+        BigDecimal trailingStop = position.getTrailingStopPrice();
         BigDecimal takeProfit = position.getTakeProfitPrice();
 
-        boolean stopHit = stopLoss != null
-                && latestPrice.compareTo(stopLoss) <= 0;
+        boolean stopHit = stopLoss != null && latestPrice.compareTo(stopLoss) <= 0;
+        boolean trailingHit = trailingStop != null && latestPrice.compareTo(trailingStop) <= 0;
+        boolean takeProfitHit = takeProfit != null && latestPrice.compareTo(takeProfit) >= 0;
 
-        boolean takeProfitHit = takeProfit != null
-                && latestPrice.compareTo(takeProfit) >= 0;
-
+        if (trailingHit) {
+            return ListenerDecision.builder()
+                    .triggered(true)
+                    .exitReason(EXIT_TRAILING_STOP)
+                    .exitPrice(trailingStop)
+                    .exitTime(LocalDateTime.now())
+                    .build();
+        }
 
         if (stopHit) {
             return ListenerDecision.builder()
@@ -74,14 +83,21 @@ public class TradeListenerService {
 
     private ListenerDecision evaluateShort(PositionSnapshot position, BigDecimal latestPrice) {
         BigDecimal stopLoss = position.getCurrentStopLossPrice();
+        BigDecimal trailingStop = position.getTrailingStopPrice();
         BigDecimal takeProfit = position.getTakeProfitPrice();
 
-        boolean stopHit = stopLoss != null
-                && latestPrice.compareTo(stopLoss) >= 0;
+        boolean stopHit = stopLoss != null && latestPrice.compareTo(stopLoss) >= 0;
+        boolean trailingHit = trailingStop != null && latestPrice.compareTo(trailingStop) >= 0;
+        boolean takeProfitHit = takeProfit != null && latestPrice.compareTo(takeProfit) <= 0;
 
-        boolean takeProfitHit = takeProfit != null
-                && latestPrice.compareTo(takeProfit) <= 0;
-
+        if (trailingHit) {
+            return ListenerDecision.builder()
+                    .triggered(true)
+                    .exitReason(EXIT_TRAILING_STOP)
+                    .exitPrice(trailingStop)
+                    .exitTime(LocalDateTime.now())
+                    .build();
+        }
 
         if (stopHit) {
             return ListenerDecision.builder()

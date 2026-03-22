@@ -13,7 +13,7 @@ public class BacktestStateService {
     public void updateEquityAndDrawdown(BacktestState state, BigDecimal currentClosePrice) {
         BigDecimal currentEquity = calculateCurrentEquity(state, currentClosePrice);
 
-        if (currentEquity.compareTo(state.getPeakEquity()) > 0) {
+        if (state.getPeakEquity() == null || currentEquity.compareTo(state.getPeakEquity()) > 0) {
             state.setPeakEquity(currentEquity);
         }
 
@@ -23,7 +23,8 @@ public class BacktestStateService {
                     .divide(state.getPeakEquity(), 8, RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
 
-            if (drawdownPercent.compareTo(state.getMaxDrawdownPercent()) > 0) {
+            if (state.getMaxDrawdownPercent() == null
+                    || drawdownPercent.compareTo(state.getMaxDrawdownPercent()) > 0) {
                 state.setMaxDrawdownPercent(drawdownPercent);
             }
         }
@@ -36,27 +37,33 @@ public class BacktestStateService {
             return safe(state.getCashBalance());
         }
 
-        BigDecimal entryQuoteQty = safe(activeTrade.getEntryQuoteQty());
-        BigDecimal entryQty = safe(activeTrade.getEntryQty());
-        BigDecimal entryFee = safe(activeTrade.getEntryFee());
-        BigDecimal entryPrice = safe(activeTrade.getEntryPrice());
+        BigDecimal entryQuoteQty = safe(activeTrade.getTotalEntryQuoteQty());
+        BigDecimal entryQty = safe(activeTrade.getTotalEntryQty());
+        BigDecimal remainingQty = safe(activeTrade.getTotalRemainingQty());
+        BigDecimal totalFeeAmount = safe(activeTrade.getTotalFeeAmount());
+        BigDecimal entryPrice = safe(activeTrade.getAvgEntryPrice());
 
         if ("LONG".equalsIgnoreCase(activeTrade.getSide())) {
-            BigDecimal markToMarketValue = entryQty.multiply(currentClosePrice);
+            BigDecimal markToMarketValue = remainingQty.multiply(currentClosePrice);
             BigDecimal unrealizedPnl = markToMarketValue
-                    .subtract(entryQuoteQty)
-                    .subtract(entryFee);
+                    .subtract(remainingQty.multiply(entryPrice));
 
-            return entryQuoteQty.add(unrealizedPnl);
+            return safe(state.getCashBalance())
+                    .add(markToMarketValue)
+                    .subtract(totalFeeAmount)
+                    .add(safe(activeTrade.getRealizedPnlAmount()));
         }
 
         if ("SHORT".equalsIgnoreCase(activeTrade.getSide())) {
             BigDecimal unrealizedPnl = entryPrice
                     .subtract(currentClosePrice)
-                    .multiply(entryQty)
-                    .subtract(entryFee);
+                    .multiply(remainingQty);
 
-            return entryQuoteQty.add(unrealizedPnl);
+            return safe(state.getCashBalance())
+                    .add(entryQuoteQty)
+                    .add(unrealizedPnl)
+                    .subtract(totalFeeAmount)
+                    .add(safe(activeTrade.getRealizedPnlAmount()));
         }
 
         return safe(state.getCashBalance());

@@ -4,42 +4,64 @@ import id.co.blackheart.model.Trades;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-@Repository
-public interface TradesRepository extends JpaRepository<Trades, Long> {
+public interface TradesRepository extends JpaRepository<Trades, UUID> {
 
     @Query(value = """
-    SELECT *
-    FROM trades
-    WHERE asset = :asset
-      AND status = 'OPEN'
-    ORDER BY entry_time ASC
-    """, nativeQuery = true)
-    List<Trades> findAllOpenTradesByAsset(
-            @Param("asset") String asset
+            SELECT *
+            FROM trades t
+            WHERE t.trade_id = :tradeId
+            """, nativeQuery = true)
+    Optional<Trades> findByTradeId(@Param("tradeId") UUID tradeId);
+
+    @Query(value = """
+            SELECT *
+            FROM trades t
+            WHERE t.user_id = :userId
+              AND t.user_strategy_id = :userStrategyId
+              AND t.asset = :asset
+              AND t.interval = :interval
+              AND t.status IN (:statuses)
+            ORDER BY t.entry_time DESC
+            """, nativeQuery = true)
+    List<Trades> findAllActiveTrades(
+            @Param("userId") UUID userId,
+            @Param("userStrategyId") UUID userStrategyId,
+            @Param("asset") String asset,
+            @Param("interval") String interval,
+            @Param("statuses") List<String> statuses
     );
 
     @Query(value = """
-        SELECT *
-        FROM trades
-        WHERE user_id = :userId
-          AND asset = :asset
-          AND strategy_name = :strategyName
-          AND "interval" = :interval
-          AND status = 'OPEN'
-        ORDER BY entry_time DESC
-        LIMIT 1
-        """, nativeQuery = true)
-    Optional<Trades> findLatestOpenTrade(
+            SELECT COUNT(1)
+            FROM trades t
+            WHERE t.user_id = :userId
+              AND t.user_strategy_id = :userStrategyId
+              AND t.asset = :asset
+              AND t.interval = :interval
+              AND t.status IN (:statuses)
+            """, nativeQuery = true)
+    long countActiveTrades(
             @Param("userId") UUID userId,
+            @Param("userStrategyId") UUID userStrategyId,
             @Param("asset") String asset,
-            @Param("strategyName") String strategyName,
-            @Param("interval") String interval
+            @Param("interval") String interval,
+            @Param("statuses") List<String> statuses
+    );
+
+    @Query(value = """
+            SELECT *
+            FROM trades t
+            WHERE t.asset = :asset
+              AND t.status IN (:statuses)
+            ORDER BY t.entry_time DESC
+            """, nativeQuery = true)
+    List<Trades> findAllByAssetAndStatuses(
+            @Param("asset") String asset,
+            @Param("statuses") List<String> statuses
     );
 }
-

@@ -6,8 +6,10 @@ import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
 import id.co.blackheart.model.Portfolio;
+import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.model.Users;
+import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.util.TradeUtil;
@@ -17,9 +19,10 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-
-import static id.co.blackheart.service.strategy.TrendFollowingStrategyService.SIDE_LONG;
-import static id.co.blackheart.service.strategy.TrendFollowingStrategyService.SIDE_SHORT;
+import java.time.LocalDateTime;
+import java.util.Comparator;
+import java.util.List;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -30,56 +33,88 @@ public class LiveTradingDecisionExecutorService {
     private static final BigDecimal MIN_BASE_ASSET_QTY = new BigDecimal("0.00008");
 
     private final TradesRepository tradesRepository;
+    private final TradePositionRepository tradePositionRepository;
     private final PortfolioService portfolioService;
     private final TradeUtil tradeUtil;
 
     public void execute(Trades activeTrade, StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
+        if (decision == null || decision.getDecisionType() == null) {
+            return;
+        }
+
         switch (decision.getDecisionType()) {
             case OPEN_LONG -> executeOpenLong(context, decision);
             case OPEN_SHORT -> executeOpenShort(context, decision);
-            case CLOSE_LONG -> executeCloseLong(activeTrade, context, decision);
-            case CLOSE_SHORT -> executeCloseShort(activeTrade, context, decision);
             case UPDATE_TRAILING_STOP -> executeUpdateTrailingStop(activeTrade, decision);
+            case CLOSE_LONG -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
+            case CLOSE_SHORT -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
             case HOLD -> log.debug("No execution for HOLD");
+            default -> log.debug("Decision type not handled yet: {}", decision.getDecisionType());
         }
     }
 
-    public void executeListenerClose(Users user,Trades activeTrade,String asset,ListenerDecision listenerDecision) throws JsonProcessingException {
-        if (activeTrade == null) {
-            log.warn("Listener close skipped because activeTrade is null");
+    public void executeListenerClosePosition(
+            Users user,
+            TradePosition activeTradePosition,
+            String asset,
+            ListenerDecision listenerDecision
+    ) throws JsonProcessingException {
+        if (activeTradePosition == null || listenerDecision == null || !listenerDecision.isTriggered()) {
             return;
         }
 
-        if (listenerDecision == null || !listenerDecision.isTriggered()) {
-            log.debug("Listener close skipped because decision is not triggered");
+        activeTradePosition.setExitReason(listenerDecision.getExitReason());
+        tradePositionRepository.save(activeTradePosition);
+
+        if ("LONG".equalsIgnoreCase(activeTradePosition.getSide())) {
+            tradeUtil.binanceCloseLongPositionMarketOrder(user, activeTradePosition, asset);
+        } else if ("SHORT".equalsIgnoreCase(activeTradePosition.getSide())) {
+            tradeUtil.binanceCloseShortPositionMarketOrder(user, activeTradePosition, asset);
+        } else {
+            log.warn(
+                    "Unknown side for listener close | tradePositionId={} side={}",
+                    activeTradePosition.getTradePositionId(),
+                    activeTradePosition.getSide()
+            );
             return;
         }
 
-        activeTrade.setExitReason(listenerDecision.getExitReason());
-        tradesRepository.save(activeTrade);
+        refreshParentTradeSummary(activeTradePosition.getTradeId());
+    }
 
-        if (SIDE_LONG.equalsIgnoreCase(activeTrade.getSide())) {
-            if ("BNC".equalsIgnoreCase(user.getExchange())) {
-                tradeUtil.binanceCloseLongMarketOrder(user, activeTrade, asset);
-                return;
+    public void executeManualClosePosition(Users user, UUID tradePositionId) throws JsonProcessingException {
+        TradePosition tradePosition = tradePositionRepository.findByTradePositionId(tradePositionId).orElse(null);
+        if (tradePosition == null || !"OPEN".equalsIgnoreCase(tradePosition.getStatus())) {
+            return;
+        }
+
+        tradePosition.setExitReason("MANUAL_CLOSE");
+        tradePositionRepository.save(tradePosition);
+
+        if ("LONG".equalsIgnoreCase(tradePosition.getSide())) {
+            tradeUtil.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+        } else if ("SHORT".equalsIgnoreCase(tradePosition.getSide())) {
+            tradeUtil.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+        }
+
+        refreshParentTradeSummary(tradePosition.getTradeId());
+    }
+
+    public void executeManualCloseTrade(Users user, UUID tradeId) throws JsonProcessingException {
+        List<TradePosition> openPositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, "OPEN");
+
+        for (TradePosition tradePosition : openPositions) {
+            tradePosition.setExitReason("MANUAL_CLOSE");
+            tradePositionRepository.save(tradePosition);
+
+            if ("LONG".equalsIgnoreCase(tradePosition.getSide())) {
+                tradeUtil.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+            } else if ("SHORT".equalsIgnoreCase(tradePosition.getSide())) {
+                tradeUtil.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
             }
-
-            log.warn("Unsupported exchange for LONG listener close: {}", user.getExchange());
-            return;
         }
 
-        if (SIDE_SHORT.equalsIgnoreCase(activeTrade.getSide())) {
-            if ("BNC".equalsIgnoreCase(user.getExchange())) {
-                tradeUtil.binanceCloseShortMarketOrder(user, activeTrade, asset);
-                return;
-            }
-
-            log.warn("Unsupported exchange for SHORT listener close: {}", user.getExchange());
-            return;
-        }
-
-        log.warn("Listener close skipped because trade side is unknown | tradeId={} side={}",
-                activeTrade.getTradeId(), activeTrade.getSide());
+        refreshParentTradeSummary(tradeId);
     }
 
     private void executeOpenLong(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
@@ -95,11 +130,7 @@ public class LiveTradingDecisionExecutorService {
         }
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceOpenLongMarketOrder(
-                    context,
-                    mapToTradeDecision(decision),
-                    tradeAmount
-            );
+            tradeUtil.binanceOpenLongMarketOrder(context, decision, tradeAmount);
             return;
         }
 
@@ -121,80 +152,154 @@ public class LiveTradingDecisionExecutorService {
         }
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceOpenShortMarketOrder(
-                    context,
-                    asset,
-                    mapToTradeDecision(decision),
-                    tradeAmount
-            );
+            tradeUtil.binanceOpenShortMarketOrder(context, asset, decision, tradeAmount);
             return;
         }
 
         log.warn("Unsupported exchange for SHORT entry: {}", user.getExchange());
     }
 
-    private void executeCloseLong(Trades activeTrade, StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
-        Users user = context.getUser();
-
-        if (activeTrade == null) {
-            log.warn("CLOSE_LONG skipped because activeTrade is null");
-            return;
-        }
-
-        activeTrade.setExitReason(decision.getExitReason());
-        tradesRepository.save(activeTrade);
-
-        if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceCloseLongMarketOrder(user, activeTrade, context.getAsset());
-            return;
-        }
-
-        log.warn("Unsupported exchange for LONG close: {}", user.getExchange());
-    }
-
-    private void executeCloseShort(Trades activeTrade, StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
-        Users user = context.getUser();
-
-        if (activeTrade == null) {
-            log.warn("CLOSE_SHORT skipped because activeTrade is null");
-            return;
-        }
-
-        activeTrade.setExitReason(decision.getExitReason());
-        tradesRepository.save(activeTrade);
-
-        if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceCloseShortMarketOrder(user, activeTrade, context.getAsset());
-            return;
-        }
-
-        log.warn("Unsupported exchange for SHORT close: {}", user.getExchange());
-    }
-
     private void executeUpdateTrailingStop(Trades activeTrade, StrategyDecision decision) {
         if (activeTrade == null) {
-            log.warn("UPDATE_TRAILING_STOP skipped because activeTrade is null");
             return;
         }
 
-        activeTrade.setTrailingStopPrice(decision.getTrailingStopPrice());
-        activeTrade.setCurrentStopLossPrice(decision.getStopLossPrice());
-        tradesRepository.save(activeTrade);
+        List<TradePosition> openPositions =
+                tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), "OPEN");
 
-        log.info("Trailing stop updated | tradeId={} asset={} newStop={}",
-                activeTrade.getTradeId(),
-                activeTrade.getAsset(),
-                decision.getStopLossPrice());
+        for (TradePosition tradePosition : openPositions) {
+            if (!"RUNNER".equalsIgnoreCase(tradePosition.getPositionRole())
+                    && !"SINGLE".equalsIgnoreCase(tradePosition.getPositionRole())) {
+                continue;
+            }
+
+            if (decision.getTrailingStopPrice() != null) {
+                tradePosition.setTrailingStopPrice(decision.getTrailingStopPrice());
+            }
+
+            if (decision.getStopLossPrice() != null) {
+                tradePosition.setCurrentStopLossPrice(decision.getStopLossPrice());
+            }
+
+            if (decision.getTakeProfitPrice() != null) {
+                tradePosition.setTakeProfitPrice(decision.getTakeProfitPrice());
+            }
+
+            tradePositionRepository.save(tradePosition);
+        }
     }
 
-    private TradeDecision mapToTradeDecision(StrategyDecision decision) {
-        return TradeDecision.builder()
-                .action("LONG".equalsIgnoreCase(decision.getSide()) ? "BUY" : "SELL")
-                .positionSize(decision.getPositionSize())
-                .stopLossPrice(decision.getStopLossPrice())
-                .takeProfitPrice(decision.getTakeProfitPrice())
-                .build();
+    private void executeCloseTrade(Trades activeTrade, Users user, String exitReason) throws JsonProcessingException {
+        if (activeTrade == null || user == null) {
+            return;
+        }
+
+        List<TradePosition> openPositions =
+                tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), "OPEN");
+
+        for (TradePosition tradePosition : openPositions) {
+            tradePosition.setExitReason(exitReason != null ? exitReason : "STRATEGY_EXIT");
+            tradePositionRepository.save(tradePosition);
+
+            if ("LONG".equalsIgnoreCase(tradePosition.getSide())) {
+                tradeUtil.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+            } else if ("SHORT".equalsIgnoreCase(tradePosition.getSide())) {
+                tradeUtil.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+            }
+        }
+
+        refreshParentTradeSummary(activeTrade.getTradeId());
     }
+
+    private void refreshParentTradeSummary(UUID tradeId) {
+        Trades trade = tradesRepository.findByTradeId(tradeId).orElse(null);
+        if (trade == null) {
+            return;
+        }
+
+        List<TradePosition> allPositions = tradePositionRepository.findAllByTradeId(tradeId);
+        if (allPositions.isEmpty()) {
+            return;
+        }
+
+        BigDecimal totalRemainingQty = allPositions.stream()
+                .map(TradePosition::getRemainingQty)
+                .filter(v -> v != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal realizedPnlAmount = allPositions.stream()
+                .map(TradePosition::getRealizedPnlAmount)
+                .filter(v -> v != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal totalFeeAmount = allPositions.stream()
+                .map(tp -> safe(tp.getEntryFee()).add(safe(tp.getExitFee())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        List<TradePosition> closedPositions = allPositions.stream()
+                .filter(tp -> "CLOSED".equalsIgnoreCase(tp.getStatus()))
+                .toList();
+
+        BigDecimal avgExitPrice = null;
+        if (!closedPositions.isEmpty()) {
+            BigDecimal totalClosedQty = closedPositions.stream()
+                    .map(TradePosition::getExitExecutedQty)
+                    .filter(v -> v != null)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal totalClosedQuote = closedPositions.stream()
+                    .map(tp -> safe(tp.getExitPrice()).multiply(safe(tp.getExitExecutedQty())))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            if (totalClosedQty.compareTo(BigDecimal.ZERO) > 0) {
+                avgExitPrice = totalClosedQuote.divide(totalClosedQty, 8, RoundingMode.HALF_UP);
+            }
+        }
+
+        long openCount = allPositions.stream()
+                .filter(tp -> "OPEN".equalsIgnoreCase(tp.getStatus()))
+                .count();
+
+        trade.setTotalRemainingQty(totalRemainingQty);
+        trade.setRealizedPnlAmount(realizedPnlAmount);
+        trade.setTotalFeeAmount(totalFeeAmount);
+        trade.setAvgExitPrice(avgExitPrice);
+
+        if (trade.getTotalEntryQuoteQty() != null
+                && trade.getTotalEntryQuoteQty().compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal pnlPercent = realizedPnlAmount
+                    .divide(trade.getTotalEntryQuoteQty(), 8, RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("100"));
+            trade.setRealizedPnlPercent(pnlPercent);
+        }
+
+        if (openCount == 0) {
+            trade.setStatus("CLOSED");
+            trade.setExitTime(LocalDateTime.now());
+
+            TradePosition latestClosed = closedPositions.stream()
+                    .max(Comparator.comparing(
+                            TradePosition::getExitTime,
+                            Comparator.nullsLast(Comparator.naturalOrder())
+                    ))
+                    .orElse(null);
+
+            if (latestClosed != null) {
+                trade.setExitReason(latestClosed.getExitReason());
+            }
+        } else if (openCount < allPositions.size()) {
+            trade.setStatus("PARTIALLY_CLOSED");
+        } else {
+            trade.setStatus("OPEN");
+        }
+
+        tradesRepository.save(trade);
+    }
+
+    private BigDecimal safe(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
 
     private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Users user) {
         BigDecimal tradeAmount = usdtBalance

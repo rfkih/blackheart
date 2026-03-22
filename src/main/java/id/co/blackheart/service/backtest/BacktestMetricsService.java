@@ -18,18 +18,19 @@ public class BacktestMetricsService {
 
         int totalTrades = trades.size();
         int winningTrades = (int) trades.stream()
-                .filter(t -> t.getPlAmount() != null && t.getPlAmount().compareTo(BigDecimal.ZERO) > 0)
+                .filter(t -> t.getRealizedPnlAmount() != null
+                        && t.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) > 0)
                 .count();
 
         int losingTrades = totalTrades - winningTrades;
 
         BigDecimal grossProfit = trades.stream()
-                .map(BacktestTrade::getPlAmount)
+                .map(BacktestTrade::getRealizedPnlAmount)
                 .filter(v -> v != null && v.compareTo(BigDecimal.ZERO) > 0)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         BigDecimal grossLoss = trades.stream()
-                .map(BacktestTrade::getPlAmount)
+                .map(BacktestTrade::getRealizedPnlAmount)
                 .filter(v -> v != null && v.compareTo(BigDecimal.ZERO) < 0)
                 .map(BigDecimal::abs)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
