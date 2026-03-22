@@ -9,10 +9,8 @@ import id.co.blackheart.dto.tradelistener.ListenerContext;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
-import id.co.blackheart.model.BacktestTradePosition;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
-import id.co.blackheart.repository.BacktestTradePositionRepository;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.service.strategy.StrategyExecutor;
@@ -47,7 +45,6 @@ public class BacktestCoordinatorService {
     private final BacktestMetricsService backtestMetricsService;
     private final BacktestPositionSnapshotMapper backtestPositionSnapshotMapper;
     private final BacktestStateService backtestStateService;
-    private final BacktestTradePositionRepository backtestTradePositionRepository;
 
     public BacktestExecutionSummary execute(BacktestRun backtestRun) {
         validateBacktestRun(backtestRun);
@@ -174,15 +171,12 @@ public class BacktestCoordinatorService {
             MarketData monitorCandle
     ) {
         BacktestTrade activeTrade = state.getActiveTrade();
-        if (activeTrade == null) {
+        if (activeTrade == null || state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
             return false;
         }
 
-        List<BacktestTradePosition> openPositions =
-                backtestTradePositionRepository.findAllOpenPositionsByTradeId(activeTrade.getBacktestTradeId());
-
         PositionSnapshot positionSnapshot =
-                backtestPositionSnapshotMapper.toSnapshot(activeTrade, openPositions);
+                backtestPositionSnapshotMapper.toSnapshot(activeTrade, state.getActiveTradePositions());
 
         ListenerContext listenerContext = ListenerContext.builder()
                 .asset(backtestRun.getAsset())
@@ -262,15 +256,15 @@ public class BacktestCoordinatorService {
         }
 
         PositionSnapshot positionSnapshot;
-        if (state.getActiveTrade() == null) {
+        if (state.getActiveTrade() == null || state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
             positionSnapshot = PositionSnapshot.builder()
                     .hasOpenPosition(false)
                     .build();
         } else {
-            List<BacktestTradePosition> openPositions =
-                    backtestTradePositionRepository.findAllOpenPositionsByTradeId(state.getActiveTrade().getBacktestTradeId());
-
-            positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade(), openPositions);
+            positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(
+                    state.getActiveTrade(),
+                    state.getActiveTradePositions()
+            );
         }
 
         StrategyContext strategyContext = StrategyContext.builder()
@@ -294,14 +288,14 @@ public class BacktestCoordinatorService {
         StrategyExecutor executor = strategyExecutorFactory.get(backtestRun.getStrategyName());
         StrategyDecision decision = executor.execute(strategyContext);
 
-        if (decision != null && !DecisionType.HOLD.equals(decision.getDecisionType())) {
-            log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
-                    backtestRun.getBacktestRunId(),
-                    strategyCandle.getEndTime(),
-                    strategyInterval,
-                    decision.getDecisionType(),
-                    decision.getReason());
-        }
+//        if (decision != null && !DecisionType.HOLD.equals(decision.getDecisionType())) {
+//            log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
+//                    backtestRun.getBacktestRunId(),
+//                    strategyCandle.getEndTime(),
+//                    strategyInterval,
+//                    decision.getDecisionType(),
+//                    decision.getReason());
+//        }
 
         backtestTradeExecutorService.execute(backtestRun, state, strategyContext, decision);
     }

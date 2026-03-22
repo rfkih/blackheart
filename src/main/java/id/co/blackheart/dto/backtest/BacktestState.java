@@ -2,6 +2,7 @@ package id.co.blackheart.dto.backtest;
 
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
+import id.co.blackheart.model.BacktestTradePosition;
 import lombok.Builder;
 import lombok.Data;
 
@@ -19,12 +20,24 @@ public class BacktestState {
     private BigDecimal maxDrawdownPercent;
 
     /**
-     * Active parent trade only.
-     * Child split positions are stored in backtest_trade_position table.
+     * Active parent trade in memory.
      */
     private BacktestTrade activeTrade;
 
+    /**
+     * Active child positions in memory.
+     */
+    private List<BacktestTradePosition> activeTradePositions;
+
+    /**
+     * Completed parent trades in memory.
+     */
     private List<BacktestTrade> completedTrades;
+
+    /**
+     * Completed child positions in memory.
+     */
+    private List<BacktestTradePosition> completedTradePositions;
 
     public static BacktestState initial(BacktestRun run) {
         return BacktestState.builder()
@@ -33,7 +46,9 @@ public class BacktestState {
                 .peakEquity(run.getInitialCapital())
                 .maxDrawdownPercent(BigDecimal.ZERO)
                 .activeTrade(null)
+                .activeTradePositions(new ArrayList<>())
                 .completedTrades(new ArrayList<>())
+                .completedTradePositions(new ArrayList<>())
                 .build();
     }
 }

@@ -7,6 +7,7 @@ import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -15,6 +16,7 @@ import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class TimeSeriesMomentumService implements StrategyExecutor {
 
     public static final String STRATEGY_NAME = "TSMOM";
@@ -148,9 +150,12 @@ public class TimeSeriesMomentumService implements StrategyExecutor {
             return BigDecimal.ZERO;
         }
 
+        log.info("risk Per Trade {}", riskPerTradePct);
+        log.info("baseAmount {}", baseAmount);
+
         return baseAmount
                 .multiply(riskPerTradePct)
-                .divide(ONE_HUNDRED, 8, RoundingMode.HALF_UP);
+                .setScale(8, RoundingMode.HALF_UP);
     }
 
     private boolean isValidLongBias(FeatureStore f, BigDecimal close, IntervalProfile profile) {
