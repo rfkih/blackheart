@@ -1,7 +1,6 @@
 package id.co.blackheart.service.live;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import id.co.blackheart.dto.TradeDecision;
 import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
@@ -32,12 +31,20 @@ public class LiveTradingDecisionExecutorService {
     private static final BigDecimal MIN_USDT_NOTIONAL = new BigDecimal("7");
     private static final BigDecimal MIN_BASE_ASSET_QTY = new BigDecimal("0.00008");
 
+    private static final String STATUS_OPEN = "OPEN";
+    private static final String STATUS_CLOSED = "CLOSED";
+    private static final String STATUS_PARTIALLY_CLOSED = "PARTIALLY_CLOSED";
+
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
     private final PortfolioService portfolioService;
     private final TradeUtil tradeUtil;
 
-    public void execute(Trades activeTrade, StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
+    public void execute(
+            Trades activeTrade,
+            StrategyContext context,
+            StrategyDecision decision
+    ) throws JsonProcessingException {
         if (decision == null || decision.getDecisionType() == null) {
             return;
         }
@@ -45,7 +52,7 @@ public class LiveTradingDecisionExecutorService {
         switch (decision.getDecisionType()) {
             case OPEN_LONG -> executeOpenLong(context, decision);
             case OPEN_SHORT -> executeOpenShort(context, decision);
-            case UPDATE_TRAILING_STOP -> executeUpdateTrailingStop(activeTrade, decision);
+            case UPDATE_POSITION_MANAGEMENT -> executeUpdatePositionManagement(activeTrade, decision);
             case CLOSE_LONG -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
             case CLOSE_SHORT -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
             case HOLD -> log.debug("No execution for HOLD");
@@ -82,9 +89,12 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(activeTradePosition.getTradeId());
     }
 
-    public void executeManualClosePosition(Users user, UUID tradePositionId) throws JsonProcessingException {
+    public void executeManualClosePosition(
+            Users user,
+            UUID tradePositionId
+    ) throws JsonProcessingException {
         TradePosition tradePosition = tradePositionRepository.findByTradePositionId(tradePositionId).orElse(null);
-        if (tradePosition == null || !"OPEN".equalsIgnoreCase(tradePosition.getStatus())) {
+        if (tradePosition == null || !STATUS_OPEN.equalsIgnoreCase(tradePosition.getStatus())) {
             return;
         }
 
@@ -100,8 +110,11 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(tradePosition.getTradeId());
     }
 
-    public void executeManualCloseTrade(Users user, UUID tradeId) throws JsonProcessingException {
-        List<TradePosition> openPositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, "OPEN");
+    public void executeManualCloseTrade(
+            Users user,
+            UUID tradeId
+    ) throws JsonProcessingException {
+        List<TradePosition> openPositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
 
         for (TradePosition tradePosition : openPositions) {
             tradePosition.setExitReason("MANUAL_CLOSE");
@@ -117,7 +130,10 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(tradeId);
     }
 
-    private void executeOpenLong(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
+    private void executeOpenLong(
+            StrategyContext context,
+            StrategyDecision decision
+    ) throws JsonProcessingException {
         Users user = context.getUser();
 
         Portfolio usdtPortfolio = portfolioService.updateAndGetAssetBalance("USDT", user);
@@ -137,7 +153,10 @@ public class LiveTradingDecisionExecutorService {
         log.warn("Unsupported exchange for LONG entry: {}", user.getExchange());
     }
 
-    private void executeOpenShort(StrategyContext context, StrategyDecision decision) throws JsonProcessingException {
+    private void executeOpenShort(
+            StrategyContext context,
+            StrategyDecision decision
+    ) throws JsonProcessingException {
         Users user = context.getUser();
         String asset = context.getAsset();
         String baseAsset = resolveBaseAsset(asset);
@@ -159,43 +178,29 @@ public class LiveTradingDecisionExecutorService {
         log.warn("Unsupported exchange for SHORT entry: {}", user.getExchange());
     }
 
-    private void executeUpdateTrailingStop(Trades activeTrade, StrategyDecision decision) {
-        if (activeTrade == null) {
+    private void executeUpdatePositionManagement(
+            Trades activeTrade,
+            StrategyDecision decision
+    ) {
+        if (activeTrade == null || decision == null) {
             return;
         }
 
-        List<TradePosition> openPositions =
-                tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), "OPEN");
-
-        for (TradePosition tradePosition : openPositions) {
-            if (!"RUNNER".equalsIgnoreCase(tradePosition.getPositionRole())
-                    && !"SINGLE".equalsIgnoreCase(tradePosition.getPositionRole())) {
-                continue;
-            }
-
-            if (decision.getTrailingStopPrice() != null) {
-                tradePosition.setTrailingStopPrice(decision.getTrailingStopPrice());
-            }
-
-            if (decision.getStopLossPrice() != null) {
-                tradePosition.setCurrentStopLossPrice(decision.getStopLossPrice());
-            }
-
-            if (decision.getTakeProfitPrice() != null) {
-                tradePosition.setTakeProfitPrice(decision.getTakeProfitPrice());
-            }
-
-            tradePositionRepository.save(tradePosition);
-        }
+        tradeUtil.updateOpenTradePositions(activeTrade, decision);
+        refreshParentTradeSummary(activeTrade.getTradeId());
     }
 
-    private void executeCloseTrade(Trades activeTrade, Users user, String exitReason) throws JsonProcessingException {
+    private void executeCloseTrade(
+            Trades activeTrade,
+            Users user,
+            String exitReason
+    ) throws JsonProcessingException {
         if (activeTrade == null || user == null) {
             return;
         }
 
         List<TradePosition> openPositions =
-                tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), "OPEN");
+                tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), STATUS_OPEN);
 
         for (TradePosition tradePosition : openPositions) {
             tradePosition.setExitReason(exitReason != null ? exitReason : "STRATEGY_EXIT");
@@ -237,7 +242,7 @@ public class LiveTradingDecisionExecutorService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         List<TradePosition> closedPositions = allPositions.stream()
-                .filter(tp -> "CLOSED".equalsIgnoreCase(tp.getStatus()))
+                .filter(tp -> STATUS_CLOSED.equalsIgnoreCase(tp.getStatus()))
                 .toList();
 
         BigDecimal avgExitPrice = null;
@@ -257,7 +262,7 @@ public class LiveTradingDecisionExecutorService {
         }
 
         long openCount = allPositions.stream()
-                .filter(tp -> "OPEN".equalsIgnoreCase(tp.getStatus()))
+                .filter(tp -> STATUS_OPEN.equalsIgnoreCase(tp.getStatus()))
                 .count();
 
         trade.setTotalRemainingQty(totalRemainingQty);
@@ -274,7 +279,7 @@ public class LiveTradingDecisionExecutorService {
         }
 
         if (openCount == 0) {
-            trade.setStatus("CLOSED");
+            trade.setStatus(STATUS_CLOSED);
             trade.setExitTime(LocalDateTime.now());
 
             TradePosition latestClosed = closedPositions.stream()
@@ -288,9 +293,9 @@ public class LiveTradingDecisionExecutorService {
                 trade.setExitReason(latestClosed.getExitReason());
             }
         } else if (openCount < allPositions.size()) {
-            trade.setStatus("PARTIALLY_CLOSED");
+            trade.setStatus(STATUS_PARTIALLY_CLOSED);
         } else {
-            trade.setStatus("OPEN");
+            trade.setStatus(STATUS_OPEN);
         }
 
         tradesRepository.save(trade);
@@ -299,7 +304,6 @@ public class LiveTradingDecisionExecutorService {
     private BigDecimal safe(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
     }
-
 
     private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Users user) {
         BigDecimal tradeAmount = usdtBalance

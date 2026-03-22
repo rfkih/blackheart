@@ -5,6 +5,16 @@ import lombok.Getter;
 public final class TradeConstant {
 
 
+//    @Getter
+//    public enum DecisionType {
+//        HOLD,
+//        OPEN_LONG,
+//        OPEN_SHORT,
+//        CLOSE_LONG,
+//        CLOSE_SHORT,
+//        UPDATE_TRAILING_STOP
+//    }
+
     @Getter
     public enum DecisionType {
         HOLD,
@@ -12,7 +22,7 @@ public final class TradeConstant {
         OPEN_SHORT,
         CLOSE_LONG,
         CLOSE_SHORT,
-        UPDATE_TRAILING_STOP
+        UPDATE_POSITION_MANAGEMENT
     }
 
     @Getter

@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -25,15 +26,25 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
     public static final String STRATEGY_NAME = "TREND_FOLLOWING";
     public static final String SIDE_LONG = "LONG";
     public static final String SIDE_SHORT = "SHORT";
+
     private static final String INTERVAL_15M = "15m";
 
-    private final StrategyConfigRepository strategyConfigRepository;
+    private static final String EXIT_STRUCTURE_SINGLE = "SINGLE";
+    private static final String EXIT_STRUCTURE_TP1_RUNNER = "TP1_RUNNER";
+    private static final String EXIT_STRUCTURE_TP1_TP2_RUNNER = "TP1_TP2_RUNNER";
+    private static final String EXIT_STRUCTURE_RUNNER_ONLY = "RUNNER_ONLY";
+
+    private static final String TARGET_ALL = "ALL";
+    private static final String TARGET_SINGLE = "SINGLE";
+    private static final String TARGET_RUNNER = "RUNNER";
 
     /**
      * true  = always use code config
      * false = use DB first, fallback to code
      */
     private static final boolean FORCE_CODE_CONFIG = false;
+
+    private final StrategyConfigRepository strategyConfigRepository;
 
     private static final Map<String, LocalTrendConfig> CODE_CONFIGS = Map.of(
             "15m", LocalTrendConfig.builder()
@@ -82,7 +93,6 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
     @Override
     public StrategyDecision execute(StrategyContext context) {
         if (context == null
-                || context.getUser() == null
                 || context.getMarketData() == null
                 || context.getFeatureStore() == null) {
             return hold(null, "Invalid context");
@@ -91,10 +101,7 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
         String interval = resolveInterval(context);
         MarketData marketData = context.getMarketData();
         FeatureStore featureStore = context.getFeatureStore();
-
-        if (context.getActiveTrade() != null){
-            return hold(null, "Active trades exist");
-        }
+        PositionSnapshot positionSnapshot = context.getPositionSnapshot();
 
         if (interval == null || interval.isBlank()) {
             return hold(null, "Interval is null");
@@ -110,10 +117,6 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
                     "Feature interval mismatch. expected=" + interval + ", actual=" + featureStore.getInterval());
         }
 
-        if (hasOpenPosition(context.getPositionSnapshot())) {
-            return hold(interval, "Open trade managed by listener");
-        }
-
         Optional<LocalTrendConfig> configOpt = resolveConfig(interval, context.getAsset());
         if (configOpt.isEmpty()) {
             return hold(interval, "No config found from DB or code");
@@ -124,23 +127,10 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
         boolean effectiveAllowLong =
                 Boolean.TRUE.equals(context.isAllowLong()) && config.allowLong();
 
-        log.info(
-                "Loaded config | source={} asset={} interval={} allowLong={} allowShort={} breakout={} pullback={} bias={} minAdx={} minER={} minRVOL={} stopATR={} tpATR={} trailATR={}",
-                config.source(),
-                context.getAsset(),
-                interval,
-                config.allowLong(),
-                config.allowShort(),
-                config.allowBreakoutEntry(),
-                config.allowPullbackEntry(),
-                config.allowBiasEntry(),
-                config.minAdx(),
-                config.minEfficiencyRatio(),
-                config.minRelativeVolume(),
-                config.stopAtrMultiplier(),
-                config.takeProfitAtrMultiplier(),
-                config.trailingAtrMultiplier()
-        );
+
+        if (hasOpenPosition(positionSnapshot)) {
+            return manageOpenPosition(context, config, positionSnapshot);
+        }
 
         if (!effectiveAllowLong) {
             return hold(interval, "Long disabled");
@@ -175,6 +165,7 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
         }
 
         return buildOpenLong(
+                context,
                 interval,
                 "Bullish regime + strong trend",
                 featureStore,
@@ -220,6 +211,7 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
         }
 
         return buildOpenLong(
+                context,
                 INTERVAL_15M,
                 "4h bullish bias + 15m pullback continuation",
                 entry,
@@ -230,6 +222,7 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
     }
 
     private StrategyDecision buildOpenLong(
+            StrategyContext context,
             String interval,
             String reason,
             FeatureStore featureStore,
@@ -238,7 +231,12 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
             LocalTrendConfig config
     ) {
         BigDecimal stopLoss = closePrice.subtract(atr.multiply(config.stopAtrMultiplier()));
-        BigDecimal takeProfit = closePrice.add(atr.multiply(config.takeProfitAtrMultiplier()));
+        BigDecimal tp1 = closePrice.add(atr.multiply(config.takeProfitAtrMultiplier()));
+        BigDecimal tp2 = closePrice.add(atr.multiply(config.takeProfitAtrMultiplier()).multiply(new BigDecimal("1.50")));
+
+        String exitStructure = resolveExitStructure(interval);
+
+        BigDecimal positionSize = calculatePositionSize(context, SIDE_LONG);
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_LONG)
@@ -246,13 +244,109 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
                 .strategyInterval(interval)
                 .side(SIDE_LONG)
                 .reason(reason)
-                .positionSize(BigDecimal.ONE)
+                .positionSize(positionSize)
                 .stopLossPrice(stopLoss)
-                .takeProfitPrice(takeProfit)
+                .trailingStopPrice(null)
+                .takeProfitPrice1(resolveTakeProfitPrice1(exitStructure, tp1))
+                .takeProfitPrice2(resolveTakeProfitPrice2(exitStructure, tp2))
+                .takeProfitPrice3(null)
+                .exitStructure(exitStructure)
+                .targetPositionRole(TARGET_ALL)
                 .entryAdx(featureStore.getAdx())
                 .entryAtr(featureStore.getAtr())
                 .entryRsi(featureStore.getRsi())
                 .entryTrendRegime(featureStore.getTrendRegime())
+                .build();
+    }
+
+
+    private BigDecimal calculatePositionSize(StrategyContext context, String side) {
+        if (context == null || side == null || side.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal riskPerTradePct = context.getRiskPerTradePct();
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal baseAmount = "SHORT".equalsIgnoreCase(side)
+                ? context.getAssetBalance()
+                : context.getCashBalance();
+
+        if (baseAmount == null || baseAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        return baseAmount
+                .multiply(riskPerTradePct)
+                .setScale(8, RoundingMode.HALF_UP);
+    }
+
+    private StrategyDecision manageOpenPosition(
+            StrategyContext context,
+            LocalTrendConfig config,
+            PositionSnapshot positionSnapshot
+    ) {
+        if (positionSnapshot == null || !positionSnapshot.isHasOpenPosition()) {
+            return hold(resolveInterval(context), "No open position");
+        }
+
+        if (!SIDE_LONG.equalsIgnoreCase(positionSnapshot.getSide())) {
+            return hold(resolveInterval(context), "Only long management supported");
+        }
+
+        BigDecimal closePrice = context.getMarketData().getClosePrice();
+        BigDecimal entryPrice = positionSnapshot.getEntryPrice();
+        BigDecimal atr = getValidAtr(context.getFeatureStore()).orElse(null);
+
+        if (closePrice == null || entryPrice == null || atr == null || atr.compareTo(BigDecimal.ZERO) <= 0) {
+            return hold(resolveInterval(context), "Management inputs invalid");
+        }
+
+        BigDecimal move = closePrice.subtract(entryPrice);
+        BigDecimal breakEvenTrigger = atr.multiply(BigDecimal.ONE);
+        BigDecimal trailTrigger = atr.multiply(new BigDecimal("2.0"));
+
+        if (move.compareTo(breakEvenTrigger) < 0) {
+            return hold(resolveInterval(context), "Open trade managed by listener");
+        }
+
+        BigDecimal currentStop = positionSnapshot.getCurrentStopLossPrice();
+        BigDecimal breakEvenStop = entryPrice;
+        BigDecimal atrTrail = closePrice.subtract(atr.multiply(config.trailingAtrMultiplier()));
+
+        BigDecimal updatedStop = maxNonNull(currentStop, breakEvenStop);
+        if (move.compareTo(trailTrigger) >= 0) {
+            updatedStop = maxNonNull(updatedStop, atrTrail);
+        }
+
+        String role = positionSnapshot.getPositionRole();
+        BigDecimal updatedTp1 = null;
+        BigDecimal updatedTp2 = null;
+
+        if ("SINGLE".equalsIgnoreCase(role)) {
+            updatedTp1 = closePrice.add(atr.multiply(new BigDecimal("1.00")));
+        } else if ("TP1".equalsIgnoreCase(role)) {
+            updatedTp1 = closePrice.add(atr.multiply(new BigDecimal("1.00")));
+        } else if ("TP2".equalsIgnoreCase(role)) {
+            updatedTp2 = closePrice.add(atr.multiply(new BigDecimal("1.25")));
+        } else if ("RUNNER".equalsIgnoreCase(role)) {
+            updatedTp1 = null;
+        }
+
+        return StrategyDecision.builder()
+                .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
+                .strategyName(STRATEGY_NAME)
+                .strategyInterval(resolveInterval(context))
+                .side(SIDE_LONG)
+                .reason("Dynamic long position management update")
+                .stopLossPrice(updatedStop)
+                .trailingStopPrice(updatedStop)
+                .takeProfitPrice1(updatedTp1)
+                .takeProfitPrice2(updatedTp2)
+                .takeProfitPrice3(null)
+                .targetPositionRole(resolveTargetRole(role))
                 .build();
     }
 
@@ -395,6 +489,53 @@ public class TrendFollowingStrategyService implements StrategyExecutor {
             return context.getFeatureStore().getInterval();
         }
         return null;
+    }
+
+    private String resolveExitStructure(String interval) {
+        if (interval == null) {
+            return EXIT_STRUCTURE_SINGLE;
+        }
+
+        return switch (interval.toLowerCase()) {
+            case "15m", "1h" -> EXIT_STRUCTURE_TP1_RUNNER;
+            case "4h" -> EXIT_STRUCTURE_TP1_TP2_RUNNER;
+            case "1d" -> EXIT_STRUCTURE_RUNNER_ONLY;
+            default -> EXIT_STRUCTURE_SINGLE;
+        };
+    }
+
+    private BigDecimal resolveTakeProfitPrice1(String exitStructure, BigDecimal tp1) {
+        return switch (exitStructure) {
+            case EXIT_STRUCTURE_SINGLE, EXIT_STRUCTURE_TP1_RUNNER, EXIT_STRUCTURE_TP1_TP2_RUNNER -> tp1;
+            case EXIT_STRUCTURE_RUNNER_ONLY -> null;
+            default -> tp1;
+        };
+    }
+
+    private BigDecimal resolveTakeProfitPrice2(String exitStructure, BigDecimal tp2) {
+        return EXIT_STRUCTURE_TP1_TP2_RUNNER.equalsIgnoreCase(exitStructure) ? tp2 : null;
+    }
+
+    private String resolveTargetRole(String positionRole) {
+        if (positionRole == null || positionRole.isBlank()) {
+            return TARGET_ALL;
+        }
+
+        if (TARGET_SINGLE.equalsIgnoreCase(positionRole)) {
+            return TARGET_SINGLE;
+        }
+
+        if (TARGET_RUNNER.equalsIgnoreCase(positionRole)) {
+            return TARGET_RUNNER;
+        }
+
+        return positionRole;
+    }
+
+    private BigDecimal maxNonNull(BigDecimal a, BigDecimal b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return a.max(b);
     }
 
     private StrategyDecision hold(String interval, String reason) {

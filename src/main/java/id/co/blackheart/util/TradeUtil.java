@@ -28,21 +28,23 @@ import java.util.UUID;
 @Slf4j
 public class TradeUtil {
 
-    /**
-     * These should ideally come from Binance exchange info per symbol.
-     * Keep as defaults for now, but move to symbol metadata later.
-     */
     private static final BigDecimal MIN_USDT_NOTIONAL = new BigDecimal("7");
     private static final BigDecimal MIN_BASE_ASSET_QTY = new BigDecimal("0.00008");
     private static final BigDecimal DEFAULT_QTY_STEP = new BigDecimal("0.000001");
 
-    /**
-     * Conservative buffer so pre-validation does not under-estimate BUY/SELL impact.
-     * For BUY: use a slightly higher price.
-     * For SELL SHORT entry simulation: use a slightly lower price.
-     */
     private static final BigDecimal BUY_PRICE_BUFFER = new BigDecimal("1.001");
     private static final BigDecimal SELL_PRICE_BUFFER = new BigDecimal("0.999");
+
+    private static final String STATUS_OPEN = "OPEN";
+    private static final String STATUS_CLOSED = "CLOSED";
+    private static final String STATUS_PARTIALLY_CLOSED = "PARTIALLY_CLOSED";
+
+    private static final String EXIT_STRUCTURE_SINGLE = "SINGLE";
+    private static final String EXIT_STRUCTURE_TP1_RUNNER = "TP1_RUNNER";
+    private static final String EXIT_STRUCTURE_TP1_TP2_RUNNER = "TP1_TP2_RUNNER";
+    private static final String EXIT_STRUCTURE_RUNNER_ONLY = "RUNNER_ONLY";
+
+    private static final String TARGET_ALL = "ALL";
 
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
@@ -155,6 +157,61 @@ public class TradeUtil {
         }
     }
 
+    @Transactional
+    public void updateOpenTradePositions(
+            Trades activeTrade,
+            StrategyDecision decision
+    ) {
+        if (activeTrade == null || decision == null) {
+            return;
+        }
+
+        List<TradePosition> openPositions = tradePositionRepository.findAllByTradeIdAndStatus(
+                activeTrade.getTradeId(),
+                STATUS_OPEN
+        );
+
+        if (openPositions.isEmpty()) {
+            return;
+        }
+
+        String targetRole = normalizeTargetRole(decision.getTargetPositionRole());
+
+        for (TradePosition position : openPositions) {
+            if (!shouldApplyToRole(position, targetRole)) {
+                continue;
+            }
+
+            if (decision.getStopLossPrice() != null) {
+                position.setCurrentStopLossPrice(decision.getStopLossPrice());
+            }
+
+            if (decision.getTrailingStopPrice() != null) {
+                position.setTrailingStopPrice(decision.getTrailingStopPrice());
+            }
+
+            BigDecimal updatedTakeProfit = resolveUpdatedTakeProfitForRole(position, decision);
+            if (updatedTakeProfit != null || "RUNNER".equalsIgnoreCase(position.getPositionRole())) {
+                position.setTakeProfitPrice(updatedTakeProfit);
+            }
+
+            position.setExitReason("STRATEGY_MANAGEMENT_UPDATE");
+        }
+
+        tradePositionRepository.saveAll(openPositions);
+
+        log.info(
+                "✅ Updated open positions | tradeId={} targetRole={} stop={} trailing={} tp1={} tp2={} tp3={}",
+                activeTrade.getTradeId(),
+                targetRole,
+                decision.getStopLossPrice(),
+                decision.getTrailingStopPrice(),
+                decision.getTakeProfitPrice1(),
+                decision.getTakeProfitPrice2(),
+                decision.getTakeProfitPrice3()
+        );
+    }
+
     private void openParentTrade(
             StrategyContext context,
             StrategyDecision decision,
@@ -178,6 +235,7 @@ public class TradeUtil {
             }
 
             String orderSide = tradeType == TradeType.LONG ? "BUY" : "SELL";
+
             log.info(
                     "Opening {} parent trade | asset={} amount={} estimatedPrice={} estimatedQty={} plannedMode={}",
                     tradeType,
@@ -202,9 +260,6 @@ public class TradeUtil {
             BigDecimal avgEntryPrice = result.avgPrice;
             LocalDateTime now = LocalDateTime.now();
 
-            /**
-             * Save parent FIRST because exchange order is already filled.
-             */
             persistedTrade = Trades.builder()
                     .userId(context.getUser().getUserId())
                     .userStrategyId(context.getUserStrategyId())
@@ -213,7 +268,7 @@ public class TradeUtil {
                     .exchange("BINANCE")
                     .asset(asset)
                     .side(tradeType.name())
-                    .status("OPEN")
+                    .status(STATUS_OPEN)
                     .tradeMode("PENDING_ALLOCATION")
                     .avgEntryPrice(avgEntryPrice)
                     .avgExitPrice(null)
@@ -235,23 +290,7 @@ public class TradeUtil {
 
             tradesRepository.save(persistedTrade);
 
-            SplitPlan finalPlan = buildSplitPlan(result.totalQty, avgEntryPrice, decision, tradeType);
-
-            /**
-             * Fallback after real fill.
-             * Even after pre-validation, actual fill may differ slightly.
-             */
-            if (isInvalidPlan(finalPlan)) {
-                log.warn(
-                        "Split plan invalid after fill, fallback to SINGLE | tradeId={} asset={} qty={} avgEntryPrice={}",
-                        persistedTrade.getTradeId(),
-                        asset,
-                        result.totalQty,
-                        avgEntryPrice
-                );
-
-                finalPlan = buildSinglePlan(result.totalQty, avgEntryPrice, decision);
-            }
+            SplitPlan finalPlan = buildSplitPlan(result.totalQty, avgEntryPrice, decision);
 
             if (isInvalidPlan(finalPlan)) {
                 persistedTrade.setTradeMode("UNALLOCATED");
@@ -259,7 +298,7 @@ public class TradeUtil {
                 tradesRepository.save(persistedTrade);
 
                 log.error(
-                        "❌ Unable to allocate even SINGLE fallback plan | tradeId={} asset={} qty={} avgEntryPrice={}",
+                        "❌ Unable to allocate any valid exit structure | tradeId={} asset={} qty={} avgEntryPrice={}",
                         persistedTrade.getTradeId(),
                         asset,
                         result.totalQty,
@@ -332,7 +371,7 @@ public class TradeUtil {
             return PreTradeValidationResult.invalid("Trade amount must be greater than zero");
         }
 
-        BigDecimal referencePrice = resolveReferencePrice(decision);
+        BigDecimal referencePrice = resolveReferencePrice(decision, tradeType);
         if (referencePrice == null || referencePrice.compareTo(BigDecimal.ZERO) <= 0) {
             return PreTradeValidationResult.invalid("Unable to resolve reference price for pre-validation");
         }
@@ -352,25 +391,18 @@ public class TradeUtil {
 
         BigDecimal estimatedNotional = estimatedQty.multiply(bufferedPrice);
         if (estimatedNotional.compareTo(MIN_USDT_NOTIONAL) < 0) {
-            return PreTradeValidationResult.invalid(String.format(
-                    "Estimated notional below minimum notional. min=%s, estimated=%s",
-                    MIN_USDT_NOTIONAL,
-                    estimatedNotional
-            ));
+            return PreTradeValidationResult.invalid(
+                    String.format(
+                            "Estimated notional below minimum notional. min=%s, estimated=%s",
+                            MIN_USDT_NOTIONAL,
+                            estimatedNotional
+                    )
+            );
         }
 
-        SplitPlan estimatedPlan = buildSplitPlan(estimatedQty, bufferedPrice, decision, tradeType);
+        SplitPlan estimatedPlan = buildSplitPlan(estimatedQty, bufferedPrice, decision);
         if (isInvalidPlan(estimatedPlan)) {
-            SplitPlan singleFallback = buildSinglePlan(estimatedQty, bufferedPrice, decision);
-            if (isInvalidPlan(singleFallback)) {
-                return PreTradeValidationResult.invalid("No valid split plan can be generated for estimated quantity");
-            }
-
-            return PreTradeValidationResult.valid(
-                    estimatedQty,
-                    bufferedPrice,
-                    singleFallback.tradeMode
-            );
+            return PreTradeValidationResult.invalid("No valid exit structure can be generated for estimated quantity");
         }
 
         return PreTradeValidationResult.valid(
@@ -380,30 +412,46 @@ public class TradeUtil {
         );
     }
 
-    private BigDecimal resolveReferencePrice(StrategyDecision decision) {
-        if (decision.getTakeProfitPrice() != null
-                && decision.getStopLossPrice() != null
-                && decision.getTakeProfitPrice().compareTo(decision.getStopLossPrice()) > 0) {
-            return decision.getTakeProfitPrice().add(decision.getStopLossPrice())
-                    .divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
+    private BigDecimal resolveReferencePrice(StrategyDecision decision, TradeType tradeType) {
+        BigDecimal tp1 = decision.getTakeProfitPrice1();
+        BigDecimal tp2 = decision.getTakeProfitPrice2();
+        BigDecimal stop = decision.getStopLossPrice();
+
+        if (tradeType == TradeType.LONG) {
+            if (tp1 != null && stop != null && tp1.compareTo(stop) > 0) {
+                return tp1.add(stop).divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
+            }
+            if (tp1 != null && tp1.compareTo(BigDecimal.ZERO) > 0) {
+                return tp1;
+            }
+            if (tp2 != null && tp2.compareTo(BigDecimal.ZERO) > 0) {
+                return tp2;
+            }
+            if (stop != null && stop.compareTo(BigDecimal.ZERO) > 0) {
+                return stop;
+            }
+            return null;
         }
 
-        if (decision.getTakeProfitPrice() != null && decision.getTakeProfitPrice().compareTo(BigDecimal.ZERO) > 0) {
-            return decision.getTakeProfitPrice();
+        if (tp1 != null && stop != null && stop.compareTo(tp1) > 0) {
+            return tp1.add(stop).divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
         }
-
-        if (decision.getStopLossPrice() != null && decision.getStopLossPrice().compareTo(BigDecimal.ZERO) > 0) {
-            return decision.getStopLossPrice();
+        if (tp1 != null && tp1.compareTo(BigDecimal.ZERO) > 0) {
+            return tp1;
         }
-
+        if (tp2 != null && tp2.compareTo(BigDecimal.ZERO) > 0) {
+            return tp2;
+        }
+        if (stop != null && stop.compareTo(BigDecimal.ZERO) > 0) {
+            return stop;
+        }
         return null;
     }
 
     private BigDecimal applyValidationBuffer(BigDecimal referencePrice, TradeType tradeType) {
-        if (tradeType == TradeType.LONG) {
-            return referencePrice.multiply(BUY_PRICE_BUFFER);
-        }
-        return referencePrice.multiply(SELL_PRICE_BUFFER);
+        return tradeType == TradeType.LONG
+                ? referencePrice.multiply(BUY_PRICE_BUFFER)
+                : referencePrice.multiply(SELL_PRICE_BUFFER);
     }
 
     private TradePosition validateClosePositionInputs(
@@ -422,7 +470,7 @@ public class TradeUtil {
             return null;
         }
 
-        if (!"OPEN".equalsIgnoreCase(tradePosition.getStatus())) {
+        if (!STATUS_OPEN.equalsIgnoreCase(tradePosition.getStatus())) {
             log.info("Trade position already not OPEN | tradePositionId={}", tradePosition.getTradePositionId());
             return null;
         }
@@ -476,6 +524,7 @@ public class TradeUtil {
             BigDecimal entryQuoteQty = avgEntryPrice.multiply(plannedPosition.qty);
 
             TradePosition tradePosition = TradePosition.builder()
+                    .tradePositionId(UUID.randomUUID())
                     .tradeId(trade.getTradeId())
                     .userId(trade.getUserId())
                     .userStrategyId(trade.getUserStrategyId())
@@ -484,7 +533,7 @@ public class TradeUtil {
                     .exchange(trade.getExchange())
                     .side(trade.getSide())
                     .positionRole(plannedPosition.role)
-                    .status("OPEN")
+                    .status(STATUS_OPEN)
                     .entryPrice(avgEntryPrice)
                     .entryQty(plannedPosition.qty)
                     .entryQuoteQty(entryQuoteQty)
@@ -566,7 +615,7 @@ public class TradeUtil {
         tradePosition.setExitFeeCurrency(result.feeCurrency);
         tradePosition.setExitPrice(result.avgPrice);
         tradePosition.setExitTime(LocalDateTime.now());
-        tradePosition.setStatus("CLOSED");
+        tradePosition.setStatus(STATUS_CLOSED);
         tradePosition.setRemainingQty(BigDecimal.ZERO);
 
         BigDecimal pnlAmount = calculatePLAmount(
@@ -612,7 +661,7 @@ public class TradeUtil {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         List<TradePosition> closedPositions = allPositions.stream()
-                .filter(tp -> "CLOSED".equalsIgnoreCase(tp.getStatus()))
+                .filter(tp -> STATUS_CLOSED.equalsIgnoreCase(tp.getStatus()))
                 .toList();
 
         BigDecimal avgExitPrice = null;
@@ -632,7 +681,7 @@ public class TradeUtil {
         }
 
         long openCount = allPositions.stream()
-                .filter(tp -> "OPEN".equalsIgnoreCase(tp.getStatus()))
+                .filter(tp -> STATUS_OPEN.equalsIgnoreCase(tp.getStatus()))
                 .count();
 
         trade.setTotalRemainingQty(totalRemainingQty);
@@ -649,7 +698,7 @@ public class TradeUtil {
         }
 
         if (openCount == 0) {
-            trade.setStatus("CLOSED");
+            trade.setStatus(STATUS_CLOSED);
             trade.setExitTime(LocalDateTime.now());
 
             TradePosition latestClosed = closedPositions.stream()
@@ -660,9 +709,9 @@ public class TradeUtil {
                 trade.setExitReason(latestClosed.getExitReason());
             }
         } else if (openCount < allPositions.size()) {
-            trade.setStatus("PARTIALLY_CLOSED");
+            trade.setStatus(STATUS_PARTIALLY_CLOSED);
         } else {
-            trade.setStatus("OPEN");
+            trade.setStatus(STATUS_OPEN);
         }
 
         tradesRepository.save(trade);
@@ -671,19 +720,102 @@ public class TradeUtil {
     private SplitPlan buildSplitPlan(
             BigDecimal totalQty,
             BigDecimal avgEntryPrice,
-            StrategyDecision decision,
-            TradeType tradeType
+            StrategyDecision decision
     ) {
-        SplitPlan threeSlicePlan = tryThreeSlicePlan(totalQty, avgEntryPrice, decision, tradeType);
+        String exitStructure = normalizeExitStructure(decision.getExitStructure());
+
+        return switch (exitStructure) {
+            case EXIT_STRUCTURE_TP1_TP2_RUNNER -> buildPreferredThreeSlicePlan(totalQty, avgEntryPrice, decision);
+            case EXIT_STRUCTURE_TP1_RUNNER -> buildPreferredTwoSlicePlan(totalQty, avgEntryPrice, decision);
+            case EXIT_STRUCTURE_RUNNER_ONLY -> buildPreferredRunnerOnlyPlan(totalQty, avgEntryPrice, decision);
+            case EXIT_STRUCTURE_SINGLE -> buildSinglePlan(totalQty, avgEntryPrice, decision);
+            default -> buildSinglePlan(totalQty, avgEntryPrice, decision);
+        };
+    }
+
+    private String normalizeExitStructure(String exitStructure) {
+        if (exitStructure == null || exitStructure.isBlank()) {
+            return EXIT_STRUCTURE_SINGLE;
+        }
+        return exitStructure.trim().toUpperCase();
+    }
+
+    private String normalizeTargetRole(String targetRole) {
+        if (targetRole == null || targetRole.isBlank()) {
+            return TARGET_ALL;
+        }
+        return targetRole.trim().toUpperCase();
+    }
+
+    private boolean shouldApplyToRole(TradePosition position, String targetRole) {
+        if (TARGET_ALL.equalsIgnoreCase(targetRole)) {
+            return true;
+        }
+        if (position == null || position.getPositionRole() == null) {
+            return false;
+        }
+        return targetRole.equalsIgnoreCase(position.getPositionRole());
+    }
+
+    private BigDecimal resolveUpdatedTakeProfitForRole(TradePosition position, StrategyDecision decision) {
+        if (position == null || position.getPositionRole() == null) {
+            return decision.getTakeProfitPrice1();
+        }
+
+        return switch (position.getPositionRole().toUpperCase()) {
+            case "SINGLE", "TP1" -> decision.getTakeProfitPrice1();
+            case "TP2" -> decision.getTakeProfitPrice2();
+            case "TP3" -> decision.getTakeProfitPrice3();
+            case "RUNNER" -> null;
+            default -> decision.getTakeProfitPrice1();
+        };
+    }
+
+    private SplitPlan buildPreferredThreeSlicePlan(
+            BigDecimal totalQty,
+            BigDecimal avgEntryPrice,
+            StrategyDecision decision
+    ) {
+        SplitPlan threeSlicePlan = tryThreeSlicePlan(totalQty, avgEntryPrice, decision);
         if (!isInvalidPlan(threeSlicePlan)) {
             return threeSlicePlan;
         }
 
         SplitPlan twoSlicePlan = tryTwoSlicePlan(totalQty, avgEntryPrice, decision);
         if (!isInvalidPlan(twoSlicePlan)) {
+            log.warn("Downgrading exit structure from TP1_TP2_RUNNER to TP1_RUNNER");
             return twoSlicePlan;
         }
 
+        log.warn("Downgrading exit structure from TP1_TP2_RUNNER to SINGLE");
+        return buildSinglePlan(totalQty, avgEntryPrice, decision);
+    }
+
+    private SplitPlan buildPreferredTwoSlicePlan(
+            BigDecimal totalQty,
+            BigDecimal avgEntryPrice,
+            StrategyDecision decision
+    ) {
+        SplitPlan twoSlicePlan = tryTwoSlicePlan(totalQty, avgEntryPrice, decision);
+        if (!isInvalidPlan(twoSlicePlan)) {
+            return twoSlicePlan;
+        }
+
+        log.warn("Downgrading exit structure from TP1_RUNNER to SINGLE");
+        return buildSinglePlan(totalQty, avgEntryPrice, decision);
+    }
+
+    private SplitPlan buildPreferredRunnerOnlyPlan(
+            BigDecimal totalQty,
+            BigDecimal avgEntryPrice,
+            StrategyDecision decision
+    ) {
+        SplitPlan runnerOnlyPlan = tryRunnerOnlyPlan(totalQty, avgEntryPrice, decision);
+        if (!isInvalidPlan(runnerOnlyPlan)) {
+            return runnerOnlyPlan;
+        }
+
+        log.warn("Downgrading exit structure from RUNNER_ONLY to SINGLE");
         return buildSinglePlan(totalQty, avgEntryPrice, decision);
     }
 
@@ -698,8 +830,7 @@ public class TradeUtil {
     private SplitPlan tryThreeSlicePlan(
             BigDecimal totalQty,
             BigDecimal avgEntryPrice,
-            StrategyDecision decision,
-            TradeType tradeType
+            StrategyDecision decision
     ) {
         BigDecimal tp1Qty = floorToStep(totalQty.multiply(new BigDecimal("0.30")));
         BigDecimal tp2Qty = floorToStep(totalQty.multiply(new BigDecimal("0.30")));
@@ -711,16 +842,16 @@ public class TradeUtil {
             return invalidPlan();
         }
 
-        BigDecimal baseTp = decision.getTakeProfitPrice();
-        BigDecimal stop = decision.getStopLossPrice();
-        BigDecimal tp2 = deriveSecondTakeProfit(avgEntryPrice, baseTp, tradeType);
+        if (decision.getTakeProfitPrice1() == null || decision.getTakeProfitPrice2() == null) {
+            return invalidPlan();
+        }
 
         return new SplitPlan(
-                "TP1_TP2_RUNNER",
+                EXIT_STRUCTURE_TP1_TP2_RUNNER,
                 List.of(
-                        PlannedPosition.of("TP1", tp1Qty, stop, stop, null, baseTp),
-                        PlannedPosition.of("TP2", tp2Qty, stop, stop, null, tp2),
-                        PlannedPosition.of("RUNNER", runnerQty, stop, stop, null, null)
+                        PlannedPosition.of("TP1", tp1Qty, decision.getStopLossPrice(), decision.getStopLossPrice(), decision.getTrailingStopPrice(), decision.getTakeProfitPrice1()),
+                        PlannedPosition.of("TP2", tp2Qty, decision.getStopLossPrice(), decision.getStopLossPrice(), decision.getTrailingStopPrice(), decision.getTakeProfitPrice2()),
+                        PlannedPosition.of("RUNNER", runnerQty, decision.getStopLossPrice(), decision.getStopLossPrice(), decision.getTrailingStopPrice(), null)
                 )
         );
     }
@@ -737,11 +868,55 @@ public class TradeUtil {
             return invalidPlan();
         }
 
+        if (decision.getTakeProfitPrice1() == null) {
+            return invalidPlan();
+        }
+
         return new SplitPlan(
-                "TP1_RUNNER",
+                EXIT_STRUCTURE_TP1_RUNNER,
                 List.of(
-                        PlannedPosition.of("TP1", tp1Qty, decision.getStopLossPrice(), decision.getStopLossPrice(), null, decision.getTakeProfitPrice()),
-                        PlannedPosition.of("RUNNER", runnerQty, decision.getStopLossPrice(), decision.getStopLossPrice(), null, null)
+                        PlannedPosition.of(
+                                "TP1",
+                                tp1Qty,
+                                decision.getStopLossPrice(),
+                                decision.getStopLossPrice(),
+                                decision.getTrailingStopPrice(),
+                                decision.getTakeProfitPrice1()
+                        ),
+                        PlannedPosition.of(
+                                "RUNNER",
+                                runnerQty,
+                                decision.getStopLossPrice(),
+                                decision.getStopLossPrice(),
+                                decision.getTrailingStopPrice(),
+                                null
+                        )
+                )
+        );
+    }
+
+    private SplitPlan tryRunnerOnlyPlan(
+            BigDecimal totalQty,
+            BigDecimal avgEntryPrice,
+            StrategyDecision decision
+    ) {
+        BigDecimal runnerQty = floorToStep(totalQty);
+
+        if (!isClosableSlice(runnerQty, avgEntryPrice)) {
+            return invalidPlan();
+        }
+
+        return new SplitPlan(
+                EXIT_STRUCTURE_RUNNER_ONLY,
+                List.of(
+                        PlannedPosition.of(
+                                "RUNNER",
+                                runnerQty,
+                                decision.getStopLossPrice(),
+                                decision.getStopLossPrice(),
+                                decision.getTrailingStopPrice(),
+                                null
+                        )
                 )
         );
     }
@@ -757,10 +932,21 @@ public class TradeUtil {
             return invalidPlan();
         }
 
+        BigDecimal singleTp = decision.getTakeProfitPrice1() != null
+                ? decision.getTakeProfitPrice1()
+                : null;
+
         return new SplitPlan(
-                "SINGLE",
+                EXIT_STRUCTURE_SINGLE,
                 List.of(
-                        PlannedPosition.of("SINGLE", singleQty, decision.getStopLossPrice(), decision.getStopLossPrice(), null, decision.getTakeProfitPrice())
+                        PlannedPosition.of(
+                                "SINGLE",
+                                singleQty,
+                                decision.getStopLossPrice(),
+                                decision.getStopLossPrice(),
+                                decision.getTrailingStopPrice(),
+                                singleTp
+                        )
                 )
         );
     }
@@ -784,21 +970,6 @@ public class TradeUtil {
 
     private SplitPlan invalidPlan() {
         return new SplitPlan("INVALID", List.of());
-    }
-
-    private BigDecimal deriveSecondTakeProfit(BigDecimal entryPrice, BigDecimal baseTakeProfit, TradeType tradeType) {
-        if (entryPrice == null || baseTakeProfit == null) {
-            return null;
-        }
-
-        BigDecimal distance = baseTakeProfit.subtract(entryPrice).abs();
-        BigDecimal extendedDistance = distance.multiply(new BigDecimal("1.50"));
-
-        if (tradeType == TradeType.LONG) {
-            return entryPrice.add(extendedDistance);
-        }
-
-        return entryPrice.subtract(extendedDistance);
     }
 
     private BigDecimal calculatePLAmount(

@@ -12,6 +12,17 @@ import java.util.UUID;
 @Repository
 public interface BacktestTradePositionRepository extends JpaRepository<BacktestTradePosition, UUID> {
 
+
+    @Query(value = """
+    SELECT *
+    FROM backtest_trade_position btp
+    WHERE btp.trade_id = :tradeId
+      AND btp.status = :status
+    ORDER BY btp.entry_time ASC
+    """, nativeQuery = true)
+    List<BacktestTradePosition> findAllByTradeIdAndStatus(UUID tradeId, String status);
+
+    
     @Query(value = """
         SELECT *
         FROM backtest_trade_position btp

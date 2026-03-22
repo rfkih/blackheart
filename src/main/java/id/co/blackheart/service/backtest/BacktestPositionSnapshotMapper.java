@@ -12,117 +12,110 @@ import java.util.List;
 @Service
 public class BacktestPositionSnapshotMapper {
 
-    public PositionSnapshot toSnapshot(
-            BacktestTrade trade,
-            List<BacktestTradePosition> openPositions
-    ) {
+    public PositionSnapshot toSnapshot(BacktestTrade trade) {
+        if (trade == null) {
+            return PositionSnapshot.builder()
+                    .hasOpenPosition(false)
+                    .build();
+        }
+
+        return PositionSnapshot.builder()
+                .tradeId(trade.getBacktestTradeId())
+                .hasOpenPosition(true)
+                .side(trade.getSide())
+                .status(trade.getStatus())
+                .entryPrice(trade.getAvgEntryPrice())
+                .entryQty(trade.getTotalEntryQty())
+                .entryQuoteQty(trade.getTotalEntryQuoteQty())
+                .entryTime(trade.getEntryTime())
+                .build();
+    }
+
+    public PositionSnapshot toSnapshot(BacktestTrade trade, List<BacktestTradePosition> openPositions) {
         if (trade == null || openPositions == null || openPositions.isEmpty()) {
             return PositionSnapshot.builder()
                     .hasOpenPosition(false)
                     .build();
         }
 
-        BigDecimal totalEntryQty = openPositions.stream()
-                .map(BacktestTradePosition::getEntryQty)
-                .filter(v -> v != null)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal totalEntryQuoteQty = openPositions.stream()
-                .map(BacktestTradePosition::getEntryQuoteQty)
-                .filter(v -> v != null)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BacktestTradePosition primary = resolvePrimary(openPositions);
 
         BigDecimal totalRemainingQty = openPositions.stream()
                 .map(BacktestTradePosition::getRemainingQty)
                 .filter(v -> v != null)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        String side = trade.getSide();
-
-        BigDecimal currentStopLossPrice = resolveEffectiveStop(openPositions, side);
-        BigDecimal initialStopLossPrice = resolveEffectiveInitialStop(openPositions, side);
-        BigDecimal trailingStopPrice = resolveEffectiveTrailingStop(openPositions, side);
-        BigDecimal takeProfitPrice = resolveEffectiveTakeProfit(openPositions, side);
-
-        BigDecimal highestPriceSinceEntry = openPositions.stream()
-                .map(BacktestTradePosition::getHighestPriceSinceEntry)
-                .filter(v -> v != null)
-                .max(Comparator.naturalOrder())
-                .orElse(null);
-
-        BigDecimal lowestPriceSinceEntry = openPositions.stream()
-                .map(BacktestTradePosition::getLowestPriceSinceEntry)
-                .filter(v -> v != null)
-                .min(Comparator.naturalOrder())
-                .orElse(null);
-
-        BacktestTradePosition representative = openPositions.get(0);
-
         return PositionSnapshot.builder()
                 .tradeId(trade.getBacktestTradeId())
-                .tradePositionId(representative.getTradePositionId())
+                .tradePositionId(primary.getTradePositionId())
                 .hasOpenPosition(true)
-                .side(side)
+                .side(trade.getSide())
                 .status(trade.getStatus())
-                .positionRole(trade.getTradeMode())
-                .entryPrice(trade.getAvgEntryPrice())
-                .entryQty(totalEntryQty)
-                .entryQuoteQty(totalEntryQuoteQty)
+                .positionRole(primary.getPositionRole())
+                .entryPrice(primary.getEntryPrice())
+                .entryQty(primary.getEntryQty())
+                .entryQuoteQty(primary.getEntryQuoteQty())
                 .remainingQty(totalRemainingQty)
-                .currentStopLossPrice(currentStopLossPrice)
-                .initialStopLossPrice(initialStopLossPrice)
-                .trailingStopPrice(trailingStopPrice)
-                .takeProfitPrice(takeProfitPrice)
-                .highestPriceSinceEntry(highestPriceSinceEntry)
-                .lowestPriceSinceEntry(lowestPriceSinceEntry)
-                .entryTime(trade.getEntryTime())
+                .currentStopLossPrice(primary.getCurrentStopLossPrice())
+                .initialStopLossPrice(primary.getInitialStopLossPrice())
+                .trailingStopPrice(primary.getTrailingStopPrice())
+                .takeProfitPrice(primary.getTakeProfitPrice())
+                .highestPriceSinceEntry(resolveHighest(openPositions))
+                .lowestPriceSinceEntry(resolveLowest(openPositions))
+                .entryTime(primary.getEntryTime())
                 .build();
     }
 
-    private BigDecimal resolveEffectiveStop(List<BacktestTradePosition> positions, String side) {
-        return positions.stream()
-                .map(BacktestTradePosition::getCurrentStopLossPrice)
-                .filter(v -> v != null)
-                .min(stopComparator(side))
-                .orElse(null);
-    }
-
-    private BigDecimal resolveEffectiveInitialStop(List<BacktestTradePosition> positions, String side) {
-        return positions.stream()
-                .map(BacktestTradePosition::getInitialStopLossPrice)
-                .filter(v -> v != null)
-                .min(stopComparator(side))
-                .orElse(null);
-    }
-
-    private BigDecimal resolveEffectiveTrailingStop(List<BacktestTradePosition> positions, String side) {
-        return positions.stream()
-                .map(BacktestTradePosition::getTrailingStopPrice)
-                .filter(v -> v != null)
-                .min(stopComparator(side))
-                .orElse(null);
-    }
-
-    private BigDecimal resolveEffectiveTakeProfit(List<BacktestTradePosition> positions, String side) {
-        if ("SHORT".equalsIgnoreCase(side)) {
-            return positions.stream()
-                    .map(BacktestTradePosition::getTakeProfitPrice)
-                    .filter(v -> v != null)
-                    .max(Comparator.naturalOrder())
-                    .orElse(null);
+    public PositionSnapshot toSnapshot(BacktestTradePosition position) {
+        if (position == null) {
+            return PositionSnapshot.builder()
+                    .hasOpenPosition(false)
+                    .build();
         }
 
-        return positions.stream()
-                .map(BacktestTradePosition::getTakeProfitPrice)
+        return PositionSnapshot.builder()
+                .tradeId(position.getTradeId())
+                .tradePositionId(position.getTradePositionId())
+                .hasOpenPosition(true)
+                .side(position.getSide())
+                .status(position.getStatus())
+                .positionRole(position.getPositionRole())
+                .entryPrice(position.getEntryPrice())
+                .entryQty(position.getEntryQty())
+                .entryQuoteQty(position.getEntryQuoteQty())
+                .remainingQty(position.getRemainingQty())
+                .currentStopLossPrice(position.getCurrentStopLossPrice())
+                .initialStopLossPrice(position.getInitialStopLossPrice())
+                .trailingStopPrice(position.getTrailingStopPrice())
+                .takeProfitPrice(position.getTakeProfitPrice())
+                .highestPriceSinceEntry(position.getHighestPriceSinceEntry())
+                .lowestPriceSinceEntry(position.getLowestPriceSinceEntry())
+                .entryTime(position.getEntryTime())
+                .build();
+    }
+
+    private BacktestTradePosition resolvePrimary(List<BacktestTradePosition> openPositions) {
+        return openPositions.stream()
+                .min(Comparator.comparing(
+                        BacktestTradePosition::getEntryTime,
+                        Comparator.nullsLast(Comparator.naturalOrder())
+                ))
+                .orElse(openPositions.getFirst());
+    }
+
+    private BigDecimal resolveHighest(List<BacktestTradePosition> openPositions) {
+        return openPositions.stream()
+                .map(BacktestTradePosition::getHighestPriceSinceEntry)
                 .filter(v -> v != null)
-                .min(Comparator.naturalOrder())
+                .max(BigDecimal::compareTo)
                 .orElse(null);
     }
 
-    private Comparator<BigDecimal> stopComparator(String side) {
-        if ("SHORT".equalsIgnoreCase(side)) {
-            return Comparator.reverseOrder();
-        }
-        return Comparator.naturalOrder();
+    private BigDecimal resolveLowest(List<BacktestTradePosition> openPositions) {
+        return openPositions.stream()
+                .map(BacktestTradePosition::getLowestPriceSinceEntry)
+                .filter(v -> v != null)
+                .min(BigDecimal::compareTo)
+                .orElse(null);
     }
 }
