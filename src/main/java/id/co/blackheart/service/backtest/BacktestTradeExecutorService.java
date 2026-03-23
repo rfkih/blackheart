@@ -140,7 +140,7 @@ public class BacktestTradeExecutorService {
                     .userStrategyId(backtestRun.getUserStrategyId())
                     .asset(backtestRun.getAsset())
                     .interval(backtestRun.getInterval())
-                    .exchange("BACKTEST")
+                    .exchange("BINANCE")
                     .side(tradeType)
                     .positionRole(planned.positionRole())
                     .status(STATUS_OPEN)
