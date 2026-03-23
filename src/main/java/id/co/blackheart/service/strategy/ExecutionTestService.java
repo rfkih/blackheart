@@ -12,7 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 
 @Service
 @RequiredArgsConstructor
@@ -308,8 +307,8 @@ public class ExecutionTestService implements StrategyExecutor {
         }
 
         return switch (interval.toLowerCase()) {
-            case "15m" -> EXIT_STRUCTURE_SINGLE;
-            case "1h" -> EXIT_STRUCTURE_TP1_RUNNER;
+            case "15m" -> EXIT_STRUCTURE_TP1_RUNNER;
+            case "1h" -> EXIT_STRUCTURE_SINGLE;
             case "4h" -> EXIT_STRUCTURE_TP1_TP2_RUNNER;
             case "1d" -> EXIT_STRUCTURE_RUNNER_ONLY;
             default -> EXIT_STRUCTURE_SINGLE;

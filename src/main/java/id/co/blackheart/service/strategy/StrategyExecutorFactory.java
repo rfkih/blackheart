@@ -9,7 +9,8 @@ public class StrategyExecutorFactory {
 
     private final TimeSeriesMomentumService tsmom;
 //    private final Breakout4hStrategyService breakout;
-//    private final Pullback15mWith4hBiasStrategyService pullback15mBias;
+    private final TrendPullbackSingleExitStrategyService trendPullbackSingleExitStrategyService;
+
     private final TrendFollowingStrategyService trendFollowing;
     private final ExecutionTestService executionTestService;
 
@@ -17,7 +18,7 @@ public class StrategyExecutorFactory {
         return switch (strategyName) {
             case "TSMOM" -> tsmom;
 //            case "BREAKOUT" -> breakout;
-//            case "PULLBACK_15M_WITH_4H_BIAS" -> pullback15mBias;
+            case "TREND_PULLBACK_SINGLE_EXIT" -> trendPullbackSingleExitStrategyService;
             case "TREND_FOLLOWING" -> trendFollowing;
             case "TEST" -> executionTestService;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyName);

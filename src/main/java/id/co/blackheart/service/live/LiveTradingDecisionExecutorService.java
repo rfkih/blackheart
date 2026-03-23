@@ -110,6 +110,36 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(tradePosition.getTradeId());
     }
 
+    public void executeListenerClosePositions(
+            Users user,
+            List<TradePosition> activeTradePositions,
+            String asset,
+            ListenerDecision listenerDecision
+    ) throws JsonProcessingException {
+        if (activeTradePositions == null || activeTradePositions.isEmpty() || listenerDecision == null || !listenerDecision.isTriggered()) {
+            return;
+        }
+
+        TradePosition firstPosition = activeTradePositions.get(0);
+
+        for (TradePosition tradePosition : activeTradePositions) {
+            tradePosition.setExitReason(listenerDecision.getExitReason());
+        }
+        tradePositionRepository.saveAll(activeTradePositions);
+
+        if ("LONG".equalsIgnoreCase(firstPosition.getSide())) {
+            tradeUtil.binanceCloseLongPositionsMarketOrder(user, activeTradePositions, asset);
+        } else if ("SHORT".equalsIgnoreCase(firstPosition.getSide())) {
+            tradeUtil.binanceCloseShortPositionsMarketOrder(user, activeTradePositions, asset);
+        } else {
+            log.warn("Unknown side for grouped listener close | tradeId={} side={}",
+                    firstPosition.getTradeId(), firstPosition.getSide());
+            return;
+        }
+
+        refreshParentTradeSummary(firstPosition.getTradeId());
+    }
+
     public void executeManualCloseTrade(
             Users user,
             UUID tradeId

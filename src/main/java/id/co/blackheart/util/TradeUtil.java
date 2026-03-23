@@ -29,8 +29,19 @@ import java.util.UUID;
 public class TradeUtil {
 
     private static final BigDecimal MIN_USDT_NOTIONAL = new BigDecimal("7");
-    private static final BigDecimal MIN_BASE_ASSET_QTY = new BigDecimal("0.00008");
-    private static final BigDecimal DEFAULT_QTY_STEP = new BigDecimal("0.000001");
+
+    /**
+     * Quantity validation
+     * 0.00011 = valid
+     * 0.000115 = invalid
+     */
+    private static final BigDecimal DEFAULT_QTY_STEP = new BigDecimal("0.00001");
+
+    /**
+     * Minimum qty allowed for each child trade position after split.
+     * If any split result is below this, downgrade the split structure.
+     */
+    private static final BigDecimal MIN_POSITION_QTY = new BigDecimal("0.0001");
 
     private static final BigDecimal BUY_PRICE_BUFFER = new BigDecimal("1.001");
     private static final BigDecimal SELL_PRICE_BUFFER = new BigDecimal("0.999");
@@ -73,6 +84,147 @@ public class TradeUtil {
         openParentTrade(context, decision, tradeAmount, TradeType.SHORT, asset);
     }
 
+
+    @Transactional
+    public void binanceCloseLongPositionsMarketOrder(Users user,List<TradePosition> tradePositions,String asset) {
+        closeGroupedPositions(user, tradePositions, asset, TradeType.LONG);
+    }
+
+    @Transactional
+    public void binanceCloseShortPositionsMarketOrder(Users user,List<TradePosition> tradePositions,String asset) {
+        closeGroupedPositions(user, tradePositions, asset, TradeType.SHORT);
+    }
+
+    private void closeGroupedPositions(Users user,List<TradePosition> tradePositions,String asset,TradeType tradeType) {
+        if (user == null || tradePositions == null || tradePositions.isEmpty()) {
+            return;
+        }
+
+        List<TradePosition> validOpenPositions = tradePositions.stream()
+                .filter(tp -> tp != null)
+                .filter(tp -> "OPEN".equalsIgnoreCase(tp.getStatus()))
+                .filter(tp -> tp.getRemainingQty() != null && tp.getRemainingQty().compareTo(BigDecimal.ZERO) > 0)
+                .toList();
+
+        if (validOpenPositions.isEmpty()) {
+            return;
+        }
+
+        TradePosition first = validOpenPositions.getFirst();
+
+        BigDecimal totalQty = validOpenPositions.stream()
+                .map(TradePosition::getRemainingQty)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal closeQty = floorToStep(totalQty);
+
+        if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("Grouped close qty became zero after normalization | tradeId={} asset={}",
+                    first.getTradeId(), asset);
+            return;
+        }
+
+        try {
+            String orderSide = tradeType == TradeType.LONG ? "SELL" : "BUY";
+
+            BinanceOrderRequest request = BinanceOrderRequest.builder()
+                    .symbol(asset)
+                    .side(orderSide)
+                    .amount(closeQty)
+                    .apiKey(user.getApiKey())
+                    .apiSecret(user.getApiSecret())
+                    .build();
+
+            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
+            FillProcessingResult result = processOrderFills(response);
+
+            applyGroupedExitToPositions(validOpenPositions, result, tradeType);
+
+            tradePositionRepository.saveAll(validOpenPositions);
+            refreshParentTradeSummary(first.getTradeId());
+
+            log.info("✅ Grouped {} close success | tradeId={} asset={} positions={} qty={} avgExitPrice={}",
+                    tradeType,
+                    first.getTradeId(),
+                    asset,
+                    validOpenPositions.size(),
+                    closeQty,
+                    result.avgPrice);
+
+        } catch (Exception e) {
+            log.error("❌ Error closing grouped {} positions | tradeId={} asset={} positions={}",
+                    tradeType,
+                    first.getTradeId(),
+                    asset,
+                    validOpenPositions.size(),
+                    e);
+        }
+    }
+
+    private void applyGroupedExitToPositions(List<TradePosition> positions,FillProcessingResult result,TradeType tradeType) {
+        BigDecimal totalQty = positions.stream()
+                .map(TradePosition::getRemainingQty)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal allocatedFeeRunning = BigDecimal.ZERO;
+        BigDecimal allocatedQuoteRunning = BigDecimal.ZERO;
+        BigDecimal allocatedQtyRunning = BigDecimal.ZERO;
+
+        for (int i = 0; i < positions.size(); i++) {
+            TradePosition position = positions.get(i);
+
+            BigDecimal exitQty;
+            BigDecimal exitQuoteQty;
+            BigDecimal exitFee;
+
+            if (i == positions.size() - 1) {
+                exitQty = result.totalQty.subtract(allocatedQtyRunning);
+                exitQuoteQty = result.totalQuote.subtract(allocatedQuoteRunning);
+                exitFee = safe(result.totalFee).subtract(allocatedFeeRunning);
+            } else {
+                BigDecimal ratio = position.getRemainingQty()
+                        .divide(totalQty, 12, RoundingMode.HALF_UP);
+
+                exitQty = result.totalQty.multiply(ratio).setScale(8, RoundingMode.DOWN);
+                exitQuoteQty = result.totalQuote.multiply(ratio).setScale(8, RoundingMode.DOWN);
+                exitFee = safe(result.totalFee).multiply(ratio).setScale(8, RoundingMode.DOWN);
+
+                allocatedQtyRunning = allocatedQtyRunning.add(exitQty);
+                allocatedQuoteRunning = allocatedQuoteRunning.add(exitQuoteQty);
+                allocatedFeeRunning = allocatedFeeRunning.add(exitFee);
+            }
+
+            BigDecimal exitPrice = exitQty.compareTo(BigDecimal.ZERO) > 0
+                    ? exitQuoteQty.divide(exitQty, 8, RoundingMode.HALF_UP)
+                    : result.avgPrice;
+
+            position.setExitExecutedQty(exitQty);
+            position.setExitExecutedQuoteQty(exitQuoteQty);
+            position.setExitFee(exitFee);
+            position.setExitFeeCurrency(result.feeCurrency);
+            position.setExitPrice(exitPrice);
+            position.setExitTime(LocalDateTime.now());
+            position.setStatus("CLOSED");
+            position.setRemainingQty(BigDecimal.ZERO);
+
+            BigDecimal pnlAmount = calculatePLAmount(
+                    position.getEntryPrice(),
+                    exitPrice,
+                    position.getEntryQty(),
+                    tradeType
+            );
+
+            BigDecimal pnlPercent = calculatePLPercentage(
+                    position.getEntryPrice(),
+                    exitPrice,
+                    tradeType
+            );
+
+            position.setRealizedPnlAmount(pnlAmount);
+            position.setRealizedPnlPercent(pnlPercent);
+        }
+    }
+
     @Transactional
     public void binanceCloseLongPositionMarketOrder(
             Users user,
@@ -85,7 +237,26 @@ public class TradeUtil {
         }
 
         try {
-            BigDecimal closeQty = validated.getRemainingQty();
+            BigDecimal closeQty = floorToStep(validated.getRemainingQty());
+
+            if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
+                log.warn("Close LONG qty became zero after normalization | tradePositionId={}",
+                        validated.getTradePositionId());
+                return;
+            }
+
+            if (!isStepValid(closeQty)) {
+                log.warn("Close LONG qty invalid after normalization | tradePositionId={} qty={}",
+                        validated.getTradePositionId(), closeQty);
+                return;
+            }
+
+            if (closeQty.compareTo(validated.getRemainingQty()) != 0) {
+                log.warn("Normalized LONG close qty | tradePositionId={} storedQty={} normalizedQty={}",
+                        validated.getTradePositionId(),
+                        validated.getRemainingQty(),
+                        closeQty);
+            }
 
             BinanceOrderRequest request = BinanceOrderRequest.builder()
                     .symbol(asset)
@@ -127,7 +298,26 @@ public class TradeUtil {
         }
 
         try {
-            BigDecimal closeQty = validated.getRemainingQty();
+            BigDecimal closeQty = floorToStep(validated.getRemainingQty());
+
+            if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
+                log.warn("Close SHORT qty became zero after normalization | tradePositionId={}",
+                        validated.getTradePositionId());
+                return;
+            }
+
+            if (!isStepValid(closeQty)) {
+                log.warn("Close SHORT qty invalid after normalization | tradePositionId={} qty={}",
+                        validated.getTradePositionId(), closeQty);
+                return;
+            }
+
+            if (closeQty.compareTo(validated.getRemainingQty()) != 0) {
+                log.warn("Normalized SHORT close qty | tradePositionId={} storedQty={} normalizedQty={}",
+                        validated.getTradePositionId(),
+                        validated.getRemainingQty(),
+                        closeQty);
+            }
 
             BinanceOrderRequest request = BinanceOrderRequest.builder()
                     .symbol(asset)
@@ -258,7 +448,12 @@ public class TradeUtil {
             FillProcessingResult result = processOrderFills(response);
 
             BigDecimal avgEntryPrice = result.avgPrice;
+            BigDecimal normalizedExecutedQty = floorToStep(result.totalQty);
             LocalDateTime now = LocalDateTime.now();
+
+            if (normalizedExecutedQty.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalStateException("Executed quantity became zero after normalization");
+            }
 
             persistedTrade = Trades.builder()
                     .userId(context.getUser().getUserId())
@@ -272,9 +467,9 @@ public class TradeUtil {
                     .tradeMode("PENDING_ALLOCATION")
                     .avgEntryPrice(avgEntryPrice)
                     .avgExitPrice(null)
-                    .totalEntryQty(result.totalQty)
+                    .totalEntryQty(normalizedExecutedQty)
                     .totalEntryQuoteQty(result.totalQuote)
-                    .totalRemainingQty(result.totalQty)
+                    .totalRemainingQty(normalizedExecutedQty)
                     .realizedPnlAmount(BigDecimal.ZERO)
                     .realizedPnlPercent(BigDecimal.ZERO)
                     .totalFeeAmount(result.totalFee)
@@ -290,7 +485,7 @@ public class TradeUtil {
 
             tradesRepository.save(persistedTrade);
 
-            SplitPlan finalPlan = buildSplitPlan(result.totalQty, avgEntryPrice, decision);
+            SplitPlan finalPlan = buildSplitPlan(normalizedExecutedQty, avgEntryPrice, decision);
 
             if (isInvalidPlan(finalPlan)) {
                 persistedTrade.setTradeMode("UNALLOCATED");
@@ -301,7 +496,7 @@ public class TradeUtil {
                         "❌ Unable to allocate any valid exit structure | tradeId={} asset={} qty={} avgEntryPrice={}",
                         persistedTrade.getTradeId(),
                         asset,
-                        result.totalQty,
+                        normalizedExecutedQty,
                         avgEntryPrice
                 );
                 return;
@@ -325,7 +520,7 @@ public class TradeUtil {
                     persistedTrade.getTradeId(),
                     asset,
                     avgEntryPrice,
-                    result.totalQty,
+                    normalizedExecutedQty,
                     finalPlan.tradeMode
             );
 
@@ -385,8 +580,12 @@ public class TradeUtil {
             return PreTradeValidationResult.invalid("Estimated quantity is zero after step normalization");
         }
 
-        if (estimatedQty.compareTo(MIN_BASE_ASSET_QTY) < 0) {
-            return PreTradeValidationResult.invalid("Estimated quantity below minimum base asset quantity");
+        if (!isStepValid(estimatedQty)) {
+            return PreTradeValidationResult.invalid("Estimated quantity is invalid for step size");
+        }
+
+        if (estimatedQty.compareTo(MIN_POSITION_QTY) < 0) {
+            return PreTradeValidationResult.invalid("Estimated quantity below minimum position quantity");
         }
 
         BigDecimal estimatedNotional = estimatedQty.multiply(bufferedPrice);
@@ -510,6 +709,20 @@ public class TradeUtil {
 
         for (int i = 0; i < splitPlan.positions.size(); i++) {
             PlannedPosition plannedPosition = splitPlan.positions.get(i);
+
+            if (!isStepValid(plannedPosition.qty)) {
+                throw new IllegalStateException(
+                        "Planned position qty is not aligned to step size. role="
+                                + plannedPosition.role + ", qty=" + plannedPosition.qty
+                );
+            }
+
+            if (plannedPosition.qty.compareTo(MIN_POSITION_QTY) < 0) {
+                throw new IllegalStateException(
+                        "Planned position qty below minimum allowed qty. role="
+                                + plannedPosition.role + ", qty=" + plannedPosition.qty
+                );
+            }
 
             BigDecimal entryFee;
             if (i == splitPlan.positions.size() - 1) {
@@ -832,9 +1045,25 @@ public class TradeUtil {
             BigDecimal avgEntryPrice,
             StrategyDecision decision
     ) {
-        BigDecimal tp1Qty = floorToStep(totalQty.multiply(new BigDecimal("0.30")));
-        BigDecimal tp2Qty = floorToStep(totalQty.multiply(new BigDecimal("0.30")));
-        BigDecimal runnerQty = floorToStep(totalQty.subtract(tp1Qty).subtract(tp2Qty));
+        if (decision.getTakeProfitPrice1() == null || decision.getTakeProfitPrice2() == null) {
+            return invalidPlan();
+        }
+
+        BigDecimal normalizedTotalQty = floorToStep(totalQty);
+        if (normalizedTotalQty.compareTo(BigDecimal.ZERO) <= 0) {
+            return invalidPlan();
+        }
+
+        BigDecimal tp1Qty = floorToStep(normalizedTotalQty.multiply(new BigDecimal("0.30")));
+        BigDecimal tp2Qty = floorToStep(normalizedTotalQty.multiply(new BigDecimal("0.30")));
+        BigDecimal runnerQty = normalizedTotalQty.subtract(tp1Qty).subtract(tp2Qty);
+
+        BigDecimal allocatedTotal = tp1Qty.add(tp2Qty).add(runnerQty);
+        if (allocatedTotal.compareTo(normalizedTotalQty) != 0) {
+            log.error("Three-slice allocation mismatch | totalQty={} allocated={}",
+                    normalizedTotalQty, allocatedTotal);
+            return invalidPlan();
+        }
 
         if (!isClosableSlice(tp1Qty, avgEntryPrice)
                 || !isClosableSlice(tp2Qty, avgEntryPrice)
@@ -842,16 +1071,33 @@ public class TradeUtil {
             return invalidPlan();
         }
 
-        if (decision.getTakeProfitPrice1() == null || decision.getTakeProfitPrice2() == null) {
-            return invalidPlan();
-        }
-
         return new SplitPlan(
                 EXIT_STRUCTURE_TP1_TP2_RUNNER,
                 List.of(
-                        PlannedPosition.of("TP1", tp1Qty, decision.getStopLossPrice(), decision.getStopLossPrice(), decision.getTrailingStopPrice(), decision.getTakeProfitPrice1()),
-                        PlannedPosition.of("TP2", tp2Qty, decision.getStopLossPrice(), decision.getStopLossPrice(), decision.getTrailingStopPrice(), decision.getTakeProfitPrice2()),
-                        PlannedPosition.of("RUNNER", runnerQty, decision.getStopLossPrice(), decision.getStopLossPrice(), decision.getTrailingStopPrice(), null)
+                        PlannedPosition.of(
+                                "TP1",
+                                tp1Qty,
+                                decision.getStopLossPrice(),
+                                decision.getStopLossPrice(),
+                                decision.getTrailingStopPrice(),
+                                decision.getTakeProfitPrice1()
+                        ),
+                        PlannedPosition.of(
+                                "TP2",
+                                tp2Qty,
+                                decision.getStopLossPrice(),
+                                decision.getStopLossPrice(),
+                                decision.getTrailingStopPrice(),
+                                decision.getTakeProfitPrice2()
+                        ),
+                        PlannedPosition.of(
+                                "RUNNER",
+                                runnerQty,
+                                decision.getStopLossPrice(),
+                                decision.getStopLossPrice(),
+                                decision.getTrailingStopPrice(),
+                                null
+                        )
                 )
         );
     }
@@ -861,14 +1107,26 @@ public class TradeUtil {
             BigDecimal avgEntryPrice,
             StrategyDecision decision
     ) {
-        BigDecimal tp1Qty = floorToStep(totalQty.multiply(new BigDecimal("0.50")));
-        BigDecimal runnerQty = floorToStep(totalQty.subtract(tp1Qty));
-
-        if (!isClosableSlice(tp1Qty, avgEntryPrice) || !isClosableSlice(runnerQty, avgEntryPrice)) {
+        if (decision.getTakeProfitPrice1() == null) {
             return invalidPlan();
         }
 
-        if (decision.getTakeProfitPrice1() == null) {
+        BigDecimal normalizedTotalQty = floorToStep(totalQty);
+        if (normalizedTotalQty.compareTo(BigDecimal.ZERO) <= 0) {
+            return invalidPlan();
+        }
+
+        BigDecimal tp1Qty = floorToStep(normalizedTotalQty.multiply(new BigDecimal("0.50")));
+        BigDecimal runnerQty = normalizedTotalQty.subtract(tp1Qty);
+
+        BigDecimal allocatedTotal = tp1Qty.add(runnerQty);
+        if (allocatedTotal.compareTo(normalizedTotalQty) != 0) {
+            log.error("Two-slice allocation mismatch | totalQty={} allocated={}",
+                    normalizedTotalQty, allocatedTotal);
+            return invalidPlan();
+        }
+
+        if (!isClosableSlice(tp1Qty, avgEntryPrice) || !isClosableSlice(runnerQty, avgEntryPrice)) {
             return invalidPlan();
         }
 
@@ -956,7 +1214,11 @@ public class TradeUtil {
             return false;
         }
 
-        if (qty.compareTo(MIN_BASE_ASSET_QTY) < 0) {
+        if (!isStepValid(qty)) {
+            return false;
+        }
+
+        if (qty.compareTo(MIN_POSITION_QTY) < 0) {
             return false;
         }
 
@@ -1008,11 +1270,19 @@ public class TradeUtil {
 
     private BigDecimal floorToStep(BigDecimal qty) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
-            return BigDecimal.ZERO.setScale(8, RoundingMode.DOWN);
+            return BigDecimal.ZERO;
         }
 
         BigDecimal steps = qty.divide(DEFAULT_QTY_STEP, 0, RoundingMode.DOWN);
-        return steps.multiply(DEFAULT_QTY_STEP).setScale(8, RoundingMode.DOWN);
+        return steps.multiply(DEFAULT_QTY_STEP).stripTrailingZeros();
+    }
+
+    private boolean isStepValid(BigDecimal qty) {
+        if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+            return false;
+        }
+
+        return qty.remainder(DEFAULT_QTY_STEP).compareTo(BigDecimal.ZERO) == 0;
     }
 
     private BigDecimal safe(BigDecimal value) {

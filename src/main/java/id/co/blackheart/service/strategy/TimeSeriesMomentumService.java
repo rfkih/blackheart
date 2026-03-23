@@ -122,6 +122,8 @@ public class TimeSeriesMomentumService implements StrategyExecutor {
 
         String exitStructure = resolveExitStructure(interval);
 
+        log.info("position Size of trade {}", positionSize);
+
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_LONG)
                 .strategyName(STRATEGY_NAME)
