@@ -11,6 +11,8 @@ import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTradePosition;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
+import id.co.blackheart.repository.FeatureStoreRepository;
+import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.service.strategy.StrategyExecutor;
 import id.co.blackheart.service.strategy.StrategyExecutorFactory;
 import id.co.blackheart.service.tradelistener.TradeListenerService;
@@ -18,9 +20,8 @@ import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import id.co.blackheart.repository.FeatureStoreRepository;
-import id.co.blackheart.repository.MarketDataRepository;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
@@ -146,19 +147,24 @@ public class BacktestCoordinatorService {
         for (MarketData monitorCandle : monitorCandles) {
             boolean anyPositionClosed = handleListenerStep(backtestRun, state, monitorCandle);
 
-            handleStrategyStep(
-                    backtestRun,
-                    state,
-                    strategyInterval,
-                    strategyCandleByEndTime,
-                    strategyFeatureByStartTime,
-                    biasCandles,
-                    biasFeatureByStartTime,
-                    monitorCandle
-            );
+            if (!anyPositionClosed) {
+                handleStrategyStep(
+                        backtestRun,
+                        state,
+                        strategyInterval,
+                        strategyCandleByEndTime,
+                        strategyFeatureByStartTime,
+                        biasCandles,
+                        biasFeatureByStartTime,
+                        monitorCandle
+                );
+            }
 
             backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
         }
+
+        forceCloseRemainingOpenTrade(backtestRun, state, monitorCandles.get(monitorCandles.size() - 1));
+        backtestStateService.updateEquityAndDrawdown(state, monitorCandles.get(monitorCandles.size() - 1).getClosePrice());
 
         return backtestMetricsService.buildSummary(backtestRun, state);
     }
@@ -168,7 +174,9 @@ public class BacktestCoordinatorService {
             BacktestState state,
             MarketData monitorCandle
     ) {
-        if (state.getActiveTrade() == null || state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
+        if (state.getActiveTrade() == null
+                || state.getActiveTradePositions() == null
+                || state.getActiveTradePositions().isEmpty()) {
             return false;
         }
 
@@ -284,7 +292,7 @@ public class BacktestCoordinatorService {
                 .marketData(strategyCandle)
                 .featureStore(strategyFeature)
                 .cashBalance(state.getCashBalance())
-                .assetBalance(state.getAssetBalance())
+                .assetBalance(resolveSyntheticAssetBalanceForBacktest(state, strategyCandle))
                 .riskPerTradePct(backtestRun.getRiskPerTradePct())
                 .biasMarketData(biasMarketData)
                 .biasFeatureStore(biasFeatureStore)
@@ -296,16 +304,64 @@ public class BacktestCoordinatorService {
         StrategyExecutor executor = strategyExecutorFactory.get(backtestRun.getStrategyName());
         StrategyDecision decision = executor.execute(strategyContext);
 
-        if (decision != null && !DecisionType.HOLD.equals(decision.getDecisionType())) {
-            log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
-                    backtestRun.getBacktestRunId(),
-                    strategyCandle.getEndTime(),
-                    strategyInterval,
-                    decision.getDecisionType(),
-                    decision.getReason());
-        }
+//        if (decision != null && !DecisionType.HOLD.equals(decision.getDecisionType())) {
+//            log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
+//                    backtestRun.getBacktestRunId(),
+//                    strategyCandle.getEndTime(),
+//                    strategyInterval,
+//                    decision.getDecisionType(),
+//                    decision.getReason());
+//        }
 
         backtestTradeExecutorService.execute(backtestRun, state, strategyContext, decision);
+    }
+
+    private void forceCloseRemainingOpenTrade(
+            BacktestRun backtestRun,
+            BacktestState state,
+            MarketData finalCandle
+    ) {
+        if (state.getActiveTrade() == null
+                || state.getActiveTradePositions() == null
+                || state.getActiveTradePositions().isEmpty()
+                || finalCandle == null) {
+            return;
+        }
+
+        for (BacktestTradePosition position : state.getActiveTradePositions()) {
+            if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
+                continue;
+            }
+
+            backtestTradeExecutorService.closeSinglePositionFromListener(
+                    backtestRun,
+                    state,
+                    position,
+                    finalCandle.getClosePrice(),
+                    "FORCED_END_OF_BACKTEST_CLOSE",
+                    finalCandle.getEndTime()
+            );
+        }
+    }
+
+    private BigDecimal resolveSyntheticAssetBalanceForBacktest(
+            BacktestState state,
+            MarketData strategyCandle
+    ) {
+        if (state == null || strategyCandle == null || strategyCandle.getClosePrice() == null) {
+            return BigDecimal.ZERO;
+        }
+
+        if (state.getCashBalance() == null || state.getCashBalance().compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        if (strategyCandle.getClosePrice().compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        return state.getCashBalance()
+                .divide(strategyCandle.getClosePrice(), 12, java.math.RoundingMode.DOWN);
     }
 
     private MarketData resolveLatestCompletedBiasCandle(

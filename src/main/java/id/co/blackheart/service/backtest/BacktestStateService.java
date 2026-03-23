@@ -2,74 +2,89 @@ package id.co.blackheart.service.backtest;
 
 import id.co.blackheart.dto.backtest.BacktestState;
 import id.co.blackheart.model.BacktestTrade;
+import id.co.blackheart.model.BacktestTradePosition;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 
 @Service
 public class BacktestStateService {
 
-    public void updateEquityAndDrawdown(BacktestState state, BigDecimal currentClosePrice) {
-        BigDecimal currentEquity = calculateCurrentEquity(state, currentClosePrice);
+    private static final BigDecimal ZERO = BigDecimal.ZERO;
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
+
+    public void updateEquityAndDrawdown(BacktestState state, BigDecimal latestPrice) {
+        if (state == null || latestPrice == null || latestPrice.compareTo(ZERO) <= 0) {
+            return;
+        }
+
+        BigDecimal currentEquity = calculateCurrentEquity(state, latestPrice);
+        state.setCurrentEquity(currentEquity);
 
         if (state.getPeakEquity() == null || currentEquity.compareTo(state.getPeakEquity()) > 0) {
             state.setPeakEquity(currentEquity);
         }
 
-        if (state.getPeakEquity() != null && state.getPeakEquity().compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal drawdownPercent = state.getPeakEquity()
+        if (state.getPeakEquity() != null && state.getPeakEquity().compareTo(ZERO) > 0) {
+            BigDecimal drawdownPct = state.getPeakEquity()
                     .subtract(currentEquity)
                     .divide(state.getPeakEquity(), 8, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"));
+                    .multiply(HUNDRED);
 
             if (state.getMaxDrawdownPercent() == null
-                    || drawdownPercent.compareTo(state.getMaxDrawdownPercent()) > 0) {
-                state.setMaxDrawdownPercent(drawdownPercent);
+                    || drawdownPct.compareTo(state.getMaxDrawdownPercent()) > 0) {
+                state.setMaxDrawdownPercent(drawdownPct);
             }
         }
     }
 
-    private BigDecimal calculateCurrentEquity(BacktestState state, BigDecimal currentClosePrice) {
+    public BigDecimal calculateCurrentEquity(BacktestState state, BigDecimal latestPrice) {
+        BigDecimal equity = safe(state.getCashBalance());
+
         BacktestTrade activeTrade = state.getActiveTrade();
+        List<BacktestTradePosition> activePositions = state.getActiveTradePositions();
 
-        if (activeTrade == null) {
-            return safe(state.getCashBalance());
+        if (activeTrade == null || activePositions == null || activePositions.isEmpty()) {
+            return equity;
         }
 
-        BigDecimal entryQuoteQty = safe(activeTrade.getTotalEntryQuoteQty());
-        BigDecimal entryQty = safe(activeTrade.getTotalEntryQty());
-        BigDecimal remainingQty = safe(activeTrade.getTotalRemainingQty());
-        BigDecimal totalFeeAmount = safe(activeTrade.getTotalFeeAmount());
-        BigDecimal entryPrice = safe(activeTrade.getAvgEntryPrice());
+        for (BacktestTradePosition position : activePositions) {
+            if (position == null || !"OPEN".equalsIgnoreCase(position.getStatus())) {
+                continue;
+            }
 
-        if ("LONG".equalsIgnoreCase(activeTrade.getSide())) {
-            BigDecimal markToMarketValue = remainingQty.multiply(currentClosePrice);
-            BigDecimal unrealizedPnl = markToMarketValue
-                    .subtract(remainingQty.multiply(entryPrice));
+            BigDecimal remainingQty = safe(position.getRemainingQty());
+            BigDecimal entryPrice = safe(position.getEntryPrice());
 
-            return safe(state.getCashBalance())
-                    .add(markToMarketValue)
-                    .subtract(totalFeeAmount)
-                    .add(safe(activeTrade.getRealizedPnlAmount()));
+            if (remainingQty.compareTo(ZERO) <= 0 || entryPrice.compareTo(ZERO) <= 0) {
+                continue;
+            }
+
+            BigDecimal markToMarketValue;
+            BigDecimal unrealizedPnl;
+
+            if ("LONG".equalsIgnoreCase(position.getSide())) {
+                markToMarketValue = remainingQty.multiply(latestPrice);
+                unrealizedPnl = latestPrice.subtract(entryPrice).multiply(remainingQty);
+            } else {
+                /**
+                 * Synthetic short model:
+                 * equity contribution = reserved quote notional + unrealized pnl
+                 */
+                BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
+                unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
+                markToMarketValue = reservedNotional.add(unrealizedPnl);
+            }
+
+            equity = equity.add(markToMarketValue);
         }
 
-        if ("SHORT".equalsIgnoreCase(activeTrade.getSide())) {
-            BigDecimal unrealizedPnl = entryPrice
-                    .subtract(currentClosePrice)
-                    .multiply(remainingQty);
-
-            return safe(state.getCashBalance())
-                    .add(entryQuoteQty)
-                    .add(unrealizedPnl)
-                    .subtract(totalFeeAmount)
-                    .add(safe(activeTrade.getRealizedPnlAmount()));
-        }
-
-        return safe(state.getCashBalance());
+        return equity;
     }
 
     private BigDecimal safe(BigDecimal value) {
-        return value == null ? BigDecimal.ZERO : value;
+        return value == null ? ZERO : value;
     }
 }

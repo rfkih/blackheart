@@ -15,34 +15,39 @@ import java.util.List;
 public class BacktestState {
 
     private BigDecimal cashBalance;
-    private BigDecimal assetBalance;
+
+    /**
+     * Synthetic equity tracking fields.
+     */
+    private BigDecimal currentEquity;
     private BigDecimal peakEquity;
     private BigDecimal maxDrawdownPercent;
 
     /**
-     * Active parent trade in memory.
+     * Current active parent trade.
+     * This still supports one parent trade at a time, matching your current design.
      */
     private BacktestTrade activeTrade;
 
     /**
-     * Active child positions in memory.
+     * Active child positions for the active parent trade.
      */
     private List<BacktestTradePosition> activeTradePositions;
 
     /**
-     * Completed parent trades in memory.
+     * Completed parent trades.
      */
     private List<BacktestTrade> completedTrades;
 
     /**
-     * Completed child positions in memory.
+     * Completed child positions.
      */
     private List<BacktestTradePosition> completedTradePositions;
 
     public static BacktestState initial(BacktestRun run) {
         return BacktestState.builder()
                 .cashBalance(run.getInitialCapital())
-                .assetBalance(BigDecimal.ZERO)
+                .currentEquity(run.getInitialCapital())
                 .peakEquity(run.getInitialCapital())
                 .maxDrawdownPercent(BigDecimal.ZERO)
                 .activeTrade(null)

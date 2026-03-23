@@ -17,12 +17,16 @@ public class BacktestMetricsService {
         List<BacktestTrade> trades = state.getCompletedTrades();
 
         int totalTrades = trades.size();
+
         int winningTrades = (int) trades.stream()
                 .filter(t -> t.getRealizedPnlAmount() != null
                         && t.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) > 0)
                 .count();
 
-        int losingTrades = totalTrades - winningTrades;
+        int losingTrades = (int) trades.stream()
+                .filter(t -> t.getRealizedPnlAmount() != null
+                        && t.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) < 0)
+                .count();
 
         BigDecimal grossProfit = trades.stream()
                 .map(BacktestTrade::getRealizedPnlAmount)
