@@ -15,6 +15,7 @@ import id.co.blackheart.repository.PortfolioRepository;
 import id.co.blackheart.repository.UsersRepository;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -34,6 +35,7 @@ public class PortfolioService {
 
     private static final int RECV_WINDOW = 5000;
 
+    @Async
     public void reloadAsset() {
         log.info("Starting portfolio reload...");
         List<Users> userList = usersRepository.findByIsActive("1");
@@ -64,7 +66,7 @@ public class PortfolioService {
         return savePortfolio(user, asset, assetData.getFree(), assetData.getLocked());
     }
 
-    public List<Portfolio> updateAndGetBinanceAssetBalance(Users user) {
+    public void updateAndGetBinanceAssetBalance(Users user) {
         BinanceAssetRequest binanceAssetRequest = new BinanceAssetRequest();
         binanceAssetRequest.setApiKey(user.getApiKey());
         binanceAssetRequest.setApiSecret(user.getApiSecret());
@@ -72,35 +74,29 @@ public class PortfolioService {
 
         BinanceAssetResponse binanceAssetResponse = binanceClientService.getBinanceAssetDetails(binanceAssetRequest);
 
-        // Save everything async
+
         saveAllBinanceAssets(user, binanceAssetResponse.getAssets());
 
-        return binanceAssetResponse.getAssets().stream()
-                .map(dto -> savePortfolio(user, dto.getAsset(), dto.getFree(), dto.getLocked()))
-                .toList();
     }
 
     public Portfolio updateAndGetAssetBalance(String asset, Users user) throws JsonProcessingException {
         log.info("Updating data for User: {} and Asset: {}", user.getUsername(), asset);
 
-        if ("TKO".equals(user.getExchange())) {
-            return updateAndGetTokocryptoAssetBalance(asset, user);
-        } else if ("BNC".equals(user.getExchange())){
-            BinanceAssetRequest request = new BinanceAssetRequest();
-            request.setApiKey(user.getApiKey());
-            request.setApiSecret(user.getApiSecret());
-            request.setRecvWindow(RECV_WINDOW);
+        BinanceAssetRequest request = new BinanceAssetRequest();
+        request.setApiKey(user.getApiKey());
+        request.setApiSecret(user.getApiSecret());
+        request.setRecvWindow(RECV_WINDOW);
 
-            BinanceAssetResponse response = binanceClientService.getBinanceAssetDetails(request);
-            saveAllBinanceAssets(user, response.getAssets());
+        BinanceAssetResponse response = binanceClientService.getBinanceAssetDetails(request);
+        saveAllBinanceAssets(user, response.getAssets());
 
-            return response.getAssets().stream()
-                    .filter(a -> a.getAsset().equalsIgnoreCase(asset))
-                    .findFirst()
-                    .map(dto -> savePortfolio(user, dto.getAsset(), dto.getFree(), dto.getLocked()))
-                    .orElse(null);
-        }
-        return new Portfolio();
+        return response.getAssets().stream()
+                .filter(a -> a.getAsset().equalsIgnoreCase(asset))
+                .findFirst()
+                .map(dto -> savePortfolio(user, dto.getAsset(), dto.getFree(), dto.getLocked()))
+                .orElse(null);
+
+
     }
 
     private Portfolio savePortfolio(Users user, String asset, String free, String locked) {

@@ -29,7 +29,7 @@ import java.util.UUID;
 public class LiveTradingDecisionExecutorService {
 
     private static final BigDecimal MIN_USDT_NOTIONAL = new BigDecimal("7");
-    private static final BigDecimal MIN_BASE_ASSET_QTY = new BigDecimal("0.00008");
+    private static final BigDecimal MIN_BTC_NOTIONAL =  new BigDecimal("0.00001");
 
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_CLOSED = "CLOSED";
@@ -40,11 +40,7 @@ public class LiveTradingDecisionExecutorService {
     private final PortfolioService portfolioService;
     private final TradeUtil tradeUtil;
 
-    public void execute(
-            Trades activeTrade,
-            StrategyContext context,
-            StrategyDecision decision
-    ) throws JsonProcessingException {
+    public void execute(Trades activeTrade, StrategyContext context,StrategyDecision decision) throws JsonProcessingException {
         if (decision == null || decision.getDecisionType() == null) {
             return;
         }
@@ -53,7 +49,7 @@ public class LiveTradingDecisionExecutorService {
             case OPEN_LONG -> executeOpenLong(context, decision);
             case OPEN_SHORT -> executeOpenShort(context, decision);
             case UPDATE_POSITION_MANAGEMENT -> executeUpdatePositionManagement(activeTrade, decision);
-            case CLOSE_LONG -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
+            case CLOSE_LONG  -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
             case CLOSE_SHORT -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
             case HOLD -> log.debug("No execution for HOLD");
             default -> log.debug("Decision type not handled yet: {}", decision.getDecisionType());
@@ -140,10 +136,7 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(firstPosition.getTradeId());
     }
 
-    public void executeManualCloseTrade(
-            Users user,
-            UUID tradeId
-    ) throws JsonProcessingException {
+    public void executeManualCloseTrade(Users user,UUID tradeId) {
         List<TradePosition> openPositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
 
         for (TradePosition tradePosition : openPositions) {
@@ -167,7 +160,7 @@ public class LiveTradingDecisionExecutorService {
         Users user = context.getUser();
 
         Portfolio usdtPortfolio = portfolioService.updateAndGetAssetBalance("USDT", user);
-        BigDecimal balance = usdtPortfolio.getBalance();
+        BigDecimal balance = safe(usdtPortfolio.getBalance());
         BigDecimal tradeAmount = calculateLongTradeAmount(balance, user);
 
         if (balance.compareTo(tradeAmount) < 0) {
@@ -188,30 +181,32 @@ public class LiveTradingDecisionExecutorService {
             StrategyDecision decision
     ) throws JsonProcessingException {
         Users user = context.getUser();
-        String asset = context.getAsset();
-        String baseAsset = resolveBaseAsset(asset);
 
-        Portfolio basePortfolio = portfolioService.updateAndGetAssetBalance(baseAsset, user);
-        BigDecimal balance = basePortfolio.getBalance();
+        Portfolio btcPortfolio = portfolioService.updateAndGetAssetBalance("BTC", user);
+        BigDecimal balance = safe(btcPortfolio.getBalance());
         BigDecimal tradeAmount = calculateShortTradeAmount(balance, user);
 
         if (balance.compareTo(tradeAmount) < 0) {
-            log.info("Insufficient {} balance for SHORT entry. balance={} required={}", baseAsset, balance, tradeAmount);
+            log.info("Insufficient USDT balance for SHORT entry. balance={} required={}", balance, tradeAmount);
             return;
         }
 
+        log.info(
+                "SHORT entry sizing | usdtBalance={} riskAmount={} tradeQuoteNotional={}",
+                balance,
+                user.getRiskAmount(),
+                tradeAmount
+        );
+
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceOpenShortMarketOrder(context, asset, decision, tradeAmount);
+            tradeUtil.binanceOpenShortMarketOrder(context, context.getAsset(), decision, tradeAmount);
             return;
         }
 
         log.warn("Unsupported exchange for SHORT entry: {}", user.getExchange());
     }
 
-    private void executeUpdatePositionManagement(
-            Trades activeTrade,
-            StrategyDecision decision
-    ) {
+    private void executeUpdatePositionManagement(Trades activeTrade,StrategyDecision decision) {
         if (activeTrade == null || decision == null) {
             return;
         }
@@ -220,11 +215,7 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(activeTrade.getTradeId());
     }
 
-    private void executeCloseTrade(
-            Trades activeTrade,
-            Users user,
-            String exitReason
-    ) throws JsonProcessingException {
+    private void executeCloseTrade(Trades activeTrade,Users user,String exitReason) {
         if (activeTrade == null || user == null) {
             return;
         }
@@ -343,18 +334,11 @@ public class LiveTradingDecisionExecutorService {
         return tradeAmount.compareTo(MIN_USDT_NOTIONAL) < 0 ? MIN_USDT_NOTIONAL : tradeAmount;
     }
 
-    private BigDecimal calculateShortTradeAmount(BigDecimal baseAssetBalance, Users user) {
-        BigDecimal tradeAmount = baseAssetBalance
+    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Users user) {
+        BigDecimal tradeAmount = btcBalance
                 .multiply(user.getRiskAmount())
                 .setScale(8, RoundingMode.DOWN);
 
-        return tradeAmount.compareTo(MIN_BASE_ASSET_QTY) < 0 ? MIN_BASE_ASSET_QTY : tradeAmount;
-    }
-
-    private String resolveBaseAsset(String asset) {
-        if (asset != null && asset.endsWith("USDT")) {
-            return asset.substring(0, asset.length() - 4);
-        }
-        return asset;
+        return tradeAmount.compareTo(MIN_BTC_NOTIONAL) < 0 ? MIN_BTC_NOTIONAL : tradeAmount;
     }
 }

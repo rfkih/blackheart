@@ -95,7 +95,7 @@ public class TradeUtil {
         closeGroupedPositions(user, tradePositions, asset, TradeType.SHORT);
     }
 
-    private void closeGroupedPositions(Users user,List<TradePosition> tradePositions,String asset,TradeType tradeType) {
+    private void closeGroupedPositions(Users user, List<TradePosition> tradePositions, String asset, TradeType tradeType) {
         if (user == null || tradePositions == null || tradePositions.isEmpty()) {
             return;
         }
@@ -127,10 +127,32 @@ public class TradeUtil {
         try {
             String orderSide = tradeType == TradeType.LONG ? "SELL" : "BUY";
 
+            BigDecimal requestAmount;
+            if (tradeType == TradeType.LONG) {
+                requestAmount = closeQty; // SELL expects BTC qty
+            } else {
+                BigDecimal referencePrice = resolveCloseReferencePrice(validOpenPositions, tradeType);
+                requestAmount = closeQty.multiply(referencePrice).setScale(8, RoundingMode.UP);
+
+                if (requestAmount.compareTo(MIN_USDT_NOTIONAL) < 0) {
+                    requestAmount = MIN_USDT_NOTIONAL;
+                }
+
+                log.info(
+                        "Grouped SHORT close sizing | tradeId={} asset={} totalQty={} closeQty={} referencePrice={} buyNotionalUsdt={}",
+                        first.getTradeId(),
+                        asset,
+                        totalQty,
+                        closeQty,
+                        referencePrice,
+                        requestAmount
+                );
+            }
+
             BinanceOrderRequest request = BinanceOrderRequest.builder()
                     .symbol(asset)
                     .side(orderSide)
-                    .amount(closeQty)
+                    .amount(requestAmount)
                     .apiKey(user.getApiKey())
                     .apiSecret(user.getApiSecret())
                     .build();
@@ -143,12 +165,12 @@ public class TradeUtil {
             tradePositionRepository.saveAll(validOpenPositions);
             refreshParentTradeSummary(first.getTradeId());
 
-            log.info("✅ Grouped {} close success | tradeId={} asset={} positions={} qty={} avgExitPrice={}",
+            log.info("✅ Grouped {} close success | tradeId={} asset={} positions={} requestAmount={} avgExitPrice={}",
                     tradeType,
                     first.getTradeId(),
                     asset,
                     validOpenPositions.size(),
-                    closeQty,
+                    requestAmount,
                     result.avgPrice);
 
         } catch (Exception e) {
@@ -162,6 +184,7 @@ public class TradeUtil {
     }
 
     private void applyGroupedExitToPositions(List<TradePosition> positions,FillProcessingResult result,TradeType tradeType) {
+
         BigDecimal totalQty = positions.stream()
                 .map(TradePosition::getRemainingQty)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -226,11 +249,7 @@ public class TradeUtil {
     }
 
     @Transactional
-    public void binanceCloseLongPositionMarketOrder(
-            Users user,
-            TradePosition tradePosition,
-            String asset
-    ) {
+    public void binanceCloseLongPositionMarketOrder(Users user,TradePosition tradePosition,String asset) {
         TradePosition validated = validateClosePositionInputs(user, tradePosition, asset, TradeType.LONG);
         if (validated == null) {
             return;
@@ -319,10 +338,27 @@ public class TradeUtil {
                         closeQty);
             }
 
+            BigDecimal referencePrice = resolveCloseReferencePrice(List.of(validated), TradeType.SHORT);
+            BigDecimal buyNotionalUsdt = closeQty.multiply(referencePrice).setScale(8, RoundingMode.UP);
+
+            if (buyNotionalUsdt.compareTo(MIN_USDT_NOTIONAL) < 0) {
+                buyNotionalUsdt = MIN_USDT_NOTIONAL;
+            }
+
+            log.info(
+                    "SHORT close sizing | tradePositionId={} asset={} remainingQty={} closeQty={} referencePrice={} buyNotionalUsdt={}",
+                    validated.getTradePositionId(),
+                    asset,
+                    validated.getRemainingQty(),
+                    closeQty,
+                    referencePrice,
+                    buyNotionalUsdt
+            );
+
             BinanceOrderRequest request = BinanceOrderRequest.builder()
                     .symbol(asset)
                     .side("BUY")
-                    .amount(closeQty)
+                    .amount(buyNotionalUsdt) // BUY expects USDT notional in your API
                     .apiKey(user.getApiKey())
                     .apiSecret(user.getApiSecret())
                     .build();
@@ -345,6 +381,59 @@ public class TradeUtil {
         } catch (Exception e) {
             log.error("❌ Error closing SHORT trade position for {}", asset, e);
         }
+    }
+
+    private BigDecimal resolveCloseReferencePrice(List<TradePosition> positions, TradeType tradeType) {
+        if (positions == null || positions.isEmpty()) {
+            throw new IllegalStateException("No trade positions available to resolve close reference price");
+        }
+
+        BigDecimal totalQty = BigDecimal.ZERO;
+        BigDecimal weightedPriceSum = BigDecimal.ZERO;
+
+        for (TradePosition position : positions) {
+            if (position == null) {
+                continue;
+            }
+
+            BigDecimal qty = safe(position.getRemainingQty());
+            if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+
+            BigDecimal referencePrice = safe(position.getEntryPrice());
+
+            BigDecimal currentStop = position.getCurrentStopLossPrice();
+            BigDecimal takeProfit = position.getTakeProfitPrice();
+            BigDecimal trailingStop = position.getTrailingStopPrice();
+
+            if (tradeType == TradeType.SHORT) {
+                if (currentStop != null && currentStop.compareTo(BigDecimal.ZERO) > 0) {
+                    referencePrice = currentStop;
+                } else if (trailingStop != null && trailingStop.compareTo(BigDecimal.ZERO) > 0) {
+                    referencePrice = trailingStop;
+                } else if (takeProfit != null && takeProfit.compareTo(BigDecimal.ZERO) > 0) {
+                    referencePrice = takeProfit;
+                }
+            } else {
+                if (currentStop != null && currentStop.compareTo(BigDecimal.ZERO) > 0) {
+                    referencePrice = currentStop;
+                } else if (trailingStop != null && trailingStop.compareTo(BigDecimal.ZERO) > 0) {
+                    referencePrice = trailingStop;
+                } else if (takeProfit != null && takeProfit.compareTo(BigDecimal.ZERO) > 0) {
+                    referencePrice = takeProfit;
+                }
+            }
+
+            weightedPriceSum = weightedPriceSum.add(referencePrice.multiply(qty));
+            totalQty = totalQty.add(qty);
+        }
+
+        if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("Unable to resolve close reference price because total quantity is zero");
+        }
+
+        return weightedPriceSum.divide(totalQty, 8, RoundingMode.HALF_UP);
     }
 
     @Transactional
@@ -405,20 +494,27 @@ public class TradeUtil {
     private void openParentTrade(
             StrategyContext context,
             StrategyDecision decision,
-            BigDecimal tradeAmount,
+            BigDecimal tradeQuoteNotional,
             TradeType tradeType,
             String asset
     ) {
         Trades persistedTrade = null;
 
         try {
-            PreTradeValidationResult validation = validateBeforeOpen(context, decision, tradeAmount, tradeType, asset);
+            PreTradeValidationResult validation = validateBeforeOpen(
+                    context,
+                    decision,
+                    tradeQuoteNotional,
+                    tradeType,
+                    asset
+            );
+
             if (!validation.valid) {
                 log.warn(
-                        "🚫 {} trade rejected before execution | asset={} amount={} reason={}",
+                        "🚫 {} trade rejected before execution | asset={} quoteNotional={} reason={}",
                         tradeType,
                         asset,
-                        tradeAmount,
+                        tradeQuoteNotional,
                         validation.reason
                 );
                 return;
@@ -427,19 +523,25 @@ public class TradeUtil {
             String orderSide = tradeType == TradeType.LONG ? "BUY" : "SELL";
 
             log.info(
-                    "Opening {} parent trade | asset={} amount={} estimatedPrice={} estimatedQty={} plannedMode={}",
+                    "Opening {} parent trade | asset={} quoteNotional={} estimatedPrice={} estimatedQty={} normalizedQty={} plannedMode={}",
                     tradeType,
                     asset,
-                    tradeAmount,
+                    tradeQuoteNotional,
                     validation.estimatedPrice,
                     validation.estimatedQty,
+                    validation.normalizedQty,
                     validation.plannedMode
             );
+
+
+            BigDecimal requestAmount = tradeType == TradeType.LONG
+                    ? tradeQuoteNotional
+                    : validation.normalizedQty;
 
             BinanceOrderRequest request = BinanceOrderRequest.builder()
                     .symbol(asset)
                     .side(orderSide)
-                    .amount(tradeAmount)
+                    .amount(requestAmount)
                     .apiKey(context.getUser().getApiKey())
                     .apiSecret(context.getUser().getApiSecret())
                     .build();
@@ -572,23 +674,37 @@ public class TradeUtil {
         }
 
         BigDecimal bufferedPrice = applyValidationBuffer(referencePrice, tradeType);
-        BigDecimal estimatedQty = floorToStep(
-                tradeAmount.divide(bufferedPrice, 12, RoundingMode.DOWN)
+
+        BigDecimal estimatedQty = tradeType == TradeType.SHORT
+                ? tradeAmount
+                : tradeAmount.divide(bufferedPrice, 12, RoundingMode.DOWN);
+
+        BigDecimal normalizedQty = floorToStep(estimatedQty);
+
+        log.info(
+                "Pre-trade validation | type={} asset={} tradeAmount={} bufferedPrice={} estimatedQty={} normalizedQty={} step={}",
+                tradeType,
+                asset,
+                tradeAmount,
+                bufferedPrice,
+                estimatedQty,
+                normalizedQty,
+                DEFAULT_QTY_STEP
         );
 
-        if (estimatedQty.compareTo(BigDecimal.ZERO) <= 0) {
+        if (normalizedQty.compareTo(BigDecimal.ZERO) <= 0) {
             return PreTradeValidationResult.invalid("Estimated quantity is zero after step normalization");
         }
 
-        if (!isStepValid(estimatedQty)) {
+        if (!isStepValid(normalizedQty)) {
             return PreTradeValidationResult.invalid("Estimated quantity is invalid for step size");
         }
 
-        if (estimatedQty.compareTo(MIN_POSITION_QTY) < 0) {
+        if (normalizedQty.compareTo(MIN_POSITION_QTY) < 0) {
             return PreTradeValidationResult.invalid("Estimated quantity below minimum position quantity");
         }
 
-        BigDecimal estimatedNotional = estimatedQty.multiply(bufferedPrice);
+        BigDecimal estimatedNotional = normalizedQty.multiply(bufferedPrice);
         if (estimatedNotional.compareTo(MIN_USDT_NOTIONAL) < 0) {
             return PreTradeValidationResult.invalid(
                     String.format(
@@ -599,13 +715,14 @@ public class TradeUtil {
             );
         }
 
-        SplitPlan estimatedPlan = buildSplitPlan(estimatedQty, bufferedPrice, decision);
+        SplitPlan estimatedPlan = buildSplitPlan(normalizedQty, bufferedPrice, decision);
         if (isInvalidPlan(estimatedPlan)) {
             return PreTradeValidationResult.invalid("No valid exit structure can be generated for estimated quantity");
         }
 
         return PreTradeValidationResult.valid(
                 estimatedQty,
+                normalizedQty,
                 bufferedPrice,
                 estimatedPlan.tradeMode
         );
@@ -1270,11 +1387,15 @@ public class TradeUtil {
 
     private BigDecimal floorToStep(BigDecimal qty) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.info("qty null {}", qty);
             return BigDecimal.ZERO;
         }
 
+        log.info("qty {}", qty);
+        log.info("DEFAULT_QTY_STEP {}", DEFAULT_QTY_STEP);
+
         BigDecimal steps = qty.divide(DEFAULT_QTY_STEP, 0, RoundingMode.DOWN);
-        return steps.multiply(DEFAULT_QTY_STEP).stripTrailingZeros();
+        return steps.multiply(DEFAULT_QTY_STEP);
     }
 
     private boolean isStepValid(BigDecimal qty) {
@@ -1282,8 +1403,12 @@ public class TradeUtil {
             return false;
         }
 
-        return qty.remainder(DEFAULT_QTY_STEP).compareTo(BigDecimal.ZERO) == 0;
+        BigDecimal steps = qty.divide(DEFAULT_QTY_STEP, 0, RoundingMode.DOWN);
+        BigDecimal rebuilt = steps.multiply(DEFAULT_QTY_STEP).setScale(7, RoundingMode.DOWN);
+
+        return rebuilt.compareTo(qty.setScale(7, RoundingMode.DOWN)) == 0;
     }
+
 
     private BigDecimal safe(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
@@ -1361,6 +1486,7 @@ public class TradeUtil {
         final boolean valid;
         final String reason;
         final BigDecimal estimatedQty;
+        final BigDecimal normalizedQty;
         final BigDecimal estimatedPrice;
         final String plannedMode;
 
@@ -1368,18 +1494,21 @@ public class TradeUtil {
                 boolean valid,
                 String reason,
                 BigDecimal estimatedQty,
+                BigDecimal normalizedQty,
                 BigDecimal estimatedPrice,
                 String plannedMode
         ) {
             this.valid = valid;
             this.reason = reason;
             this.estimatedQty = estimatedQty;
+            this.normalizedQty = normalizedQty;
             this.estimatedPrice = estimatedPrice;
             this.plannedMode = plannedMode;
         }
 
         static PreTradeValidationResult valid(
                 BigDecimal estimatedQty,
+                BigDecimal normalizedQty,
                 BigDecimal estimatedPrice,
                 String plannedMode
         ) {
@@ -1387,6 +1516,7 @@ public class TradeUtil {
                     true,
                     null,
                     estimatedQty,
+                    normalizedQty,
                     estimatedPrice,
                     plannedMode
             );
@@ -1396,6 +1526,7 @@ public class TradeUtil {
             return new PreTradeValidationResult(
                     false,
                     reason,
+                    null,
                     null,
                     null,
                     null

@@ -8,6 +8,7 @@ import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
 import id.co.blackheart.service.marketdata.MarketDataService;
+import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -56,6 +57,7 @@ public class BinanceWebSocketClient {
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
     private final UserStrategyRepository userStrategyRepository;
+    private final PortfolioService portfolioService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
@@ -193,6 +195,8 @@ public class BinanceWebSocketClient {
             if (!exists) {
                 persistMarketData(interval, incomingMarketData);
             }
+
+
 
             processPostPersist(interval, incomingMarketData, incomingMarketData.getStartTime());
 
