@@ -64,6 +64,16 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
         return handleActiveTrade(context, marketData, positionSnapshot);
     }
 
+    private boolean isValidShortSetup(StrategyContext context, MarketData marketData, FeatureStore feature) {
+        FeatureStore biasFeature = context.getBiasFeatureStore();
+        MarketData biasMarket = context.getBiasMarketData();
+
+        return isBearishTrendV2(feature, marketData)
+                && isBearishPullbackSignal(feature)
+                && isBearishBiasAlignedV2(biasFeature, biasMarket)
+                && bearishSupportScore(feature) >= 2;
+    }
+
     private StrategyDecision handleNoActiveTrade(
             StrategyContext context,
             MarketData marketData,
@@ -105,59 +115,6 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
         return hold(context, "Unknown active position side");
     }
 
-    private boolean isValidLongSetup(
-            StrategyContext context,
-            MarketData marketData,
-            FeatureStore feature
-    ) {
-        FeatureStore bias = context.getBiasFeatureStore();
-        MarketData biasMarket = context.getBiasMarketData();
-
-        if (!isBullishTrend(feature, marketData)) {
-            return false;
-        }
-
-        if (!isBullishPullbackSignal(feature)) {
-            return false;
-        }
-
-        if (!isBullishBiasAligned(bias, biasMarket)) {
-            return false;
-        }
-
-        BigDecimal stopLoss = calculateLongStopLoss(marketData, feature);
-        BigDecimal entryPrice = marketData.getClosePrice();
-        BigDecimal takeProfit = calculateLongTakeProfit(entryPrice, stopLoss);
-
-        return isValidRiskStructure(entryPrice, stopLoss, takeProfit, true);
-    }
-
-    private boolean isValidShortSetup(
-            StrategyContext context,
-            MarketData marketData,
-            FeatureStore feature
-    ) {
-        FeatureStore bias = context.getBiasFeatureStore();
-        MarketData biasMarket = context.getBiasMarketData();
-
-        if (!isBearishTrend(feature, marketData)) {
-            return false;
-        }
-
-        if (!isBearishPullbackSignal(feature)) {
-            return false;
-        }
-
-        if (!isBearishBiasAligned(bias, biasMarket)) {
-            return false;
-        }
-
-        BigDecimal stopLoss = calculateShortStopLoss(marketData, feature);
-        BigDecimal entryPrice = marketData.getClosePrice();
-        BigDecimal takeProfit = calculateShortTakeProfit(entryPrice, stopLoss);
-
-        return isValidRiskStructure(entryPrice, stopLoss, takeProfit, false);
-    }
 
     private StrategyDecision buildOpenLongDecision(
             StrategyContext context,
@@ -336,6 +293,17 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 .build();
     }
 
+    private boolean isBullishTrendV2(FeatureStore feature, MarketData marketData) {
+        return hasValue(marketData.getClosePrice())
+                && hasValue(feature.getEma50())
+                && hasValue(feature.getEma200())
+                && hasValue(feature.getEma50Slope())
+                && marketData.getClosePrice().compareTo(feature.getEma50()) > 0
+                && feature.getEma50().compareTo(feature.getEma200()) > 0
+                && feature.getEma50Slope().compareTo(ZERO) > 0
+                && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
+    }
+
     private boolean isBullishTrend(FeatureStore feature, MarketData marketData) {
         return hasValue(marketData.getClosePrice())
                 && hasValue(feature.getEma20())
@@ -366,33 +334,14 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
     }
 
-    private boolean isBearishTrend(FeatureStore feature, MarketData marketData) {
+    private boolean isBearishTrendV2(FeatureStore feature, MarketData marketData) {
         return hasValue(marketData.getClosePrice())
-                && hasValue(feature.getEma20())
                 && hasValue(feature.getEma50())
                 && hasValue(feature.getEma200())
                 && hasValue(feature.getEma50Slope())
-                && hasValue(feature.getAdx())
-                && hasValue(feature.getPlusDI())
-                && hasValue(feature.getMinusDI())
-                && hasValue(feature.getRsi())
-                && hasValue(feature.getMacdHistogram())
-                && hasValue(feature.getBodyToRangeRatio())
-                && hasValue(feature.getCloseLocationValue())
-                && hasValue(feature.getRelativeVolume20())
                 && marketData.getClosePrice().compareTo(feature.getEma50()) < 0
-                && feature.getEma20().compareTo(feature.getEma50()) < 0
                 && feature.getEma50().compareTo(feature.getEma200()) < 0
                 && feature.getEma50Slope().compareTo(ZERO) < 0
-                && safe(feature.getEma200Slope()).compareTo(ZERO) <= 0
-                && feature.getAdx().compareTo(MIN_ADX) >= 0
-                && feature.getMinusDI().compareTo(feature.getPlusDI()) > 0
-                && feature.getRsi().compareTo(SHORT_MAX_RSI) <= 0
-                && feature.getMacdHistogram().compareTo(ZERO) < 0
-                && feature.getBodyToRangeRatio().compareTo(MIN_BODY_TO_RANGE) >= 0
-                && feature.getCloseLocationValue().compareTo(MAX_SHORT_CLV) <= 0
-                && feature.getRelativeVolume20().compareTo(MIN_RELATIVE_VOLUME) >= 0
-                && !"BULLISH".equalsIgnoreCase(feature.getEntryBias())
                 && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
     }
 
@@ -404,25 +353,118 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
         return Boolean.TRUE.equals(feature.getIsBearishPullback());
     }
 
-    private boolean isBullishBiasAligned(FeatureStore bias, MarketData biasMarket) {
+    private boolean isBullishBiasAlignedV2(FeatureStore bias, MarketData biasMarket) {
         if (bias == null || biasMarket == null) {
             return true;
         }
 
         return hasValue(biasMarket.getClosePrice())
-                && hasValue(bias.getEma20())
                 && hasValue(bias.getEma50())
                 && hasValue(bias.getEma200())
-                && hasValue(bias.getAdx())
-                && hasValue(bias.getPlusDI())
-                && hasValue(bias.getMinusDI())
                 && biasMarket.getClosePrice().compareTo(bias.getEma50()) > 0
-                && bias.getEma20().compareTo(bias.getEma50()) > 0
                 && bias.getEma50().compareTo(bias.getEma200()) > 0
-                && bias.getAdx().compareTo(BIAS_MIN_ADX) >= 0
-                && bias.getPlusDI().compareTo(bias.getMinusDI()) > 0
-                && !"BEARISH".equalsIgnoreCase(bias.getEntryBias())
                 && !"RANGE".equalsIgnoreCase(bias.getTrendRegime());
+    }
+
+
+    private boolean isBearishBiasAlignedV2(FeatureStore bias, MarketData biasMarket) {
+        if (bias == null || biasMarket == null) {
+            return true;
+        }
+
+        return hasValue(biasMarket.getClosePrice())
+                && hasValue(bias.getEma50())
+                && hasValue(bias.getEma200())
+                && biasMarket.getClosePrice().compareTo(bias.getEma50()) < 0
+                && bias.getEma50().compareTo(bias.getEma200()) < 0
+                && !"RANGE".equalsIgnoreCase(bias.getTrendRegime());
+    }
+
+
+    private int bullishSupportScore(FeatureStore feature) {
+        int score = 0;
+
+        if (hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getPlusDI()) && hasValue(feature.getMinusDI())
+                && feature.getPlusDI().compareTo(feature.getMinusDI()) > 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("50")) >= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) > 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getBodyToRangeRatio())
+                && feature.getBodyToRangeRatio().compareTo(new BigDecimal("0.35")) >= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getCloseLocationValue())
+                && feature.getCloseLocationValue().compareTo(new BigDecimal("0.50")) >= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getRelativeVolume20())
+                && feature.getRelativeVolume20().compareTo(new BigDecimal("0.80")) >= 0) {
+            score++;
+        }
+
+        return score;
+    }
+
+    private int bearishSupportScore(FeatureStore feature) {
+        int score = 0;
+
+        if (hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getPlusDI()) && hasValue(feature.getMinusDI())
+                && feature.getMinusDI().compareTo(feature.getPlusDI()) > 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("50")) <= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) < 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getBodyToRangeRatio())
+                && feature.getBodyToRangeRatio().compareTo(new BigDecimal("0.35")) >= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getCloseLocationValue())
+                && feature.getCloseLocationValue().compareTo(new BigDecimal("0.50")) <= 0) {
+            score++;
+        }
+
+        if (hasValue(feature.getRelativeVolume20())
+                && feature.getRelativeVolume20().compareTo(new BigDecimal("0.80")) >= 0) {
+            score++;
+        }
+
+        return score;
+    }
+
+    private boolean isValidLongSetup(StrategyContext context, MarketData marketData, FeatureStore feature) {
+        FeatureStore biasFeature = context.getBiasFeatureStore();
+        MarketData biasMarket = context.getBiasMarketData();
+
+        return isBullishTrendV2(feature, marketData)
+                && isBullishPullbackSignal(feature)
+                && isBullishBiasAlignedV2(biasFeature, biasMarket)
+                && bullishSupportScore(feature) >= 2;
     }
 
     private boolean isBearishBiasAligned(FeatureStore bias, MarketData biasMarket) {

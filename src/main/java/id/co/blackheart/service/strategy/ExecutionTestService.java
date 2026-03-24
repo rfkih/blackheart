@@ -307,8 +307,8 @@ public class ExecutionTestService implements StrategyExecutor {
         }
 
         return switch (interval.toLowerCase()) {
-            case "15m" -> EXIT_STRUCTURE_TP1_RUNNER;
-            case "1h" -> EXIT_STRUCTURE_SINGLE;
+            case "15m" -> EXIT_STRUCTURE_SINGLE;
+            case "1h" -> EXIT_STRUCTURE_TP1_RUNNER;
             case "4h" -> EXIT_STRUCTURE_TP1_TP2_RUNNER;
             case "1d" -> EXIT_STRUCTURE_RUNNER_ONLY;
             default -> EXIT_STRUCTURE_SINGLE;
