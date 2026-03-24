@@ -467,27 +467,6 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 && bullishSupportScore(feature) >= 2;
     }
 
-    private boolean isBearishBiasAligned(FeatureStore bias, MarketData biasMarket) {
-        if (bias == null || biasMarket == null) {
-            return true;
-        }
-
-        return hasValue(biasMarket.getClosePrice())
-                && hasValue(bias.getEma20())
-                && hasValue(bias.getEma50())
-                && hasValue(bias.getEma200())
-                && hasValue(bias.getAdx())
-                && hasValue(bias.getPlusDI())
-                && hasValue(bias.getMinusDI())
-                && biasMarket.getClosePrice().compareTo(bias.getEma50()) < 0
-                && bias.getEma20().compareTo(bias.getEma50()) < 0
-                && bias.getEma50().compareTo(bias.getEma200()) < 0
-                && bias.getAdx().compareTo(BIAS_MIN_ADX) >= 0
-                && bias.getMinusDI().compareTo(bias.getPlusDI()) > 0
-                && !"BULLISH".equalsIgnoreCase(bias.getEntryBias())
-                && !"RANGE".equalsIgnoreCase(bias.getTrendRegime());
-    }
-
     private BigDecimal calculateLongStopLoss(MarketData marketData, FeatureStore feature) {
         BigDecimal atr = safe(feature.getAtr());
         BigDecimal structureLow = firstNonNull(feature.getLowestLow20(), marketData.getLowPrice());
