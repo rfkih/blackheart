@@ -30,18 +30,7 @@ import java.util.UUID;
 public class TradeService {
 
     private static final BigDecimal MIN_USDT_NOTIONAL = new BigDecimal("7");
-
-    /**
-     * Quantity validation
-     * 0.00011 = valid
-     * 0.000115 = invalid
-     */
     private static final BigDecimal DEFAULT_QTY_STEP = new BigDecimal("0.00001");
-
-    /**
-     * Minimum qty allowed for each child trade position after split.
-     * If any split result is below this, downgrade the split structure.
-     */
     private static final BigDecimal MIN_POSITION_QTY = new BigDecimal("0.0001");
 
     private static final BigDecimal BUY_PRICE_BUFFER = new BigDecimal("1.001");
@@ -69,283 +58,49 @@ public class TradeService {
     }
 
     @Transactional
-    public void binanceOpenLongMarketOrder(StrategyContext context, StrategyDecision decision, BigDecimal tradeAmount) {
-
-        UUID tradeId = openParentTrade(context, decision, tradeAmount, TradeType.LONG, context.getAsset());
-
-        if (tradeId == null) {
-            log.info(" Failed to create parent trade - tradeId is null");
-            return;
-        }
-        try {
-            Trades trade = tradesRepository.findById(tradeId)
-                    .orElseThrow(() -> new IllegalStateException("Trade not found after creation"));
-            cacheService.cacheActiveTrade(trade.getTradeId(), trade);
-
-            List<TradePosition> tradePositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
-            cacheService.cacheTradePositions(trade.getTradeId(), tradePositions);
-
-            redisPublisher.publishTradeStateChange(trade.getTradeId(), "OPEN");
-        } catch (Exception e) {
-            log.error("Failed to cache trade | tradeId={}", tradeId, e);
-        }
-
+    public void binanceOpenLongMarketOrder(
+            StrategyContext context,
+            StrategyDecision decision,
+            BigDecimal tradeAmount
+    ) {
+        openMarketOrder(context, decision, tradeAmount, TradeType.LONG, context.getAsset());
     }
 
-
     @Transactional
-    public void binanceOpenShortMarketOrder(StrategyContext context, StrategyDecision decision, BigDecimal tradeAmount, String asset) {
-
-        UUID tradeId = openParentTrade(context, decision, tradeAmount, TradeType.SHORT, asset);
-
-        if (tradeId == null) {
-            log.info(" Failed to create parent trade - tradeId is null");
-            return;
-        }
-
-        try {
-            Trades trade = tradesRepository.findById(tradeId)
-                    .orElseThrow(() -> new IllegalStateException("Trade not found after creation"));
-            cacheService.cacheActiveTrade(trade.getTradeId(), trade);
-
-            List<TradePosition> tradePositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
-            cacheService.cacheTradePositions(trade.getTradeId(), tradePositions);
-
-            redisPublisher.publishTradeStateChange(trade.getTradeId(), "OPEN");
-        }catch (Exception e) {
-            log.error("Failed to cache trade | tradeId={}", tradeId, e);
-        }
-
+    public void binanceOpenShortMarketOrder(
+            StrategyContext context,
+            StrategyDecision decision,
+            BigDecimal tradeAmount,
+            String asset
+    ) {
+        openMarketOrder(context, decision, tradeAmount, TradeType.SHORT, asset);
     }
 
-
     @Transactional
-    public void binanceCloseLongPositionsMarketOrder(Users user,List<TradePosition> tradePositions,String asset) {
+    public void binanceCloseLongPositionsMarketOrder(
+            Users user,
+            List<TradePosition> tradePositions,
+            String asset
+    ) {
         closeGroupedPositions(user, tradePositions, asset, TradeType.LONG);
     }
 
     @Transactional
-    public void binanceCloseShortPositionsMarketOrder(Users user,List<TradePosition> tradePositions,String asset) {
+    public void binanceCloseShortPositionsMarketOrder(
+            Users user,
+            List<TradePosition> tradePositions,
+            String asset
+    ) {
         closeGroupedPositions(user, tradePositions, asset, TradeType.SHORT);
     }
 
-    private void closeGroupedPositions(Users user, List<TradePosition> tradePositions, String asset, TradeType tradeType) {
-        if (user == null || tradePositions == null || tradePositions.isEmpty()) {
-            return;
-        }
-
-        List<TradePosition> validOpenPositions = tradePositions.stream()
-                .filter(tp -> tp != null)
-                .filter(tp -> "OPEN".equalsIgnoreCase(tp.getStatus()))
-                .filter(tp -> tp.getRemainingQty() != null && tp.getRemainingQty().compareTo(BigDecimal.ZERO) > 0)
-                .toList();
-
-        if (validOpenPositions.isEmpty()) {
-            return;
-        }
-
-        TradePosition first = validOpenPositions.getFirst();
-
-        BigDecimal totalQty = validOpenPositions.stream()
-                .map(TradePosition::getRemainingQty)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal closeQty = floorToStep(totalQty);
-
-        if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
-            log.warn("Grouped close qty became zero after normalization | tradeId={} asset={}",
-                    first.getTradeId(), asset);
-            return;
-        }
-
-        try {
-            String orderSide = tradeType == TradeType.LONG ? "SELL" : "BUY";
-
-            BigDecimal requestAmount;
-            if (tradeType == TradeType.LONG) {
-                requestAmount = closeQty; // SELL expects BTC qty
-            } else {
-                BigDecimal referencePrice = resolveCloseReferencePrice(validOpenPositions, tradeType);
-                requestAmount = closeQty.multiply(referencePrice).setScale(8, RoundingMode.UP);
-
-                if (requestAmount.compareTo(MIN_USDT_NOTIONAL) < 0) {
-                    requestAmount = MIN_USDT_NOTIONAL;
-                }
-
-                log.info(
-                        "Grouped SHORT close sizing | tradeId={} asset={} totalQty={} closeQty={} referencePrice={} buyNotionalUsdt={}",
-                        first.getTradeId(),
-                        asset,
-                        totalQty,
-                        closeQty,
-                        referencePrice,
-                        requestAmount
-                );
-            }
-
-            BinanceOrderRequest request = BinanceOrderRequest.builder()
-                    .symbol(asset)
-                    .side(orderSide)
-                    .amount(requestAmount)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
-                    .build();
-
-            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
-            FillProcessingResult result = processOrderFills(response);
-
-            applyGroupedExitToPositions(validOpenPositions, result, tradeType);
-
-            tradePositionRepository.saveAll(validOpenPositions);
-            refreshParentTradeSummary(first.getTradeId());
-
-            try {
-                cacheService.removeClosedTrade(first.getTradeId());
-                redisPublisher.publishTradeStateChange(first.getTradeId(), "CLOSED");
-                cacheService.removeClosedTrade(first.getTradeId());
-            } catch (Exception e) {
-                log.error("Redis cache update failed | tradeId={}", first.getTradeId(), e);
-            }
-
-
-            log.info("✅ Grouped {} close success | tradeId={} asset={} positions={} requestAmount={} avgExitPrice={}",
-                    tradeType,
-                    first.getTradeId(),
-                    asset,
-                    validOpenPositions.size(),
-                    requestAmount,
-                    result.avgPrice);
-
-        } catch (Exception e) {
-            log.error("❌ Error closing grouped {} positions | tradeId={} asset={} positions={}",
-                    tradeType,
-                    first.getTradeId(),
-                    asset,
-                    validOpenPositions.size(),
-                    e);
-        }
-    }
-
-    private void applyGroupedExitToPositions(List<TradePosition> positions,FillProcessingResult result,TradeType tradeType) {
-
-        BigDecimal totalQty = positions.stream()
-                .map(TradePosition::getRemainingQty)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal allocatedFeeRunning = BigDecimal.ZERO;
-        BigDecimal allocatedQuoteRunning = BigDecimal.ZERO;
-        BigDecimal allocatedQtyRunning = BigDecimal.ZERO;
-
-        for (int i = 0; i < positions.size(); i++) {
-            TradePosition position = positions.get(i);
-
-            BigDecimal exitQty;
-            BigDecimal exitQuoteQty;
-            BigDecimal exitFee;
-
-            if (i == positions.size() - 1) {
-                exitQty = result.totalQty.subtract(allocatedQtyRunning);
-                exitQuoteQty = result.totalQuote.subtract(allocatedQuoteRunning);
-                exitFee = safe(result.totalFee).subtract(allocatedFeeRunning);
-            } else {
-                BigDecimal ratio = position.getRemainingQty()
-                        .divide(totalQty, 12, RoundingMode.HALF_UP);
-
-                exitQty = result.totalQty.multiply(ratio).setScale(8, RoundingMode.DOWN);
-                exitQuoteQty = result.totalQuote.multiply(ratio).setScale(8, RoundingMode.DOWN);
-                exitFee = safe(result.totalFee).multiply(ratio).setScale(8, RoundingMode.DOWN);
-
-                allocatedQtyRunning = allocatedQtyRunning.add(exitQty);
-                allocatedQuoteRunning = allocatedQuoteRunning.add(exitQuoteQty);
-                allocatedFeeRunning = allocatedFeeRunning.add(exitFee);
-            }
-
-            BigDecimal exitPrice = exitQty.compareTo(BigDecimal.ZERO) > 0
-                    ? exitQuoteQty.divide(exitQty, 8, RoundingMode.HALF_UP)
-                    : result.avgPrice;
-
-            position.setExitExecutedQty(exitQty);
-            position.setExitExecutedQuoteQty(exitQuoteQty);
-            position.setExitFee(exitFee);
-            position.setExitFeeCurrency(result.feeCurrency);
-            position.setExitPrice(exitPrice);
-            position.setExitTime(LocalDateTime.now());
-            position.setStatus("CLOSED");
-            position.setRemainingQty(BigDecimal.ZERO);
-
-            BigDecimal pnlAmount = calculatePLAmount(
-                    position.getEntryPrice(),
-                    exitPrice,
-                    position.getEntryQty(),
-                    tradeType
-            );
-
-            BigDecimal pnlPercent = calculatePLPercentage(
-                    position.getEntryPrice(),
-                    exitPrice,
-                    tradeType
-            );
-
-            position.setRealizedPnlAmount(pnlAmount);
-            position.setRealizedPnlPercent(pnlPercent);
-        }
-    }
-
     @Transactional
-    public void binanceCloseLongPositionMarketOrder(Users user,TradePosition tradePosition,String asset) {
-        TradePosition validated = validateClosePositionInputs(user, tradePosition, asset, TradeType.LONG);
-        if (validated == null) {
-            return;
-        }
-
-        try {
-            BigDecimal closeQty = floorToStep(validated.getRemainingQty());
-
-            if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
-                log.warn("Close LONG qty became zero after normalization | tradePositionId={}",
-                        validated.getTradePositionId());
-                return;
-            }
-
-            if (!isStepValid(closeQty)) {
-                log.warn("Close LONG qty invalid after normalization | tradePositionId={} qty={}",
-                        validated.getTradePositionId(), closeQty);
-                return;
-            }
-
-            if (closeQty.compareTo(validated.getRemainingQty()) != 0) {
-                log.warn("Normalized LONG close qty | tradePositionId={} storedQty={} normalizedQty={}",
-                        validated.getTradePositionId(),
-                        validated.getRemainingQty(),
-                        closeQty);
-            }
-
-            BinanceOrderRequest request = BinanceOrderRequest.builder()
-                    .symbol(asset)
-                    .side("SELL")
-                    .amount(closeQty)
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
-                    .build();
-
-            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
-            FillProcessingResult result = processOrderFills(response);
-
-            updateTradePositionWithExitData(validated, result, TradeType.LONG);
-            tradePositionRepository.save(validated);
-
-            refreshParentTradeSummary(validated.getTradeId());
-
-            log.info(
-                    "✅ LONG trade position closed | tradePositionId={} asset={} avgExitPrice={}",
-                    validated.getTradePositionId(),
-                    asset,
-                    result.avgPrice
-            );
-
-        } catch (Exception e) {
-            log.error("❌ Error closing LONG trade position for {}", asset, e);
-        }
+    public void binanceCloseLongPositionMarketOrder(
+            Users user,
+            TradePosition tradePosition,
+            String asset
+    ) {
+        closeSinglePosition(user, tradePosition, asset, TradeType.LONG);
     }
 
     @Transactional
@@ -354,129 +109,7 @@ public class TradeService {
             TradePosition tradePosition,
             String asset
     ) {
-        TradePosition validated = validateClosePositionInputs(user, tradePosition, asset, TradeType.SHORT);
-        if (validated == null) {
-            return;
-        }
-
-        try {
-            BigDecimal closeQty = floorToStep(validated.getRemainingQty());
-
-            if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
-                log.warn("Close SHORT qty became zero after normalization | tradePositionId={}",
-                        validated.getTradePositionId());
-                return;
-            }
-
-            if (!isStepValid(closeQty)) {
-                log.warn("Close SHORT qty invalid after normalization | tradePositionId={} qty={}",
-                        validated.getTradePositionId(), closeQty);
-                return;
-            }
-
-            if (closeQty.compareTo(validated.getRemainingQty()) != 0) {
-                log.warn("Normalized SHORT close qty | tradePositionId={} storedQty={} normalizedQty={}",
-                        validated.getTradePositionId(),
-                        validated.getRemainingQty(),
-                        closeQty);
-            }
-
-            BigDecimal referencePrice = resolveCloseReferencePrice(List.of(validated), TradeType.SHORT);
-            BigDecimal buyNotionalUsdt = closeQty.multiply(referencePrice).setScale(8, RoundingMode.UP);
-
-            if (buyNotionalUsdt.compareTo(MIN_USDT_NOTIONAL) < 0) {
-                buyNotionalUsdt = MIN_USDT_NOTIONAL;
-            }
-
-            log.info(
-                    "SHORT close sizing | tradePositionId={} asset={} remainingQty={} closeQty={} referencePrice={} buyNotionalUsdt={}",
-                    validated.getTradePositionId(),
-                    asset,
-                    validated.getRemainingQty(),
-                    closeQty,
-                    referencePrice,
-                    buyNotionalUsdt
-            );
-
-            BinanceOrderRequest request = BinanceOrderRequest.builder()
-                    .symbol(asset)
-                    .side("BUY")
-                    .amount(buyNotionalUsdt) // BUY expects USDT notional in your API
-                    .apiKey(user.getApiKey())
-                    .apiSecret(user.getApiSecret())
-                    .build();
-
-            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
-            FillProcessingResult result = processOrderFills(response);
-
-            updateTradePositionWithExitData(validated, result, TradeType.SHORT);
-            tradePositionRepository.save(validated);
-
-            refreshParentTradeSummary(validated.getTradeId());
-
-            log.info(
-                    "✅ SHORT trade position closed | tradePositionId={} asset={} avgExitPrice={}",
-                    validated.getTradePositionId(),
-                    asset,
-                    result.avgPrice
-            );
-
-        } catch (Exception e) {
-            log.error("❌ Error closing SHORT trade position for {}", asset, e);
-        }
-    }
-
-    private BigDecimal resolveCloseReferencePrice(List<TradePosition> positions, TradeType tradeType) {
-        if (positions == null || positions.isEmpty()) {
-            throw new IllegalStateException("No trade positions available to resolve close reference price");
-        }
-
-        BigDecimal totalQty = BigDecimal.ZERO;
-        BigDecimal weightedPriceSum = BigDecimal.ZERO;
-
-        for (TradePosition position : positions) {
-            if (position == null) {
-                continue;
-            }
-
-            BigDecimal qty = safe(position.getRemainingQty());
-            if (qty.compareTo(BigDecimal.ZERO) <= 0) {
-                continue;
-            }
-
-            BigDecimal referencePrice = safe(position.getEntryPrice());
-
-            BigDecimal currentStop = position.getCurrentStopLossPrice();
-            BigDecimal takeProfit = position.getTakeProfitPrice();
-            BigDecimal trailingStop = position.getTrailingStopPrice();
-
-            if (tradeType == TradeType.SHORT) {
-                if (currentStop != null && currentStop.compareTo(BigDecimal.ZERO) > 0) {
-                    referencePrice = currentStop;
-                } else if (trailingStop != null && trailingStop.compareTo(BigDecimal.ZERO) > 0) {
-                    referencePrice = trailingStop;
-                } else if (takeProfit != null && takeProfit.compareTo(BigDecimal.ZERO) > 0) {
-                    referencePrice = takeProfit;
-                }
-            } else {
-                if (currentStop != null && currentStop.compareTo(BigDecimal.ZERO) > 0) {
-                    referencePrice = currentStop;
-                } else if (trailingStop != null && trailingStop.compareTo(BigDecimal.ZERO) > 0) {
-                    referencePrice = trailingStop;
-                } else if (takeProfit != null && takeProfit.compareTo(BigDecimal.ZERO) > 0) {
-                    referencePrice = takeProfit;
-                }
-            }
-
-            weightedPriceSum = weightedPriceSum.add(referencePrice.multiply(qty));
-            totalQty = totalQty.add(qty);
-        }
-
-        if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalStateException("Unable to resolve close reference price because total quantity is zero");
-        }
-
-        return weightedPriceSum.divide(totalQty, 8, RoundingMode.HALF_UP);
+        closeSinglePosition(user, tradePosition, asset, TradeType.SHORT);
     }
 
     @Transactional
@@ -504,23 +137,11 @@ public class TradeService {
                 continue;
             }
 
-            if (decision.getStopLossPrice() != null) {
-                position.setCurrentStopLossPrice(decision.getStopLossPrice());
-            }
-
-            if (decision.getTrailingStopPrice() != null) {
-                position.setTrailingStopPrice(decision.getTrailingStopPrice());
-            }
-
-            BigDecimal updatedTakeProfit = resolveUpdatedTakeProfitForRole(position, decision);
-            if (updatedTakeProfit != null || "RUNNER".equalsIgnoreCase(position.getPositionRole())) {
-                position.setTakeProfitPrice(updatedTakeProfit);
-            }
-
-            position.setExitReason("STRATEGY_MANAGEMENT_UPDATE");
+            applyManagementUpdate(position, decision);
         }
 
         tradePositionRepository.saveAll(openPositions);
+        syncTradeState(activeTrade.getTradeId());
 
         log.info(
                 "✅ Updated open positions | tradeId={} targetRole={} stop={} trailing={} tp1={} tp2={} tp3={}",
@@ -532,6 +153,346 @@ public class TradeService {
                 decision.getTakeProfitPrice2(),
                 decision.getTakeProfitPrice3()
         );
+    }
+
+    private void openMarketOrder(
+            StrategyContext context,
+            StrategyDecision decision,
+            BigDecimal tradeAmount,
+            TradeType tradeType,
+            String asset
+    ) {
+        UUID tradeId = openParentTrade(context, decision, tradeAmount, tradeType, asset);
+
+        if (tradeId == null) {
+            log.info("Failed to create parent trade | type={} asset={}", tradeType, asset);
+            return;
+        }
+
+        syncTradeState(tradeId);
+    }
+
+    private void closeSinglePosition(
+            Users user,
+            TradePosition tradePosition,
+            String asset,
+            TradeType tradeType
+    ) {
+        TradePosition validated = validateClosePositionInputs(user, tradePosition, asset, tradeType);
+        if (validated == null) {
+            return;
+        }
+
+        try {
+            BigDecimal closeQty = normalizeCloseQty(validated);
+            BigDecimal requestAmount = buildSingleCloseRequestAmount(validated, closeQty, tradeType);
+
+            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(
+                    buildOrderRequest(asset, resolveCloseOrderSide(tradeType), requestAmount, user)
+            );
+
+            FillProcessingResult result = processOrderFills(response);
+
+            updateTradePositionWithExitData(validated, result, tradeType);
+            tradePositionRepository.save(validated);
+
+            refreshParentTradeSummary(validated.getTradeId());
+            syncTradeState(validated.getTradeId());
+
+            log.info(
+                    "✅ {} trade position closed | tradePositionId={} asset={} avgExitPrice={}",
+                    tradeType,
+                    validated.getTradePositionId(),
+                    asset,
+                    result.avgPrice
+            );
+
+        } catch (Exception e) {
+            log.error(
+                    "❌ Error closing {} trade position | tradePositionId={} asset={}",
+                    tradeType,
+                    tradePosition != null ? tradePosition.getTradePositionId() : null,
+                    asset,
+                    e
+            );
+        }
+    }
+
+    private void closeGroupedPositions(
+            Users user,
+            List<TradePosition> tradePositions,
+            String asset,
+            TradeType tradeType
+    ) {
+        if (user == null || tradePositions == null || tradePositions.isEmpty()) {
+            return;
+        }
+
+        List<TradePosition> validOpenPositions = tradePositions.stream()
+                .filter(this::isClosableOpenPosition)
+                .toList();
+
+        if (validOpenPositions.isEmpty()) {
+            return;
+        }
+
+        TradePosition first = validOpenPositions.getFirst();
+
+        try {
+            BigDecimal totalQty = validOpenPositions.stream()
+                    .map(TradePosition::getRemainingQty)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal closeQty = floorToStep(totalQty);
+            if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
+                log.warn(
+                        "Grouped close qty became zero after normalization | tradeId={} asset={}",
+                        first.getTradeId(),
+                        asset
+                );
+                return;
+            }
+
+            BigDecimal requestAmount = buildGroupedCloseRequestAmount(validOpenPositions, closeQty, tradeType, asset);
+
+            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(
+                    buildOrderRequest(asset, resolveCloseOrderSide(tradeType), requestAmount, user)
+            );
+
+            FillProcessingResult result = processOrderFills(response);
+
+            applyGroupedExitToPositions(validOpenPositions, result, tradeType);
+            tradePositionRepository.saveAll(validOpenPositions);
+
+            refreshParentTradeSummary(first.getTradeId());
+            syncTradeState(first.getTradeId());
+
+            log.info(
+                    "✅ Grouped {} close success | tradeId={} asset={} positions={} requestAmount={} avgExitPrice={}",
+                    tradeType,
+                    first.getTradeId(),
+                    asset,
+                    validOpenPositions.size(),
+                    requestAmount,
+                    result.avgPrice
+            );
+
+        } catch (Exception e) {
+            log.error(
+                    "❌ Error closing grouped {} positions | tradeId={} asset={} positions={}",
+                    tradeType,
+                    first.getTradeId(),
+                    asset,
+                    validOpenPositions.size(),
+                    e
+            );
+        }
+    }
+
+    private void syncTradeState(UUID tradeId) {
+        try {
+            Trades trade = tradesRepository.findById(tradeId)
+                    .orElseThrow(() -> new IllegalStateException("Trade not found after persistence"));
+
+            if (STATUS_CLOSED.equalsIgnoreCase(trade.getStatus())) {
+                cacheService.removeClosedTrade(trade.getUserId(), tradeId);
+                redisPublisher.publishTradeStateChange(tradeId, STATUS_CLOSED);
+                return;
+            }
+
+            List<TradePosition> openPositions =
+                    tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
+
+            cacheService.cacheUserActiveTrade(
+                    trade.getUserId(),
+                    trade.getTradeId(),
+                    trade,
+                    openPositions
+            );
+
+            redisPublisher.publishTradeStateChange(tradeId, trade.getStatus());
+
+        } catch (Exception e) {
+            log.error("Failed to sync trade state | tradeId={}", tradeId, e);
+        }
+    }
+
+    private BinanceOrderRequest buildOrderRequest(
+            String asset,
+            String side,
+            BigDecimal amount,
+            Users user
+    ) {
+        return BinanceOrderRequest.builder()
+                .symbol(asset)
+                .side(side)
+                .amount(amount)
+                .apiKey(user.getApiKey())
+                .apiSecret(user.getApiSecret())
+                .build();
+    }
+
+    private String resolveCloseOrderSide(TradeType tradeType) {
+        return tradeType == TradeType.LONG ? "SELL" : "BUY";
+    }
+
+    private BigDecimal buildSingleCloseRequestAmount(
+            TradePosition position,
+            BigDecimal closeQty,
+            TradeType tradeType
+    ) {
+        if (tradeType == TradeType.LONG) {
+            return closeQty;
+        }
+
+        BigDecimal referencePrice = resolveCloseReferencePrice(List.of(position));
+        BigDecimal buyNotionalUsdt = closeQty.multiply(referencePrice).setScale(8, RoundingMode.UP);
+
+        if (buyNotionalUsdt.compareTo(MIN_USDT_NOTIONAL) < 0) {
+            buyNotionalUsdt = MIN_USDT_NOTIONAL;
+        }
+
+        log.info(
+                "SHORT close sizing | tradePositionId={} remainingQty={} closeQty={} referencePrice={} buyNotionalUsdt={}",
+                position.getTradePositionId(),
+                position.getRemainingQty(),
+                closeQty,
+                referencePrice,
+                buyNotionalUsdt
+        );
+
+        return buyNotionalUsdt;
+    }
+
+    private BigDecimal buildGroupedCloseRequestAmount(
+            List<TradePosition> positions,
+            BigDecimal closeQty,
+            TradeType tradeType,
+            String asset
+    ) {
+        if (tradeType == TradeType.LONG) {
+            return closeQty;
+        }
+
+        TradePosition first = positions.getFirst();
+
+        BigDecimal totalQty = positions.stream()
+                .map(TradePosition::getRemainingQty)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal referencePrice = resolveCloseReferencePrice(positions);
+        BigDecimal requestAmount = closeQty.multiply(referencePrice).setScale(8, RoundingMode.UP);
+
+        if (requestAmount.compareTo(MIN_USDT_NOTIONAL) < 0) {
+            requestAmount = MIN_USDT_NOTIONAL;
+        }
+
+        log.info(
+                "Grouped SHORT close sizing | tradeId={} asset={} totalQty={} closeQty={} referencePrice={} buyNotionalUsdt={}",
+                first.getTradeId(),
+                asset,
+                totalQty,
+                closeQty,
+                referencePrice,
+                requestAmount
+        );
+
+        return requestAmount;
+    }
+
+    private boolean isClosableOpenPosition(TradePosition tradePosition) {
+        return tradePosition != null
+                && STATUS_OPEN.equalsIgnoreCase(tradePosition.getStatus())
+                && tradePosition.getRemainingQty() != null
+                && tradePosition.getRemainingQty().compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    private BigDecimal normalizeCloseQty(TradePosition position) {
+        BigDecimal closeQty = floorToStep(position.getRemainingQty());
+
+        if (closeQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException(
+                    "Close quantity became zero after normalization | tradePositionId=" + position.getTradePositionId()
+            );
+        }
+
+        if (!isStepValid(closeQty)) {
+            throw new IllegalStateException(
+                    "Close quantity invalid after normalization | tradePositionId=" + position.getTradePositionId()
+                            + ", qty=" + closeQty
+            );
+        }
+
+        if (closeQty.compareTo(position.getRemainingQty()) != 0) {
+            log.warn(
+                    "Normalized close qty | tradePositionId={} storedQty={} normalizedQty={}",
+                    position.getTradePositionId(),
+                    position.getRemainingQty(),
+                    closeQty
+            );
+        }
+
+        return closeQty;
+    }
+
+    private void applyManagementUpdate(TradePosition position, StrategyDecision decision) {
+        if (decision.getStopLossPrice() != null) {
+            position.setCurrentStopLossPrice(decision.getStopLossPrice());
+        }
+
+        if (decision.getTrailingStopPrice() != null) {
+            position.setTrailingStopPrice(decision.getTrailingStopPrice());
+        }
+
+        BigDecimal updatedTakeProfit = resolveUpdatedTakeProfitForRole(position, decision);
+        if (updatedTakeProfit != null || "RUNNER".equalsIgnoreCase(position.getPositionRole())) {
+            position.setTakeProfitPrice(updatedTakeProfit);
+        }
+
+        position.setExitReason("STRATEGY_MANAGEMENT_UPDATE");
+    }
+
+    private BigDecimal resolveCloseReferencePrice(List<TradePosition> positions) {
+        if (positions == null || positions.isEmpty()) {
+            throw new IllegalStateException("No trade positions available to resolve close reference price");
+        }
+
+        BigDecimal totalQty = BigDecimal.ZERO;
+        BigDecimal weightedPriceSum = BigDecimal.ZERO;
+
+        for (TradePosition position : positions) {
+            if (position == null) {
+                continue;
+            }
+
+            BigDecimal qty = safe(position.getRemainingQty());
+            if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+
+            BigDecimal referencePrice = safe(position.getEntryPrice());
+
+            BigDecimal currentStop = position.getCurrentStopLossPrice();
+            BigDecimal trailingStop = position.getTrailingStopPrice();
+            BigDecimal takeProfit = position.getTakeProfitPrice();
+
+            if (currentStop != null && currentStop.compareTo(BigDecimal.ZERO) > 0) {
+                referencePrice = currentStop;
+            } else if (trailingStop != null && trailingStop.compareTo(BigDecimal.ZERO) > 0) {
+                referencePrice = trailingStop;
+            } else if (takeProfit != null && takeProfit.compareTo(BigDecimal.ZERO) > 0) {
+                referencePrice = takeProfit;
+            }
+
+            weightedPriceSum = weightedPriceSum.add(referencePrice.multiply(qty));
+            totalQty = totalQty.add(qty);
+        }
+
+        if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("Unable to resolve close reference price because total quantity is zero");
+        }
+
+        return weightedPriceSum.divide(totalQty, 8, RoundingMode.HALF_UP);
     }
 
     private UUID openParentTrade(
@@ -564,6 +525,9 @@ public class TradeService {
             }
 
             String orderSide = tradeType == TradeType.LONG ? "BUY" : "SELL";
+            BigDecimal requestAmount = tradeType == TradeType.LONG
+                    ? tradeQuoteNotional
+                    : validation.normalizedQty;
 
             log.info(
                     "Opening {} parent trade | asset={} quoteNotional={} estimatedPrice={} estimatedQty={} normalizedQty={} plannedMode={}",
@@ -576,20 +540,16 @@ public class TradeService {
                     validation.plannedMode
             );
 
+            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(
+                    BinanceOrderRequest.builder()
+                            .symbol(asset)
+                            .side(orderSide)
+                            .amount(requestAmount)
+                            .apiKey(context.getUser().getApiKey())
+                            .apiSecret(context.getUser().getApiSecret())
+                            .build()
+            );
 
-            BigDecimal requestAmount = tradeType == TradeType.LONG
-                    ? tradeQuoteNotional
-                    : validation.normalizedQty;
-
-            BinanceOrderRequest request = BinanceOrderRequest.builder()
-                    .symbol(asset)
-                    .side(orderSide)
-                    .amount(requestAmount)
-                    .apiKey(context.getUser().getApiKey())
-                    .apiSecret(context.getUser().getApiSecret())
-                    .build();
-
-            BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
             FillProcessingResult result = processOrderFills(response);
 
             BigDecimal avgEntryPrice = result.avgPrice;
@@ -644,7 +604,7 @@ public class TradeService {
                         normalizedExecutedQty,
                         avgEntryPrice
                 );
-                return persistedTrade.getTradeId();  // Return the tradeId even if the plan is invalid
+                return persistedTrade.getTradeId();
             }
 
             persistedTrade.setTradeMode(finalPlan.tradeMode);
@@ -682,11 +642,9 @@ public class TradeService {
                 } catch (Exception saveEx) {
                     log.error("Failed to update trade state after entry error | asset={}", asset, saveEx);
                 }
-            }
-
-            if (persistedTrade != null) {
                 return persistedTrade.getTradeId();
             }
+
             return null;
         }
     }
@@ -783,25 +741,16 @@ public class TradeService {
         BigDecimal tp2 = decision.getTakeProfitPrice2();
         BigDecimal stop = decision.getStopLossPrice();
 
-        if (tradeType == TradeType.LONG) {
-            if (tp1 != null && stop != null && tp1.compareTo(stop) > 0) {
+        // Calculate midpoint between TP1 and stop loss
+        if (tp1 != null && stop != null) {
+            boolean isValidMidpoint = (tradeType == TradeType.LONG && tp1.compareTo(stop) > 0) ||
+                                     (tradeType != TradeType.LONG && stop.compareTo(tp1) > 0);
+            
+            if (isValidMidpoint) {
                 return tp1.add(stop).divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
             }
-            if (tp1 != null && tp1.compareTo(BigDecimal.ZERO) > 0) {
-                return tp1;
-            }
-            if (tp2 != null && tp2.compareTo(BigDecimal.ZERO) > 0) {
-                return tp2;
-            }
-            if (stop != null && stop.compareTo(BigDecimal.ZERO) > 0) {
-                return stop;
-            }
-            return null;
         }
 
-        if (tp1 != null && stop != null && stop.compareTo(tp1) > 0) {
-            return tp1.add(stop).divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
-        }
         if (tp1 != null && tp1.compareTo(BigDecimal.ZERO) > 0) {
             return tp1;
         }
@@ -1015,6 +964,74 @@ public class TradeService {
         tradePosition.setRealizedPnlPercent(pnlPercent);
     }
 
+    private void applyGroupedExitToPositions(
+            List<TradePosition> positions,
+            FillProcessingResult result,
+            TradeType tradeType
+    ) {
+        BigDecimal totalQty = positions.stream()
+                .map(TradePosition::getRemainingQty)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal allocatedFeeRunning = BigDecimal.ZERO;
+        BigDecimal allocatedQuoteRunning = BigDecimal.ZERO;
+        BigDecimal allocatedQtyRunning = BigDecimal.ZERO;
+
+        for (int i = 0; i < positions.size(); i++) {
+            TradePosition position = positions.get(i);
+
+            BigDecimal exitQty;
+            BigDecimal exitQuoteQty;
+            BigDecimal exitFee;
+
+            if (i == positions.size() - 1) {
+                exitQty = result.totalQty.subtract(allocatedQtyRunning);
+                exitQuoteQty = result.totalQuote.subtract(allocatedQuoteRunning);
+                exitFee = safe(result.totalFee).subtract(allocatedFeeRunning);
+            } else {
+                BigDecimal ratio = position.getRemainingQty()
+                        .divide(totalQty, 12, RoundingMode.HALF_UP);
+
+                exitQty = result.totalQty.multiply(ratio).setScale(8, RoundingMode.DOWN);
+                exitQuoteQty = result.totalQuote.multiply(ratio).setScale(8, RoundingMode.DOWN);
+                exitFee = safe(result.totalFee).multiply(ratio).setScale(8, RoundingMode.DOWN);
+
+                allocatedQtyRunning = allocatedQtyRunning.add(exitQty);
+                allocatedQuoteRunning = allocatedQuoteRunning.add(exitQuoteQty);
+                allocatedFeeRunning = allocatedFeeRunning.add(exitFee);
+            }
+
+            BigDecimal exitPrice = exitQty.compareTo(BigDecimal.ZERO) > 0
+                    ? exitQuoteQty.divide(exitQty, 8, RoundingMode.HALF_UP)
+                    : result.avgPrice;
+
+            position.setExitExecutedQty(exitQty);
+            position.setExitExecutedQuoteQty(exitQuoteQty);
+            position.setExitFee(exitFee);
+            position.setExitFeeCurrency(result.feeCurrency);
+            position.setExitPrice(exitPrice);
+            position.setExitTime(LocalDateTime.now());
+            position.setStatus(STATUS_CLOSED);
+            position.setRemainingQty(BigDecimal.ZERO);
+
+            BigDecimal pnlAmount = calculatePLAmount(
+                    position.getEntryPrice(),
+                    exitPrice,
+                    position.getEntryQty(),
+                    tradeType
+            );
+
+            BigDecimal pnlPercent = calculatePLPercentage(
+                    position.getEntryPrice(),
+                    exitPrice,
+                    tradeType
+            );
+
+            position.setRealizedPnlAmount(pnlAmount);
+            position.setRealizedPnlPercent(pnlPercent);
+        }
+    }
+
     private void refreshParentTradeSummary(UUID tradeId) {
         Trades trade = tradesRepository.findByTradeId(tradeId).orElse(null);
         if (trade == null) {
@@ -1132,7 +1149,7 @@ public class TradeService {
             return true;
         }
         if (position == null || position.getPositionRole() == null) {
-            return false;
+            return true;
         }
         return targetRole.equalsIgnoreCase(position.getPositionRole());
     }
@@ -1232,9 +1249,9 @@ public class TradeService {
             return invalidPlan();
         }
 
-        if (!isClosableSlice(tp1Qty, avgEntryPrice)
-                || !isClosableSlice(tp2Qty, avgEntryPrice)
-                || !isClosableSlice(runnerQty, avgEntryPrice)) {
+        if (isInvalidSlice(tp1Qty, avgEntryPrice)
+                || isInvalidSlice(tp2Qty, avgEntryPrice)
+                || isInvalidSlice(runnerQty, avgEntryPrice)) {
             return invalidPlan();
         }
 
@@ -1293,7 +1310,7 @@ public class TradeService {
             return invalidPlan();
         }
 
-        if (!isClosableSlice(tp1Qty, avgEntryPrice) || !isClosableSlice(runnerQty, avgEntryPrice)) {
+        if (isInvalidSlice(tp1Qty, avgEntryPrice) || isInvalidSlice(runnerQty, avgEntryPrice)) {
             return invalidPlan();
         }
 
@@ -1327,7 +1344,7 @@ public class TradeService {
     ) {
         BigDecimal runnerQty = floorToStep(totalQty);
 
-        if (!isClosableSlice(runnerQty, avgEntryPrice)) {
+        if (isInvalidSlice(runnerQty, avgEntryPrice)) {
             return invalidPlan();
         }
 
@@ -1353,13 +1370,11 @@ public class TradeService {
     ) {
         BigDecimal singleQty = floorToStep(totalQty);
 
-        if (!isClosableSlice(singleQty, avgEntryPrice)) {
+        if (isInvalidSlice(singleQty, avgEntryPrice)) {
             return invalidPlan();
         }
 
-        BigDecimal singleTp = decision.getTakeProfitPrice1() != null
-                ? decision.getTakeProfitPrice1()
-                : null;
+        BigDecimal singleTp = decision.getTakeProfitPrice1();
 
         return new SplitPlan(
                 EXIT_STRUCTURE_SINGLE,
@@ -1376,21 +1391,21 @@ public class TradeService {
         );
     }
 
-    private boolean isClosableSlice(BigDecimal qty, BigDecimal price) {
+    private boolean isInvalidSlice(BigDecimal qty, BigDecimal price) {
         if (qty == null || price == null) {
-            return false;
+            return true;
         }
 
         if (!isStepValid(qty)) {
-            return false;
+            return true;
         }
 
         if (qty.compareTo(MIN_POSITION_QTY) < 0) {
-            return false;
+            return true;
         }
 
         BigDecimal notional = qty.multiply(price);
-        return notional.compareTo(MIN_USDT_NOTIONAL) >= 0;
+        return notional.compareTo(MIN_USDT_NOTIONAL) < 0;
     }
 
     private boolean isInvalidPlan(SplitPlan splitPlan) {
@@ -1437,12 +1452,8 @@ public class TradeService {
 
     private BigDecimal floorToStep(BigDecimal qty) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
-            log.info("qty null {}", qty);
             return BigDecimal.ZERO;
         }
-
-        log.info("qty {}", qty);
-        log.info("DEFAULT_QTY_STEP {}", DEFAULT_QTY_STEP);
 
         BigDecimal steps = qty.divide(DEFAULT_QTY_STEP, 0, RoundingMode.DOWN);
         return steps.multiply(DEFAULT_QTY_STEP);
@@ -1450,7 +1461,7 @@ public class TradeService {
 
     private boolean isStepValid(BigDecimal qty) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
-            return false;
+            return true;
         }
 
         BigDecimal steps = qty.divide(DEFAULT_QTY_STEP, 0, RoundingMode.DOWN);
@@ -1458,7 +1469,6 @@ public class TradeService {
 
         return rebuilt.compareTo(qty.setScale(7, RoundingMode.DOWN)) == 0;
     }
-
 
     private BigDecimal safe(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
@@ -1584,4 +1594,3 @@ public class TradeService {
         }
     }
 }
-
