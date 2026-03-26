@@ -1,4 +1,4 @@
-package id.co.blackheart.util;
+package id.co.blackheart.service.trade;
 
 import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.response.BinanceOrderFill;
@@ -10,7 +10,8 @@ import id.co.blackheart.model.Trades;
 import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
-import id.co.blackheart.service.tradeexecuition.TradeExecutionService;
+import id.co.blackheart.service.cache.CacheService;
+import id.co.blackheart.service.redis.RedisPublisher;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,7 +27,7 @@ import java.util.UUID;
 @Service
 @AllArgsConstructor
 @Slf4j
-public class TradeUtil {
+public class TradeService {
 
     private static final BigDecimal MIN_USDT_NOTIONAL = new BigDecimal("7");
 
@@ -60,28 +61,61 @@ public class TradeUtil {
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
     private final TradeExecutionService tradeExecutionService;
+    private final CacheService cacheService;
+    private final RedisPublisher redisPublisher;
 
     public enum TradeType {
         LONG, SHORT
     }
 
     @Transactional
-    public void binanceOpenLongMarketOrder(
-            StrategyContext context,
-            StrategyDecision decision,
-            BigDecimal tradeAmount
-    ) {
-        openParentTrade(context, decision, tradeAmount, TradeType.LONG, context.getAsset());
+    public void binanceOpenLongMarketOrder(StrategyContext context, StrategyDecision decision, BigDecimal tradeAmount) {
+
+        UUID tradeId = openParentTrade(context, decision, tradeAmount, TradeType.LONG, context.getAsset());
+
+        if (tradeId == null) {
+            log.info(" Failed to create parent trade - tradeId is null");
+            return;
+        }
+        try {
+            Trades trade = tradesRepository.findById(tradeId)
+                    .orElseThrow(() -> new IllegalStateException("Trade not found after creation"));
+            cacheService.cacheActiveTrade(trade.getTradeId(), trade);
+
+            List<TradePosition> tradePositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
+            cacheService.cacheTradePositions(trade.getTradeId(), tradePositions);
+
+            redisPublisher.publishTradeStateChange(trade.getTradeId(), "OPEN");
+        } catch (Exception e) {
+            log.error("Failed to cache trade | tradeId={}", tradeId, e);
+        }
+
     }
 
+
     @Transactional
-    public void binanceOpenShortMarketOrder(
-            StrategyContext context,
-            String asset,
-            StrategyDecision decision,
-            BigDecimal tradeAmount
-    ) {
-        openParentTrade(context, decision, tradeAmount, TradeType.SHORT, asset);
+    public void binanceOpenShortMarketOrder(StrategyContext context, StrategyDecision decision, BigDecimal tradeAmount, String asset) {
+
+        UUID tradeId = openParentTrade(context, decision, tradeAmount, TradeType.SHORT, asset);
+
+        if (tradeId == null) {
+            log.info(" Failed to create parent trade - tradeId is null");
+            return;
+        }
+
+        try {
+            Trades trade = tradesRepository.findById(tradeId)
+                    .orElseThrow(() -> new IllegalStateException("Trade not found after creation"));
+            cacheService.cacheActiveTrade(trade.getTradeId(), trade);
+
+            List<TradePosition> tradePositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
+            cacheService.cacheTradePositions(trade.getTradeId(), tradePositions);
+
+            redisPublisher.publishTradeStateChange(trade.getTradeId(), "OPEN");
+        }catch (Exception e) {
+            log.error("Failed to cache trade | tradeId={}", tradeId, e);
+        }
+
     }
 
 
@@ -164,6 +198,15 @@ public class TradeUtil {
 
             tradePositionRepository.saveAll(validOpenPositions);
             refreshParentTradeSummary(first.getTradeId());
+
+            try {
+                cacheService.removeClosedTrade(first.getTradeId());
+                redisPublisher.publishTradeStateChange(first.getTradeId(), "CLOSED");
+                cacheService.removeClosedTrade(first.getTradeId());
+            } catch (Exception e) {
+                log.error("Redis cache update failed | tradeId={}", first.getTradeId(), e);
+            }
+
 
             log.info("✅ Grouped {} close success | tradeId={} asset={} positions={} requestAmount={} avgExitPrice={}",
                     tradeType,
@@ -491,7 +534,7 @@ public class TradeUtil {
         );
     }
 
-    private void openParentTrade(
+    private UUID openParentTrade(
             StrategyContext context,
             StrategyDecision decision,
             BigDecimal tradeQuoteNotional,
@@ -517,7 +560,7 @@ public class TradeUtil {
                         tradeQuoteNotional,
                         validation.reason
                 );
-                return;
+                return null;
             }
 
             String orderSide = tradeType == TradeType.LONG ? "BUY" : "SELL";
@@ -601,7 +644,7 @@ public class TradeUtil {
                         normalizedExecutedQty,
                         avgEntryPrice
                 );
-                return;
+                return persistedTrade.getTradeId();  // Return the tradeId even if the plan is invalid
             }
 
             persistedTrade.setTradeMode(finalPlan.tradeMode);
@@ -626,6 +669,8 @@ public class TradeUtil {
                     finalPlan.tradeMode
             );
 
+            return persistedTrade.getTradeId();
+
         } catch (Exception e) {
             log.error("❌ Error placing {} parent trade for {}", tradeType, asset, e);
 
@@ -638,6 +683,11 @@ public class TradeUtil {
                     log.error("Failed to update trade state after entry error | asset={}", asset, saveEx);
                 }
             }
+
+            if (persistedTrade != null) {
+                return persistedTrade.getTradeId();
+            }
+            return null;
         }
     }
 
@@ -1534,3 +1584,4 @@ public class TradeUtil {
         }
     }
 }
+

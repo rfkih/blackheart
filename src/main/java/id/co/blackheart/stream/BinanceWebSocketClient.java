@@ -164,11 +164,16 @@ public class BinanceWebSocketClient {
 
             BigDecimal latestPrice =  new BigDecimal(kline.getString("c"));
 
-            liveTradeListenerService.process(SYMBOL, latestPrice);
+            if ("15m".equals(interval)) {
+                liveTradeListenerService.process(SYMBOL, latestPrice);
+            }
+
 
             if (!isProcessable(interval, finalCandle)) {
                 return Mono.empty();
             }
+
+
 
             MarketData incomingMarketData = buildMarketData(container, kline, interval);
 

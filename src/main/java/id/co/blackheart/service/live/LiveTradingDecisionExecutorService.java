@@ -11,7 +11,7 @@ import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
-import id.co.blackheart.util.TradeUtil;
+import id.co.blackheart.service.trade.TradeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -38,7 +38,7 @@ public class LiveTradingDecisionExecutorService {
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
     private final PortfolioService portfolioService;
-    private final TradeUtil tradeUtil;
+    private final TradeService tradeService;
 
     public void execute(Trades activeTrade, StrategyContext context,StrategyDecision decision) throws JsonProcessingException {
         if (decision == null || decision.getDecisionType() == null) {
@@ -70,9 +70,9 @@ public class LiveTradingDecisionExecutorService {
         tradePositionRepository.save(activeTradePosition);
 
         if ("LONG".equalsIgnoreCase(activeTradePosition.getSide())) {
-            tradeUtil.binanceCloseLongPositionMarketOrder(user, activeTradePosition, asset);
+            tradeService.binanceCloseLongPositionMarketOrder(user, activeTradePosition, asset);
         } else if ("SHORT".equalsIgnoreCase(activeTradePosition.getSide())) {
-            tradeUtil.binanceCloseShortPositionMarketOrder(user, activeTradePosition, asset);
+            tradeService.binanceCloseShortPositionMarketOrder(user, activeTradePosition, asset);
         } else {
             log.warn(
                     "Unknown side for listener close | tradePositionId={} side={}",
@@ -98,9 +98,9 @@ public class LiveTradingDecisionExecutorService {
         tradePositionRepository.save(tradePosition);
 
         if ("LONG".equalsIgnoreCase(tradePosition.getSide())) {
-            tradeUtil.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+            tradeService.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
         } else if ("SHORT".equalsIgnoreCase(tradePosition.getSide())) {
-            tradeUtil.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+            tradeService.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
         }
 
         refreshParentTradeSummary(tradePosition.getTradeId());
@@ -124,9 +124,9 @@ public class LiveTradingDecisionExecutorService {
         tradePositionRepository.saveAll(activeTradePositions);
 
         if ("LONG".equalsIgnoreCase(firstPosition.getSide())) {
-            tradeUtil.binanceCloseLongPositionsMarketOrder(user, activeTradePositions, asset);
+            tradeService.binanceCloseLongPositionsMarketOrder(user, activeTradePositions, asset);
         } else if ("SHORT".equalsIgnoreCase(firstPosition.getSide())) {
-            tradeUtil.binanceCloseShortPositionsMarketOrder(user, activeTradePositions, asset);
+            tradeService.binanceCloseShortPositionsMarketOrder(user, activeTradePositions, asset);
         } else {
             log.warn("Unknown side for grouped listener close | tradeId={} side={}",
                     firstPosition.getTradeId(), firstPosition.getSide());
@@ -144,9 +144,9 @@ public class LiveTradingDecisionExecutorService {
             tradePositionRepository.save(tradePosition);
 
             if ("LONG".equalsIgnoreCase(tradePosition.getSide())) {
-                tradeUtil.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+                tradeService.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
             } else if ("SHORT".equalsIgnoreCase(tradePosition.getSide())) {
-                tradeUtil.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+                tradeService.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
             }
         }
 
@@ -169,7 +169,7 @@ public class LiveTradingDecisionExecutorService {
         }
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceOpenLongMarketOrder(context, decision, tradeAmount);
+            tradeService.binanceOpenLongMarketOrder(context, decision, tradeAmount);
             return;
         }
 
@@ -199,7 +199,7 @@ public class LiveTradingDecisionExecutorService {
         );
 
         if ("BNC".equalsIgnoreCase(user.getExchange())) {
-            tradeUtil.binanceOpenShortMarketOrder(context, context.getAsset(), decision, tradeAmount);
+            tradeService.binanceOpenShortMarketOrder(context,decision, tradeAmount, context.getAsset());
             return;
         }
 
@@ -211,7 +211,7 @@ public class LiveTradingDecisionExecutorService {
             return;
         }
 
-        tradeUtil.updateOpenTradePositions(activeTrade, decision);
+        tradeService.updateOpenTradePositions(activeTrade, decision);
         refreshParentTradeSummary(activeTrade.getTradeId());
     }
 
@@ -228,9 +228,9 @@ public class LiveTradingDecisionExecutorService {
             tradePositionRepository.save(tradePosition);
 
             if ("LONG".equalsIgnoreCase(tradePosition.getSide())) {
-                tradeUtil.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+                tradeService.binanceCloseLongPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
             } else if ("SHORT".equalsIgnoreCase(tradePosition.getSide())) {
-                tradeUtil.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
+                tradeService.binanceCloseShortPositionMarketOrder(user, tradePosition, tradePosition.getAsset());
             }
         }
 

@@ -39,8 +39,13 @@ dependencies {
 		implementation 'org.apache.httpcomponents.core5:httpcore5:5.2.4'
 		implementation 'org.apache.httpcomponents.client5:httpclient5-fluent:5.3.1'
 
+        // Redis Dependencies
+        implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+        implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.15.4'
 
-		implementation 'org.springframework.cloud:spring-cloud-stream'
+
+
+        implementation 'org.springframework.cloud:spring-cloud-stream'
 		implementation 'org.springframework.kafka:spring-kafka'
 
 		implementation 'org.postgresql:postgresql:42.6.0'
