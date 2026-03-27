@@ -13,7 +13,12 @@ import java.math.BigDecimal;
 public class TradeDecision {
 
     private String action;
+    private String side;
     private BigDecimal positionSize;
     private BigDecimal stopLossPrice;
     private BigDecimal takeProfitPrice;
+    private BigDecimal entryAdx;
+    private BigDecimal entryAtr;
+    private BigDecimal entryRsi;
+    private String entryTrendRegime;
 }

@@ -1,9 +1,6 @@
 package id.co.blackheart.stream;
 
-import id.co.blackheart.model.FeatureStore;
-import id.co.blackheart.model.MarketData;
-import id.co.blackheart.model.UserStrategy;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.*;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.UserStrategyRepository;
@@ -11,6 +8,7 @@ import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
 import id.co.blackheart.service.marketdata.MarketDataService;
+import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -59,7 +57,7 @@ public class BinanceWebSocketClient {
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
     private final UserStrategyRepository userStrategyRepository;
-    private final FeatureStoreRepository featureStoreRepository;
+    private final PortfolioService portfolioService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
@@ -164,11 +162,21 @@ public class BinanceWebSocketClient {
             String interval = kline.getString("i");
             boolean finalCandle = kline.getBoolean("x");
 
+            BigDecimal latestPrice =  new BigDecimal(kline.getString("c"));
+
+            if ("15m".equals(interval)) {
+                liveTradeListenerService.process(SYMBOL, latestPrice);
+            }
+
+
             if (!isProcessable(interval, finalCandle)) {
                 return Mono.empty();
             }
 
+
+
             MarketData incomingMarketData = buildMarketData(container, kline, interval);
+
 
             MarketData latestBeforeInsert = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
 
@@ -192,6 +200,8 @@ public class BinanceWebSocketClient {
             if (!exists) {
                 persistMarketData(interval, incomingMarketData);
             }
+
+
 
             processPostPersist(interval, incomingMarketData, incomingMarketData.getStartTime());
 
@@ -302,7 +312,7 @@ public class BinanceWebSocketClient {
             }
         }
 
-        liveTradeListenerService.process(SYMBOL, marketData);
+
     }
 
     private boolean requiresFeatureComputation(String interval) {

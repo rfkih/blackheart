@@ -5,8 +5,10 @@ import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
+import id.co.blackheart.model.BacktestTradePosition;
+import id.co.blackheart.repository.BacktestTradePositionRepository;
 import id.co.blackheart.repository.BacktestTradeRepository;
-import id.co.blackheart.util.TradeConstant.*;
+import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -14,6 +16,9 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -22,9 +27,17 @@ public class BacktestTradeExecutorService {
 
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_CLOSED = "CLOSED";
+    private static final String STATUS_PARTIALLY_CLOSED = "PARTIALLY_CLOSED";
+
+    private static final String EXIT_STRUCTURE_SINGLE = "SINGLE";
+    private static final String EXIT_STRUCTURE_TP1_RUNNER = "TP1_RUNNER";
+    private static final String EXIT_STRUCTURE_TP1_TP2_RUNNER = "TP1_TP2_RUNNER";
+    private static final String EXIT_STRUCTURE_RUNNER_ONLY = "RUNNER_ONLY";
+
+    private static final String TARGET_ALL = "ALL";
 
     private final BacktestTradeRepository backtestTradeRepository;
-    private final BacktestPricingService backtestPricingService;
+    private final BacktestTradePositionRepository backtestTradePositionRepository;
 
     public void execute(
             BacktestRun backtestRun,
@@ -37,223 +50,503 @@ public class BacktestTradeExecutorService {
         }
 
         switch (decision.getDecisionType()) {
-            case OPEN_LONG -> openLong(backtestRun, state, context, decision);
-            case OPEN_SHORT -> openShort(backtestRun, state, context, decision);
-            case CLOSE_LONG, CLOSE_SHORT -> closeTrade(backtestRun, state, context, decision);
-            case UPDATE_TRAILING_STOP -> updateTrailingStop(state, decision);
-            default -> log.debug("Unhandled decisionType={}", decision.getDecisionType());
+            case OPEN_LONG -> openTrade(backtestRun, state, context, decision, "LONG");
+            case OPEN_SHORT -> openTrade(backtestRun, state, context, decision, "SHORT");
+            case UPDATE_POSITION_MANAGEMENT -> updateOpenPositions(state, decision);
+            case CLOSE_LONG, CLOSE_SHORT -> closeAllOpenPositions(
+                    backtestRun,
+                    state,
+                    context.getMarketData().getClosePrice(),
+                    decision.getExitReason() != null ? decision.getExitReason() : decision.getDecisionType().name(),
+                    context.getMarketData().getEndTime()
+            );
+            default -> {
+            }
         }
     }
 
-
-    public void closeTradeFromListener(
-            BacktestRun run,
+    private void openTrade(
+            BacktestRun backtestRun,
             BacktestState state,
             StrategyContext context,
-            String exitReason,
-            BigDecimal exitPrice
+            StrategyDecision decision,
+            String tradeType
     ) {
-        BacktestTrade activeTrade = state.getActiveTrade();
-        if (activeTrade == null) {
-            return;
-        }
-
-        BigDecimal exitQuoteQty = activeTrade.getEntryQty().multiply(exitPrice);
-        BigDecimal exitFee = exitQuoteQty.multiply(run.getFeeRate());
-
-        BigDecimal plAmount;
-        if ("LONG".equalsIgnoreCase(activeTrade.getSide())) {
-            plAmount = exitQuoteQty
-                    .subtract(activeTrade.getEntryQuoteQty())
-                    .subtract(activeTrade.getEntryFee() == null ? BigDecimal.ZERO : activeTrade.getEntryFee())
-                    .subtract(exitFee);
-        } else {
-            plAmount = activeTrade.getEntryQuoteQty()
-                    .subtract(exitQuoteQty)
-                    .subtract(activeTrade.getEntryFee() == null ? BigDecimal.ZERO : activeTrade.getEntryFee())
-                    .subtract(exitFee);
-        }
-
-        BigDecimal plPercent = BigDecimal.ZERO;
-        if (activeTrade.getEntryQuoteQty() != null && activeTrade.getEntryQuoteQty().signum() > 0) {
-            plPercent = plAmount
-                    .divide(activeTrade.getEntryQuoteQty(), 8, java.math.RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"));
-        }
-
-        activeTrade.setStatus("CLOSED");
-        activeTrade.setExitTime(context.getMarketData().getEndTime());
-        activeTrade.setExitPrice(exitPrice);
-        activeTrade.setExitQty(activeTrade.getEntryQty());
-        activeTrade.setExitQuoteQty(exitQuoteQty);
-        activeTrade.setExitFee(exitFee);
-        activeTrade.setExitReason(exitReason);
-        activeTrade.setPlAmount(plAmount);
-        activeTrade.setPlPercent(plPercent);
-
-        activeTrade = backtestTradeRepository.save(activeTrade);
-
-        state.setCashBalance(activeTrade.getEntryQuoteQty().add(plAmount));
-        state.getCompletedTrades().add(activeTrade);
-        state.setActiveTrade(null);
-    }
-
-    private void openLong(BacktestRun run, BacktestState state, StrategyContext context, StrategyDecision decision) {
         if (state.getActiveTrade() != null) {
             return;
         }
 
-        BigDecimal entryPrice = backtestPricingService.applyEntrySlippage(
-                context.getMarketData().getClosePrice(),
-                run.getSlippageRate(),
-                "LONG"
-        );
+        BigDecimal requestedQuoteAmount = safe(decision.getPositionSize());
+        BigDecimal entryPrice = safe(context.getMarketData().getClosePrice());
 
-        BigDecimal entryQuoteQty = state.getCashBalance();
-        if (entryQuoteQty == null || entryQuoteQty.signum() <= 0) {
+        if (requestedQuoteAmount.compareTo(BigDecimal.ZERO) <= 0 || entryPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("Backtest {} rejected before execution | asset={} reason=Invalid size or entry price",
+                    tradeType, backtestRun.getAsset());
             return;
         }
 
-        BigDecimal entryQty = entryQuoteQty.divide(entryPrice, 12, BigDecimal.ROUND_DOWN);
-        BigDecimal entryFee = entryQuoteQty.multiply(run.getFeeRate());
+        BigDecimal totalQty = requestedQuoteAmount.divide(entryPrice, 12, RoundingMode.DOWN);
+
+        if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("Backtest {} rejected before execution | asset={} reason=Calculated quantity is zero",
+                    tradeType, backtestRun.getAsset());
+            return;
+        }
+
+        BigDecimal feePct = safe(backtestRun.getFeePct());
+        BigDecimal entryFee = requestedQuoteAmount.multiply(feePct).setScale(8, RoundingMode.HALF_UP);
+
+        BigDecimal totalCashRequired = requestedQuoteAmount.add(entryFee);
+        if (state.getCashBalance().compareTo(totalCashRequired) < 0) {
+            log.warn("Backtest {} rejected before execution | asset={} reason=Insufficient synthetic cash balance",
+                    tradeType, backtestRun.getAsset());
+            return;
+        }
+
+        LocalDateTime entryTime = context.getMarketData().getEndTime();
 
         BacktestTrade trade = BacktestTrade.builder()
-                .backtestRunId(run.getBacktestRunId())
-                .userId(run.getUserId())
-                .strategyName(run.getStrategyName())
-                .interval(run.getInterval())
-                .asset(run.getSymbol())
-                .side("LONG")
+                .backtestRunId(backtestRun.getBacktestRunId())
+                .userStrategyId(backtestRun.getUserStrategyId())
+                .strategyName(backtestRun.getStrategyName())
+                .asset(backtestRun.getAsset())
+                .interval(backtestRun.getInterval())
+                .side(tradeType)
                 .status(STATUS_OPEN)
-                .entryTime(context.getMarketData().getEndTime())
-                .entryPrice(entryPrice)
-                .entryQty(entryQty)
-                .entryQuoteQty(entryQuoteQty)
-                .entryFee(entryFee)
-                .initialStopLossPrice(decision.getStopLossPrice())
-                .currentStopLossPrice(decision.getStopLossPrice())
-                .trailingStopPrice(decision.getTrailingStopPrice())
-                .takeProfitPrice(decision.getTakeProfitPrice())
-                .entryTrendRegime(decision.getEntryTrendRegime())
-                .entryAdx(decision.getEntryAdx())
-                .entryAtr(decision.getEntryAtr())
-                .entryRsi(decision.getEntryRsi())
-                .createdAt(LocalDateTime.now())
+                .tradeMode(resolveTradeMode(decision))
+                .avgEntryPrice(entryPrice)
+                .avgExitPrice(null)
+                .totalEntryQty(totalQty)
+                .totalEntryQuoteQty(requestedQuoteAmount)
+                .totalRemainingQty(totalQty)
+                .realizedPnlAmount(BigDecimal.ZERO)
+                .realizedPnlPercent(BigDecimal.ZERO)
+                .totalFeeAmount(entryFee)
+                .exitReason(null)
+                .entryTime(entryTime)
+                .exitTime(null)
                 .build();
 
         trade = backtestTradeRepository.save(trade);
+
+        List<PlannedPosition> plan = buildPositionPlan(totalQty, requestedQuoteAmount, entryFee, decision);
+
+        List<BacktestTradePosition> persistedPositions = new ArrayList<>();
+        for (PlannedPosition planned : plan) {
+            BacktestTradePosition position = BacktestTradePosition.builder()
+                    .tradePositionId(UUID.randomUUID())
+                    .tradeId(trade.getBacktestTradeId())
+                    .backtestRunId(backtestRun.getBacktestRunId())
+                    .userStrategyId(backtestRun.getUserStrategyId())
+                    .asset(backtestRun.getAsset())
+                    .interval(backtestRun.getInterval())
+                    .exchange("BINANCE")
+                    .side(tradeType)
+                    .positionRole(planned.positionRole())
+                    .status(STATUS_OPEN)
+                    .entryPrice(entryPrice)
+                    .entryQty(planned.entryQty())
+                    .entryQuoteQty(planned.entryQuoteQty())
+                    .remainingQty(planned.entryQty())
+                    .exitPrice(null)
+                    .exitExecutedQty(null)
+                    .exitExecutedQuoteQty(null)
+                    .entryFee(planned.entryFee())
+                    .entryFeeCurrency("USDT")
+                    .exitFee(null)
+                    .exitFeeCurrency(null)
+                    .initialStopLossPrice(decision.getStopLossPrice())
+                    .currentStopLossPrice(decision.getStopLossPrice())
+                    .trailingStopPrice(decision.getTrailingStopPrice())
+                    .takeProfitPrice(planned.takeProfitPrice())
+                    .highestPriceSinceEntry("LONG".equalsIgnoreCase(tradeType) ? entryPrice : null)
+                    .lowestPriceSinceEntry("SHORT".equalsIgnoreCase(tradeType) ? entryPrice : null)
+                    .realizedPnlAmount(BigDecimal.ZERO)
+                    .realizedPnlPercent(BigDecimal.ZERO)
+                    .exitReason(null)
+                    .entryTime(entryTime)
+                    .exitTime(null)
+                    .build();
+
+            persistedPositions.add(backtestTradePositionRepository.save(position));
+        }
+
+        state.setCashBalance(state.getCashBalance().subtract(totalCashRequired));
         state.setActiveTrade(trade);
-        state.setCashBalance(BigDecimal.ZERO);
+        state.setActiveTradePositions(new ArrayList<>(persistedPositions));
+
+        log.info("Backtest {} opened | tradeId={} qty={} quote={} fee={} positions={}",
+                tradeType,
+                trade.getBacktestTradeId(),
+                totalQty,
+                requestedQuoteAmount,
+                entryFee,
+                persistedPositions.size());
     }
 
-    private void openShort(BacktestRun run, BacktestState state, StrategyContext context, StrategyDecision decision) {
-        if (state.getActiveTrade() != null) {
-            return;
-        }
+    private List<PlannedPosition> buildPositionPlan(
+            BigDecimal totalQty,
+            BigDecimal totalQuoteAmount,
+            BigDecimal totalEntryFee,
+            StrategyDecision decision
+    ) {
+        String tradeMode = resolveTradeMode(decision);
 
-        BigDecimal entryPrice = backtestPricingService.applyEntrySlippage(
-                context.getMarketData().getClosePrice(),
-                run.getSlippageRate(),
-                "SHORT"
-        );
-
-        BigDecimal entryQuoteQty = state.getCashBalance();
-        if (entryQuoteQty == null || entryQuoteQty.signum() <= 0) {
-            return;
-        }
-
-        BigDecimal entryQty = entryQuoteQty.divide(entryPrice, 12, BigDecimal.ROUND_DOWN);
-        BigDecimal entryFee = entryQuoteQty.multiply(run.getFeeRate());
-
-        BacktestTrade trade = BacktestTrade.builder()
-                .backtestRunId(run.getBacktestRunId())
-                .userId(run.getUserId())
-                .strategyName(run.getStrategyName())
-                .interval(run.getInterval())
-                .asset(run.getSymbol())
-                .side("SHORT")
-                .status(STATUS_OPEN)
-                .entryTime(context.getMarketData().getEndTime())
-                .entryPrice(entryPrice)
-                .entryQty(entryQty)
-                .entryQuoteQty(entryQuoteQty)
-                .entryFee(entryFee)
-                .initialStopLossPrice(decision.getStopLossPrice())
-                .currentStopLossPrice(decision.getStopLossPrice())
-                .trailingStopPrice(decision.getTrailingStopPrice())
-                .takeProfitPrice(decision.getTakeProfitPrice())
-                .entryTrendRegime(decision.getEntryTrendRegime())
-                .entryAdx(decision.getEntryAdx())
-                .entryAtr(decision.getEntryAtr())
-                .entryRsi(decision.getEntryRsi())
-                .createdAt(LocalDateTime.now())
-                .build();
-
-        trade = backtestTradeRepository.save(trade);
-        state.setActiveTrade(trade);
-        state.setCashBalance(BigDecimal.ZERO);
+        return switch (tradeMode) {
+            case EXIT_STRUCTURE_TP1_RUNNER -> buildTwoPositionPlan(
+                    totalQty,
+                    totalQuoteAmount,
+                    totalEntryFee,
+                    decision
+            );
+            case EXIT_STRUCTURE_TP1_TP2_RUNNER -> buildThreePositionPlan(
+                    totalQty,
+                    totalQuoteAmount,
+                    totalEntryFee,
+                    decision
+            );
+            case EXIT_STRUCTURE_RUNNER_ONLY -> List.of(
+                    new PlannedPosition(
+                            "RUNNER",
+                            totalQty,
+                            totalQuoteAmount,
+                            totalEntryFee,
+                            null
+                    )
+            );
+            default -> List.of(
+                    new PlannedPosition(
+                            "SINGLE",
+                            totalQty,
+                            totalQuoteAmount,
+                            totalEntryFee,
+                            decision.getTakeProfitPrice1()
+                    )
+            );
+        };
     }
 
-    private void closeTrade(BacktestRun run, BacktestState state, StrategyContext context, StrategyDecision decision) {
-        BacktestTrade activeTrade = state.getActiveTrade();
-        if (activeTrade == null) {
+    private List<PlannedPosition> buildTwoPositionPlan(
+            BigDecimal totalQty,
+            BigDecimal totalQuoteAmount,
+            BigDecimal totalEntryFee,
+            StrategyDecision decision
+    ) {
+        BigDecimal tp1Qty = totalQty.multiply(new BigDecimal("0.50")).setScale(12, RoundingMode.DOWN);
+        BigDecimal runnerQty = totalQty.subtract(tp1Qty);
+
+        BigDecimal tp1Quote = totalQuoteAmount.multiply(new BigDecimal("0.50")).setScale(8, RoundingMode.DOWN);
+        BigDecimal runnerQuote = totalQuoteAmount.subtract(tp1Quote);
+
+        BigDecimal tp1Fee = totalEntryFee.multiply(new BigDecimal("0.50")).setScale(8, RoundingMode.DOWN);
+        BigDecimal runnerFee = totalEntryFee.subtract(tp1Fee);
+
+        return List.of(
+                new PlannedPosition(
+                        "TP1",
+                        tp1Qty,
+                        tp1Quote,
+                        tp1Fee,
+                        decision.getTakeProfitPrice1()
+                ),
+                new PlannedPosition(
+                        "RUNNER",
+                        runnerQty,
+                        runnerQuote,
+                        runnerFee,
+                        null
+                )
+        );
+    }
+
+    private List<PlannedPosition> buildThreePositionPlan(
+            BigDecimal totalQty,
+            BigDecimal totalQuoteAmount,
+            BigDecimal totalEntryFee,
+            StrategyDecision decision
+    ) {
+        BigDecimal tp1Qty = totalQty.multiply(new BigDecimal("0.30")).setScale(12, RoundingMode.DOWN);
+        BigDecimal tp2Qty = totalQty.multiply(new BigDecimal("0.30")).setScale(12, RoundingMode.DOWN);
+        BigDecimal runnerQty = totalQty.subtract(tp1Qty).subtract(tp2Qty);
+
+        BigDecimal tp1Quote = totalQuoteAmount.multiply(new BigDecimal("0.30")).setScale(8, RoundingMode.DOWN);
+        BigDecimal tp2Quote = totalQuoteAmount.multiply(new BigDecimal("0.30")).setScale(8, RoundingMode.DOWN);
+        BigDecimal runnerQuote = totalQuoteAmount.subtract(tp1Quote).subtract(tp2Quote);
+
+        BigDecimal tp1Fee = totalEntryFee.multiply(new BigDecimal("0.30")).setScale(8, RoundingMode.DOWN);
+        BigDecimal tp2Fee = totalEntryFee.multiply(new BigDecimal("0.30")).setScale(8, RoundingMode.DOWN);
+        BigDecimal runnerFee = totalEntryFee.subtract(tp1Fee).subtract(tp2Fee);
+
+        return List.of(
+                new PlannedPosition(
+                        "TP1",
+                        tp1Qty,
+                        tp1Quote,
+                        tp1Fee,
+                        decision.getTakeProfitPrice1()
+                ),
+                new PlannedPosition(
+                        "TP2",
+                        tp2Qty,
+                        tp2Quote,
+                        tp2Fee,
+                        decision.getTakeProfitPrice2()
+                ),
+                new PlannedPosition(
+                        "RUNNER",
+                        runnerQty,
+                        runnerQuote,
+                        runnerFee,
+                        null
+                )
+        );
+    }
+
+    private String resolveTradeMode(StrategyDecision decision) {
+        if (decision == null || decision.getExitStructure() == null || decision.getExitStructure().isBlank()) {
+            return EXIT_STRUCTURE_SINGLE;
+        }
+        return decision.getExitStructure().trim().toUpperCase();
+    }
+
+    public void closeSinglePositionFromListener(
+            BacktestRun backtestRun,
+            BacktestState state,
+            BacktestTradePosition position,
+            BigDecimal exitPrice,
+            String exitReason,
+            LocalDateTime exitTime
+    ) {
+        if (position == null || !"OPEN".equalsIgnoreCase(position.getStatus())) {
             return;
         }
 
-        BigDecimal exitPrice = backtestPricingService.applyExitSlippage(
-                context.getMarketData().getClosePrice(),
-                run.getSlippageRate(),
-                activeTrade.getSide()
-        );
+        BigDecimal remainingQty = safe(position.getRemainingQty());
+        BigDecimal entryPrice = safe(position.getEntryPrice());
+        BigDecimal cleanExitPrice = safe(exitPrice);
 
-        BigDecimal exitQuoteQty = activeTrade.getEntryQty().multiply(exitPrice);
-        BigDecimal exitFee = exitQuoteQty.multiply(run.getFeeRate());
-
-        BigDecimal plAmount;
-        if ("LONG".equalsIgnoreCase(activeTrade.getSide())) {
-            plAmount = exitQuoteQty
-                    .subtract(activeTrade.getEntryQuoteQty())
-                    .subtract(activeTrade.getEntryFee() == null ? BigDecimal.ZERO : activeTrade.getEntryFee())
-                    .subtract(exitFee);
-        } else {
-            plAmount = activeTrade.getEntryQuoteQty()
-                    .subtract(exitQuoteQty)
-                    .subtract(activeTrade.getEntryFee() == null ? BigDecimal.ZERO : activeTrade.getEntryFee())
-                    .subtract(exitFee);
+        if (remainingQty.compareTo(BigDecimal.ZERO) <= 0 || cleanExitPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
         }
 
-        BigDecimal plPercent = BigDecimal.ZERO;
-        if (activeTrade.getEntryQuoteQty() != null && activeTrade.getEntryQuoteQty().signum() > 0) {
-            plPercent = plAmount
-                    .divide(activeTrade.getEntryQuoteQty(), 8, RoundingMode.HALF_UP)
+        BigDecimal exitQuoteQty = remainingQty.multiply(cleanExitPrice).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal exitFee = exitQuoteQty.multiply(safe(backtestRun.getFeePct())).setScale(8, RoundingMode.HALF_UP);
+
+        BigDecimal pnlAmount = calculatePLAmount(
+                entryPrice,
+                cleanExitPrice,
+                remainingQty,
+                position.getSide()
+        ).subtract(safe(position.getEntryFee())).subtract(exitFee);
+
+        BigDecimal pnlPercent = calculatePLPercent(
+                entryPrice,
+                cleanExitPrice,
+                position.getSide()
+        );
+
+        position.setExitPrice(cleanExitPrice);
+        position.setExitExecutedQty(remainingQty);
+        position.setExitExecutedQuoteQty(exitQuoteQty);
+        position.setExitFee(exitFee);
+        position.setExitReason(exitReason);
+        position.setExitTime(exitTime);
+        position.setStatus(STATUS_CLOSED);
+        position.setRemainingQty(BigDecimal.ZERO);
+        position.setRealizedPnlAmount(pnlAmount);
+        position.setRealizedPnlPercent(pnlPercent);
+
+        backtestTradePositionRepository.save(position);
+
+        BigDecimal releasedCash = safe(position.getEntryQuoteQty()).add(pnlAmount);
+        state.setCashBalance(state.getCashBalance().add(releasedCash));
+
+        refreshParentTradeState(state, exitTime);
+    }
+
+    private void closeAllOpenPositions(
+            BacktestRun backtestRun,
+            BacktestState state,
+            BigDecimal exitPrice,
+            String exitReason,
+            LocalDateTime exitTime
+    ) {
+        if (state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
+            return;
+        }
+
+        for (BacktestTradePosition position : state.getActiveTradePositions()) {
+            if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
+                continue;
+            }
+
+            closeSinglePositionFromListener(
+                    backtestRun,
+                    state,
+                    position,
+                    exitPrice,
+                    exitReason,
+                    exitTime
+            );
+        }
+    }
+
+    private void updateOpenPositions(BacktestState state, StrategyDecision decision) {
+        if (state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
+            return;
+        }
+
+        String targetRole = decision.getTargetPositionRole() == null || decision.getTargetPositionRole().isBlank()
+                ? TARGET_ALL
+                : decision.getTargetPositionRole().trim().toUpperCase();
+
+        for (BacktestTradePosition position : state.getActiveTradePositions()) {
+            if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
+                continue;
+            }
+
+            if (!TARGET_ALL.equals(targetRole)
+                    && (position.getPositionRole() == null
+                    || !targetRole.equalsIgnoreCase(position.getPositionRole()))) {
+                continue;
+            }
+
+            if (decision.getStopLossPrice() != null) {
+                position.setCurrentStopLossPrice(decision.getStopLossPrice());
+            }
+
+            if (decision.getTrailingStopPrice() != null) {
+                position.setTrailingStopPrice(decision.getTrailingStopPrice());
+            }
+
+            String role = position.getPositionRole() == null ? "" : position.getPositionRole().trim().toUpperCase();
+
+            if ("SINGLE".equals(role) || "TP1".equals(role)) {
+                if (decision.getTakeProfitPrice1() != null) {
+                    position.setTakeProfitPrice(decision.getTakeProfitPrice1());
+                }
+            } else if ("TP2".equals(role)) {
+                if (decision.getTakeProfitPrice2() != null) {
+                    position.setTakeProfitPrice(decision.getTakeProfitPrice2());
+                }
+            } else if ("RUNNER".equals(role)) {
+                if (decision.getTakeProfitPrice1() == null
+                        && decision.getTakeProfitPrice2() == null
+                        && decision.getTakeProfitPrice3() == null) {
+                    position.setTakeProfitPrice(null);
+                }
+            }
+
+            backtestTradePositionRepository.save(position);
+        }
+    }
+
+    private void refreshParentTradeState(BacktestState state, LocalDateTime exitTime) {
+        BacktestTrade trade = state.getActiveTrade();
+        if (trade == null || state.getActiveTradePositions() == null) {
+            return;
+        }
+
+        List<BacktestTradePosition> allPositions = state.getActiveTradePositions();
+
+        BigDecimal totalRemainingQty = allPositions.stream()
+                .map(BacktestTradePosition::getRemainingQty)
+                .map(this::safe)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal realizedPnlAmount = allPositions.stream()
+                .map(BacktestTradePosition::getRealizedPnlAmount)
+                .map(this::safe)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal totalFeeAmount = allPositions.stream()
+                .map(p -> safe(p.getEntryFee()).add(safe(p.getExitFee())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal totalClosedQty = allPositions.stream()
+                .map(BacktestTradePosition::getExitExecutedQty)
+                .map(this::safe)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal totalClosedQuote = allPositions.stream()
+                .map(p -> safe(p.getExitExecutedQuoteQty()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal avgExitPrice = totalClosedQty.compareTo(BigDecimal.ZERO) > 0
+                ? totalClosedQuote.divide(totalClosedQty, 8, RoundingMode.HALF_UP)
+                : null;
+
+        long openCount = allPositions.stream()
+                .filter(p -> STATUS_OPEN.equalsIgnoreCase(p.getStatus()))
+                .count();
+
+        trade.setTotalRemainingQty(totalRemainingQty);
+        trade.setRealizedPnlAmount(realizedPnlAmount);
+        trade.setTotalFeeAmount(totalFeeAmount);
+        trade.setAvgExitPrice(avgExitPrice);
+
+        if (safe(trade.getTotalEntryQuoteQty()).compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal pnlPercent = realizedPnlAmount
+                    .divide(trade.getTotalEntryQuoteQty(), 8, RoundingMode.HALF_UP)
                     .multiply(new BigDecimal("100"));
+            trade.setRealizedPnlPercent(pnlPercent);
         }
 
-        activeTrade.setStatus(STATUS_CLOSED);
-        activeTrade.setExitTime(context.getMarketData().getEndTime());
-        activeTrade.setExitPrice(exitPrice);
-        activeTrade.setExitQty(activeTrade.getEntryQty());
-        activeTrade.setExitQuoteQty(exitQuoteQty);
-        activeTrade.setExitFee(exitFee);
-        activeTrade.setExitReason(decision.getExitReason());
-        activeTrade.setPlAmount(plAmount);
-        activeTrade.setPlPercent(plPercent);
+        if (openCount == 0) {
+            trade.setStatus(STATUS_CLOSED);
+            trade.setExitTime(exitTime);
+            state.getCompletedTrades().add(trade);
+            state.getCompletedTradePositions().addAll(allPositions);
+            state.setActiveTrade(null);
+            state.setActiveTradePositions(new ArrayList<>());
+        } else if (openCount < allPositions.size()) {
+            trade.setStatus(STATUS_PARTIALLY_CLOSED);
+        } else {
+            trade.setStatus(STATUS_OPEN);
+        }
 
-        activeTrade = backtestTradeRepository.save(activeTrade);
-
-        state.setCashBalance(activeTrade.getEntryQuoteQty().add(plAmount));
-        state.getCompletedTrades().add(activeTrade);
-        state.setActiveTrade(null);
+        backtestTradeRepository.save(trade);
     }
 
-    private void updateTrailingStop(BacktestState state, StrategyDecision decision) {
-        BacktestTrade activeTrade = state.getActiveTrade();
-        if (activeTrade == null) {
-            return;
+    private BigDecimal calculatePLAmount(
+            BigDecimal entryPrice,
+            BigDecimal exitPrice,
+            BigDecimal qty,
+            String side
+    ) {
+        if ("SHORT".equalsIgnoreCase(side)) {
+            return entryPrice.subtract(exitPrice).multiply(qty);
+        }
+        return exitPrice.subtract(entryPrice).multiply(qty);
+    }
+
+    private BigDecimal calculatePLPercent(
+            BigDecimal entryPrice,
+            BigDecimal exitPrice,
+            String side
+    ) {
+        if (entryPrice == null || exitPrice == null || entryPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
         }
 
-        activeTrade.setTrailingStopPrice(decision.getTrailingStopPrice());
-        activeTrade.setCurrentStopLossPrice(decision.getStopLossPrice());
-        backtestTradeRepository.save(activeTrade);
+        BigDecimal move = "SHORT".equalsIgnoreCase(side)
+                ? entryPrice.subtract(exitPrice)
+                : exitPrice.subtract(entryPrice);
+
+        return move.divide(entryPrice, 8, RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("100"));
+    }
+
+    private BigDecimal safe(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    private record PlannedPosition(
+            String positionRole,
+            BigDecimal entryQty,
+            BigDecimal entryQuoteQty,
+            BigDecimal entryFee,
+            BigDecimal takeProfitPrice
+    ) {
     }
 }

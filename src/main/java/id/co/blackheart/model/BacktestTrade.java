@@ -2,18 +2,20 @@ package id.co.blackheart.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-@Entity
-@Table(name = "backtest_trade")
 @Getter
 @Setter
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@Entity
+@Table(name = "backtest_trade")
 public class BacktestTrade {
 
     @Id
@@ -24,73 +26,61 @@ public class BacktestTrade {
     @Column(name = "backtest_run_id", nullable = false)
     private UUID backtestRunId;
 
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
+    @Column(name = "user_strategy_id")
+    private UUID userStrategyId;
 
-    @Column(name = "strategy_name", nullable = false, length = 100)
+    @Column(name = "strategy_name", length = 100)
     private String strategyName;
 
-    @Column(name = "interval", nullable = false, length = 10)
+    @Column(name = "interval", length = 20)
     private String interval;
 
-    @Column(name = "asset", nullable = false, length = 20)
+    @Column(name = "exchange", length = 30)
+    private String exchange;
+
+    @Column(name = "asset", length = 30, nullable = false)
     private String asset;
 
-    @Column(name = "side", nullable = false, length = 10)
+    @Column(name = "side", length = 10, nullable = false)
     private String side;
 
-    @Column(name = "status", nullable = false, length = 20)
+    @Column(name = "status", length = 30, nullable = false)
     private String status;
 
-    @Column(name = "entry_time", nullable = false)
-    private LocalDateTime entryTime;
+    @Column(name = "trade_mode", length = 50, nullable = false)
+    private String tradeMode;
 
-    @Column(name = "exit_time")
-    private LocalDateTime exitTime;
+    @Column(name = "avg_entry_price", precision = 24, scale = 8)
+    private BigDecimal avgEntryPrice;
 
-    @Column(name = "entry_price", nullable = false, precision = 24, scale = 12)
-    private BigDecimal entryPrice;
+    @Column(name = "avg_exit_price", precision = 24, scale = 8)
+    private BigDecimal avgExitPrice;
 
-    @Column(name = "exit_price", precision = 24, scale = 12)
-    private BigDecimal exitPrice;
+    @Column(name = "total_entry_qty", precision = 24, scale = 8)
+    private BigDecimal totalEntryQty;
 
-    @Column(name = "entry_qty", nullable = false, precision = 24, scale = 12)
-    private BigDecimal entryQty;
+    @Column(name = "total_entry_quote_qty", precision = 24, scale = 8)
+    private BigDecimal totalEntryQuoteQty;
 
-    @Column(name = "exit_qty", precision = 24, scale = 12)
-    private BigDecimal exitQty;
+    @Column(name = "total_remaining_qty", precision = 24, scale = 8)
+    private BigDecimal totalRemainingQty;
 
-    @Column(name = "entry_quote_qty", nullable = false, precision = 24, scale = 12)
-    private BigDecimal entryQuoteQty;
+    @Column(name = "realized_pnl_amount", precision = 24, scale = 8)
+    private BigDecimal realizedPnlAmount;
 
-    @Column(name = "exit_quote_qty", precision = 24, scale = 12)
-    private BigDecimal exitQuoteQty;
+    @Column(name = "realized_pnl_percent", precision = 24, scale = 8)
+    private BigDecimal realizedPnlPercent;
 
-    @Column(name = "entry_fee", precision = 24, scale = 12)
-    private BigDecimal entryFee;
+    @Column(name = "total_fee_amount", precision = 24, scale = 8)
+    private BigDecimal totalFeeAmount;
 
-    @Column(name = "exit_fee", precision = 24, scale = 12)
-    private BigDecimal exitFee;
+    @Column(name = "total_fee_currency", length = 20)
+    private String totalFeeCurrency;
 
-    @Column(name = "slippage_amount", precision = 24, scale = 12)
-    private BigDecimal slippageAmount;
-
-    @Column(name = "initial_stop_loss_price", precision = 24, scale = 12)
-    private BigDecimal initialStopLossPrice;
-
-    @Column(name = "current_stop_loss_price", precision = 24, scale = 12)
-    private BigDecimal currentStopLossPrice;
-
-    @Column(name = "trailing_stop_price", precision = 24, scale = 12)
-    private BigDecimal trailingStopPrice;
-
-    @Column(name = "take_profit_price", precision = 24, scale = 12)
-    private BigDecimal takeProfitPrice;
-
-    @Column(name = "exit_reason", length = 30)
+    @Column(name = "exit_reason", length = 50)
     private String exitReason;
 
-    @Column(name = "entry_trend_regime", length = 20)
+    @Column(name = "entry_trend_regime", length = 50)
     private String entryTrendRegime;
 
     @Column(name = "entry_adx", precision = 24, scale = 8)
@@ -102,12 +92,17 @@ public class BacktestTrade {
     @Column(name = "entry_rsi", precision = 24, scale = 8)
     private BigDecimal entryRsi;
 
-    @Column(name = "pl_percent", precision = 12, scale = 6)
-    private BigDecimal plPercent;
+    @Column(name = "entry_time", nullable = false)
+    private LocalDateTime entryTime;
 
-    @Column(name = "pl_amount", precision = 24, scale = 12)
-    private BigDecimal plAmount;
+    @Column(name = "exit_time")
+    private LocalDateTime exitTime;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt = LocalDateTime.now();
+    @CreationTimestamp
+    @Column(name = "created_time", nullable = false, updatable = false)
+    private LocalDateTime createdTime;
+
+    @UpdateTimestamp
+    @Column(name = "updated_time", nullable = false)
+    private LocalDateTime updatedTime;
 }

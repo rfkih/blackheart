@@ -9,7 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
+import java.math.BigDecimal;
 
 @Slf4j
 @Service
@@ -28,21 +28,29 @@ public class BacktestService {
         validateRequest(request);
 
         BacktestRun backtestRun = BacktestRun.builder()
-                .userId(request.getUserId())
-                .runName(request.getRunName())
+                .userStrategyId(request.getUserStrategyId())
                 .strategyName(request.getStrategyName())
-                .symbol(request.getSymbol())
+                .asset(request.getAsset())
                 .interval(request.getInterval())
                 .status(STATUS_RUNNING)
                 .startTime(request.getStartTime())
                 .endTime(request.getEndTime())
                 .initialCapital(request.getInitialCapital())
-                .feeRate(request.getFeeRate())
-                .slippageRate(request.getSlippageRate())
-                .allowLong(Boolean.TRUE.equals(request.getAllowLong()))
-                .allowShort(Boolean.TRUE.equals(request.getAllowShort()))
-                .maxOpenPositions(request.getMaxOpenPositions() == null ? 1 : request.getMaxOpenPositions())
-                .createdAt(LocalDateTime.now())
+                .riskPerTradePct(request.getRiskPerTradePct())
+                .feePct(request.getFeeRate())
+                .slippagePct(request.getSlippageRate())
+                .minNotional(request.getMinNotional())
+                .minQty(request.getMinQty())
+                .qtyStep(request.getQtyStep())
+                .totalTrades(0)
+                .totalWins(0)
+                .totalLosses(0)
+                .winRate(BigDecimal.ZERO)
+                .grossProfit(BigDecimal.ZERO)
+                .grossLoss(BigDecimal.ZERO)
+                .netProfit(BigDecimal.ZERO)
+                .maxDrawdownPct(BigDecimal.ZERO)
+                .endingBalance(request.getInitialCapital())
                 .build();
 
         backtestRun = backtestRunRepository.save(backtestRun);
@@ -51,16 +59,25 @@ public class BacktestService {
             BacktestExecutionSummary summary = backtestCoordinatorService.execute(backtestRun);
 
             backtestRun.setStatus(STATUS_COMPLETED);
-            backtestRun.setFinalCapital(summary.getFinalCapital());
+            backtestRun.setEndingBalance(summary.getFinalCapital());
             backtestRun.setTotalTrades(summary.getTotalTrades());
-            backtestRun.setWinningTrades(summary.getWinningTrades());
-            backtestRun.setLosingTrades(summary.getLosingTrades());
+            backtestRun.setTotalWins(summary.getWinningTrades());
+            backtestRun.setTotalLosses(summary.getLosingTrades());
             backtestRun.setWinRate(summary.getWinRate());
-            backtestRun.setProfitFactor(summary.getProfitFactor());
-            backtestRun.setMaxDrawdownPercent(summary.getMaxDrawdownPercent());
-            backtestRun.setTotalReturnPercent(summary.getTotalReturnPercent());
-            backtestRun.setSharpeRatio(summary.getSharpeRatio());
-            backtestRun.setUpdatedAt(LocalDateTime.now());
+            backtestRun.setMaxDrawdownPct(summary.getMaxDrawdownPercent());
+
+            BigDecimal netProfit = summary.getFinalCapital().subtract(backtestRun.getInitialCapital());
+            backtestRun.setNetProfit(netProfit);
+
+            // best-effort mapping from summary
+            // if you later add grossProfit/grossLoss to BacktestExecutionSummary, set them directly
+            if (netProfit.compareTo(BigDecimal.ZERO) >= 0) {
+                backtestRun.setGrossProfit(netProfit);
+                backtestRun.setGrossLoss(BigDecimal.ZERO);
+            } else {
+                backtestRun.setGrossProfit(BigDecimal.ZERO);
+                backtestRun.setGrossLoss(netProfit.abs());
+            }
 
             backtestRun = backtestRunRepository.save(backtestRun);
 
@@ -70,7 +87,6 @@ public class BacktestService {
             log.error("Backtest failed | backtestRunId={}", backtestRun.getBacktestRunId(), e);
 
             backtestRun.setStatus(STATUS_FAILED);
-            backtestRun.setUpdatedAt(LocalDateTime.now());
             backtestRunRepository.save(backtestRun);
 
             throw e;
@@ -81,14 +97,14 @@ public class BacktestService {
         if (request == null) {
             throw new IllegalArgumentException("BacktestRunRequest cannot be null");
         }
-        if (request.getUserId() == null) {
-            throw new IllegalArgumentException("userId cannot be null");
+        if (request.getUserStrategyId() == null) {
+            throw new IllegalArgumentException("userStrategyId cannot be null");
         }
         if (request.getStrategyName() == null || request.getStrategyName().isBlank()) {
             throw new IllegalArgumentException("strategyName cannot be blank");
         }
-        if (request.getSymbol() == null || request.getSymbol().isBlank()) {
-            throw new IllegalArgumentException("symbol cannot be blank");
+        if (request.getAsset() == null || request.getAsset().isBlank()) {
+            throw new IllegalArgumentException("asset cannot be blank");
         }
         if (request.getInterval() == null || request.getInterval().isBlank()) {
             throw new IllegalArgumentException("interval cannot be blank");

@@ -2,18 +2,20 @@ package id.co.blackheart.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-@Entity
-@Table(name = "backtest_run")
 @Getter
 @Setter
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@Entity
+@Table(name = "backtest_run")
 public class BacktestRun {
 
     @Id
@@ -21,23 +23,17 @@ public class BacktestRun {
     @Column(name = "backtest_run_id", nullable = false, updatable = false)
     private UUID backtestRunId;
 
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
+    @Column(name = "user_strategy_id")
+    private UUID userStrategyId;
 
-    @Column(name = "run_name", length = 100)
-    private String runName;
-
-    @Column(name = "strategy_name", nullable = false, length = 100)
+    @Column(name = "strategy_name", length = 100, nullable = false)
     private String strategyName;
 
-    @Column(name = "symbol", nullable = false, length = 20)
-    private String symbol;
+    @Column(name = "asset", length = 30, nullable = false)
+    private String asset;
 
-    @Column(name = "interval", nullable = false, length = 10)
+    @Column(name = "interval", length = 20, nullable = false)
     private String interval;
-
-    @Column(name = "status", nullable = false, length = 20)
-    private String status;
 
     @Column(name = "start_time", nullable = false)
     private LocalDateTime startTime;
@@ -45,57 +41,62 @@ public class BacktestRun {
     @Column(name = "end_time", nullable = false)
     private LocalDateTime endTime;
 
-    @Column(name = "initial_capital", nullable = false, precision = 24, scale = 12)
+    @Column(name = "initial_capital", precision = 24, scale = 8, nullable = false)
     private BigDecimal initialCapital;
 
-    @Column(name = "final_capital", precision = 24, scale = 12)
-    private BigDecimal finalCapital;
+    @Column(name = "risk_per_trade_pct", precision = 12, scale = 6)
+    private BigDecimal riskPerTradePct;
 
-    @Column(name = "fee_rate", nullable = false, precision = 12, scale = 8)
-    private BigDecimal feeRate;
+    @Column(name = "fee_pct", precision = 12, scale = 6)
+    private BigDecimal feePct;
 
-    @Column(name = "slippage_rate", nullable = false, precision = 12, scale = 8)
-    private BigDecimal slippageRate;
+    @Column(name = "slippage_pct", precision = 12, scale = 6)
+    private BigDecimal slippagePct;
 
-    @Column(name = "allow_long", nullable = false)
-    private Boolean allowLong;
+    @Column(name = "min_notional", precision = 24, scale = 8)
+    private BigDecimal minNotional;
 
-    @Column(name = "allow_short", nullable = false)
-    private Boolean allowShort;
+    @Column(name = "min_qty", precision = 24, scale = 8)
+    private BigDecimal minQty;
 
-    @Column(name = "max_open_positions", nullable = false)
-    private Integer maxOpenPositions;
+    @Column(name = "qty_step", precision = 24, scale = 8)
+    private BigDecimal qtyStep;
 
     @Column(name = "total_trades")
     private Integer totalTrades;
 
-    @Column(name = "winning_trades")
-    private Integer winningTrades;
+    @Column(name = "total_wins")
+    private Integer totalWins;
 
-    @Column(name = "losing_trades")
-    private Integer losingTrades;
+    @Column(name = "total_losses")
+    private Integer totalLosses;
 
     @Column(name = "win_rate", precision = 12, scale = 6)
     private BigDecimal winRate;
 
-    @Column(name = "profit_factor", precision = 24, scale = 12)
-    private BigDecimal profitFactor;
+    @Column(name = "gross_profit", precision = 24, scale = 8)
+    private BigDecimal grossProfit;
 
-    @Column(name = "max_drawdown_percent", precision = 12, scale = 6)
-    private BigDecimal maxDrawdownPercent;
+    @Column(name = "gross_loss", precision = 24, scale = 8)
+    private BigDecimal grossLoss;
 
-    @Column(name = "total_return_percent", precision = 12, scale = 6)
-    private BigDecimal totalReturnPercent;
+    @Column(name = "net_profit", precision = 24, scale = 8)
+    private BigDecimal netProfit;
 
-    @Column(name = "sharpe_ratio", precision = 12, scale = 6)
-    private BigDecimal sharpeRatio;
+    @Column(name = "max_drawdown_pct", precision = 12, scale = 6)
+    private BigDecimal maxDrawdownPct;
 
-    @Column(name = "config_json", columnDefinition = "TEXT")
-    private String configJson;
+    @Column(name = "ending_balance", precision = 24, scale = 8)
+    private BigDecimal endingBalance;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt = LocalDateTime.now();
+    @Column(name = "status", length = 30, nullable = false)
+    private String status;
 
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
+    @CreationTimestamp
+    @Column(name = "created_time", nullable = false, updatable = false)
+    private LocalDateTime createdTime;
+
+    @UpdateTimestamp
+    @Column(name = "updated_time", nullable = false)
+    private LocalDateTime updatedTime;
 }

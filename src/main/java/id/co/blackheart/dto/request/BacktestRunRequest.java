@@ -15,17 +15,21 @@ import java.util.UUID;
 @AllArgsConstructor
 public class BacktestRunRequest {
 
-    private UUID userId;
-    private String runName;
-    private String symbol;
-    private String interval;
+    private UUID userStrategyId;
+
     private String strategyName;
+    private String asset;
+    private String interval;
+
     private LocalDateTime startTime;
     private LocalDateTime endTime;
+
     private BigDecimal initialCapital;
+    private BigDecimal riskPerTradePct;
     private BigDecimal feeRate;
     private BigDecimal slippageRate;
-    private Boolean allowLong;
-    private Boolean allowShort;
-    private Integer maxOpenPositions;
+
+    private BigDecimal minNotional;
+    private BigDecimal minQty;
+    private BigDecimal qtyStep;
 }

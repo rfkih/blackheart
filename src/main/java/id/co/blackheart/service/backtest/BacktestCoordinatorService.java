@@ -8,21 +8,20 @@ import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.tradelistener.ListenerContext;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
 import id.co.blackheart.model.BacktestRun;
+import id.co.blackheart.model.BacktestTradePosition;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
-import id.co.blackheart.model.Users;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
-import id.co.blackheart.repository.UsersRepository;
 import id.co.blackheart.service.strategy.StrategyExecutor;
 import id.co.blackheart.service.strategy.StrategyExecutorFactory;
-import id.co.blackheart.service.strategy.TrendFollowingStrategyService;
 import id.co.blackheart.service.tradelistener.TradeListenerService;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
@@ -39,10 +38,8 @@ public class BacktestCoordinatorService {
     private static final String MONITOR_INTERVAL = "15m";
     private static final String BIAS_INTERVAL = "4h";
 
-    private final UsersRepository usersRepository;
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
-    private final TrendFollowingStrategyService trendFollowingStrategyService;
     private final StrategyExecutorFactory strategyExecutorFactory;
     private final TradeListenerService tradeListenerService;
     private final BacktestTradeExecutorService backtestTradeExecutorService;
@@ -53,30 +50,25 @@ public class BacktestCoordinatorService {
     public BacktestExecutionSummary execute(BacktestRun backtestRun) {
         validateBacktestRun(backtestRun);
 
-        Users user = usersRepository.findByUserId(backtestRun.getUserId());
-        if (user == null) {
-            throw new IllegalArgumentException("User not found for id: " + backtestRun.getUserId());
-        }
-
         String strategyInterval = backtestRun.getInterval();
         boolean use4hBiasFor15m = MONITOR_INTERVAL.equalsIgnoreCase(strategyInterval);
 
         List<MarketData> monitorCandles = marketDataRepository.findBySymbolIntervalAndRange(
-                backtestRun.getSymbol(),
+                backtestRun.getAsset(),
                 MONITOR_INTERVAL,
                 backtestRun.getStartTime(),
                 backtestRun.getEndTime()
         );
 
         List<MarketData> strategyCandles = marketDataRepository.findBySymbolIntervalAndRange(
-                backtestRun.getSymbol(),
+                backtestRun.getAsset(),
                 strategyInterval,
                 backtestRun.getStartTime(),
                 backtestRun.getEndTime()
         );
 
         List<FeatureStore> strategyFeatures = featureStoreRepository.findBySymbolIntervalAndRange(
-                backtestRun.getSymbol(),
+                backtestRun.getAsset(),
                 strategyInterval,
                 backtestRun.getStartTime(),
                 backtestRun.getEndTime()
@@ -115,14 +107,14 @@ public class BacktestCoordinatorService {
 
         if (use4hBiasFor15m) {
             biasCandles = marketDataRepository.findBySymbolIntervalAndRange(
-                    backtestRun.getSymbol(),
+                    backtestRun.getAsset(),
                     BIAS_INTERVAL,
                     backtestRun.getStartTime(),
                     backtestRun.getEndTime()
             );
 
             List<FeatureStore> biasFeatures = featureStoreRepository.findBySymbolIntervalAndRange(
-                    backtestRun.getSymbol(),
+                    backtestRun.getAsset(),
                     BIAS_INTERVAL,
                     backtestRun.getStartTime(),
                     backtestRun.getEndTime()
@@ -153,12 +145,11 @@ public class BacktestCoordinatorService {
         BacktestState state = BacktestState.initial(backtestRun);
 
         for (MarketData monitorCandle : monitorCandles) {
-            boolean closedByListener = handleListenerStep(backtestRun, user, state, monitorCandle);
+            boolean anyPositionClosed = handleListenerStep(backtestRun, state, monitorCandle);
 
-            if (!closedByListener) {
+            if (!anyPositionClosed) {
                 handleStrategyStep(
                         backtestRun,
-                        user,
                         state,
                         strategyInterval,
                         strategyCandleByEndTime,
@@ -172,58 +163,62 @@ public class BacktestCoordinatorService {
             backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
         }
 
+        forceCloseRemainingOpenTrade(backtestRun, state, monitorCandles.get(monitorCandles.size() - 1));
+        backtestStateService.updateEquityAndDrawdown(state, monitorCandles.get(monitorCandles.size() - 1).getClosePrice());
+
         return backtestMetricsService.buildSummary(backtestRun, state);
     }
 
     private boolean handleListenerStep(
             BacktestRun backtestRun,
-            Users user,
             BacktestState state,
             MarketData monitorCandle
     ) {
-        if (state.getActiveTrade() == null) {
+        if (state.getActiveTrade() == null
+                || state.getActiveTradePositions() == null
+                || state.getActiveTradePositions().isEmpty()) {
             return false;
         }
 
-        PositionSnapshot positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade());
+        boolean anyClosed = false;
 
-        ListenerContext listenerContext = ListenerContext.builder()
-                .asset(backtestRun.getSymbol())
-                .interval(MONITOR_INTERVAL)
-                .positionSnapshot(positionSnapshot)
-                .monitorCandle(monitorCandle)
-                .build();
+        for (BacktestTradePosition position : state.getActiveTradePositions()) {
+            if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
+                continue;
+            }
 
-        ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
+            PositionSnapshot snapshot = backtestPositionSnapshotMapper.toSnapshot(position);
 
-        if (!listenerDecision.isTriggered()) {
-            return false;
+            ListenerContext listenerContext = ListenerContext.builder()
+                    .asset(backtestRun.getAsset())
+                    .interval(MONITOR_INTERVAL)
+                    .positionSnapshot(snapshot)
+                    .latestPrice(monitorCandle.getClosePrice())
+                    .build();
+
+            ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
+
+            if (!listenerDecision.isTriggered()) {
+                continue;
+            }
+
+            backtestTradeExecutorService.closeSinglePositionFromListener(
+                    backtestRun,
+                    state,
+                    position,
+                    listenerDecision.getExitPrice(),
+                    listenerDecision.getExitReason(),
+                    monitorCandle.getEndTime()
+            );
+
+            anyClosed = true;
         }
 
-        StrategyContext listenerCloseContext = StrategyContext.builder()
-                .user(user)
-                .asset(backtestRun.getSymbol())
-                .interval(MONITOR_INTERVAL)
-                .marketData(monitorCandle)
-                .featureStore(null)
-                .positionSnapshot(positionSnapshot)
-                .build();
-
-
-        backtestTradeExecutorService.closeTradeFromListener(
-                backtestRun,
-                state,
-                listenerCloseContext,
-                listenerDecision.getExitReason(),
-                listenerDecision.getExitPrice()
-        );
-
-        return true;
+        return anyClosed;
     }
 
     private void handleStrategyStep(
             BacktestRun backtestRun,
-            Users user,
             BacktestState state,
             String strategyInterval,
             Map<LocalDateTime, MarketData> strategyCandleByEndTime,
@@ -240,7 +235,7 @@ public class BacktestCoordinatorService {
         FeatureStore strategyFeature = strategyFeatureByStartTime.get(strategyCandle.getStartTime());
         if (strategyFeature == null) {
             log.warn("FeatureStore missing for symbol={} interval={} startTime={}",
-                    backtestRun.getSymbol(),
+                    backtestRun.getAsset(),
                     strategyInterval,
                     strategyCandle.getStartTime());
             return;
@@ -254,47 +249,119 @@ public class BacktestCoordinatorService {
 
             if (biasMarketData == null) {
                 log.warn("Bias market data missing for symbol={} biasInterval={} monitorEndTime={}",
-                        backtestRun.getSymbol(), BIAS_INTERVAL, monitorCandle.getEndTime());
+                        backtestRun.getAsset(), BIAS_INTERVAL, monitorCandle.getEndTime());
                 return;
             }
 
             biasFeatureStore = biasFeatureByStartTime.get(biasMarketData.getStartTime());
             if (biasFeatureStore == null) {
                 log.warn("Bias feature store missing for symbol={} biasInterval={} startTime={}",
-                        backtestRun.getSymbol(), BIAS_INTERVAL, biasMarketData.getStartTime());
+                        backtestRun.getAsset(), BIAS_INTERVAL, biasMarketData.getStartTime());
                 return;
             }
         }
 
-        PositionSnapshot positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(state.getActiveTrade());
+        PositionSnapshot positionSnapshot;
+        if (state.getActiveTrade() == null || state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
+            positionSnapshot = PositionSnapshot.builder()
+                    .hasOpenPosition(false)
+                    .build();
+        } else {
+            List<BacktestTradePosition> openPositions = state.getActiveTradePositions().stream()
+                    .filter(p -> "OPEN".equalsIgnoreCase(p.getStatus()))
+                    .toList();
+
+            if (openPositions.isEmpty()) {
+                positionSnapshot = PositionSnapshot.builder()
+                        .hasOpenPosition(false)
+                        .build();
+            } else {
+                positionSnapshot = backtestPositionSnapshotMapper.toSnapshot(
+                        state.getActiveTrade(),
+                        openPositions
+                );
+            }
+        }
 
         StrategyContext strategyContext = StrategyContext.builder()
-                .user(user)
-                .asset(backtestRun.getSymbol())
+                .user(null)
+                .asset(backtestRun.getAsset())
                 .interval(strategyInterval)
+                .userStrategyId(backtestRun.getUserStrategyId())
+                .strategyCode(backtestRun.getStrategyName())
                 .marketData(strategyCandle)
                 .featureStore(strategyFeature)
+                .cashBalance(state.getCashBalance())
+                .assetBalance(resolveSyntheticAssetBalanceForBacktest(state, strategyCandle))
+                .riskPerTradePct(backtestRun.getRiskPerTradePct())
                 .biasMarketData(biasMarketData)
                 .biasFeatureStore(biasFeatureStore)
-                .allowLong(backtestRun.getAllowLong())
-                .allowShort(backtestRun.getAllowShort())
+                .allowLong(true)
+                .allowShort(true)
                 .positionSnapshot(positionSnapshot)
                 .build();
-
 
         StrategyExecutor executor = strategyExecutorFactory.get(backtestRun.getStrategyName());
         StrategyDecision decision = executor.execute(strategyContext);
 
-        if (!DecisionType.HOLD.equals(decision.getDecisionType())) {
-            log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
-                    backtestRun.getBacktestRunId(),
-                    strategyCandle.getEndTime(),
-                    strategyInterval,
-                    decision.getDecisionType(),
-                    decision.getReason());
-        }
+//        if (decision != null && !DecisionType.HOLD.equals(decision.getDecisionType())) {
+//            log.info("Backtest strategy decision | runId={} time={} strategyInterval={} decisionType={} reason={}",
+//                    backtestRun.getBacktestRunId(),
+//                    strategyCandle.getEndTime(),
+//                    strategyInterval,
+//                    decision.getDecisionType(),
+//                    decision.getReason());
+//        }
 
         backtestTradeExecutorService.execute(backtestRun, state, strategyContext, decision);
+    }
+
+    private void forceCloseRemainingOpenTrade(
+            BacktestRun backtestRun,
+            BacktestState state,
+            MarketData finalCandle
+    ) {
+        if (state.getActiveTrade() == null
+                || state.getActiveTradePositions() == null
+                || state.getActiveTradePositions().isEmpty()
+                || finalCandle == null) {
+            return;
+        }
+
+        for (BacktestTradePosition position : state.getActiveTradePositions()) {
+            if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
+                continue;
+            }
+
+            backtestTradeExecutorService.closeSinglePositionFromListener(
+                    backtestRun,
+                    state,
+                    position,
+                    finalCandle.getClosePrice(),
+                    "FORCED_END_OF_BACKTEST_CLOSE",
+                    finalCandle.getEndTime()
+            );
+        }
+    }
+
+    private BigDecimal resolveSyntheticAssetBalanceForBacktest(
+            BacktestState state,
+            MarketData strategyCandle
+    ) {
+        if (state == null || strategyCandle == null || strategyCandle.getClosePrice() == null) {
+            return BigDecimal.ZERO;
+        }
+
+        if (state.getCashBalance() == null || state.getCashBalance().compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        if (strategyCandle.getClosePrice().compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+
+        return state.getCashBalance()
+                .divide(strategyCandle.getClosePrice(), 12, java.math.RoundingMode.DOWN);
     }
 
     private MarketData resolveLatestCompletedBiasCandle(
@@ -324,12 +391,8 @@ public class BacktestCoordinatorService {
             throw new IllegalArgumentException("Backtest run must not be null");
         }
 
-        if (backtestRun.getUserId() == null) {
-            throw new IllegalArgumentException("Backtest userId must not be null");
-        }
-
-        if (backtestRun.getSymbol() == null || backtestRun.getSymbol().isBlank()) {
-            throw new IllegalArgumentException("Backtest symbol must not be blank");
+        if (backtestRun.getAsset() == null || backtestRun.getAsset().isBlank()) {
+            throw new IllegalArgumentException("Backtest asset must not be blank");
         }
 
         if (backtestRun.getInterval() == null || backtestRun.getInterval().isBlank()) {

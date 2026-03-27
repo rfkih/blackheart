@@ -1,6 +1,6 @@
 package id.co.blackheart.controller;
 
-import id.co.blackheart.service.marketdata.HistoricalWarmupService;
+import id.co.blackheart.service.marketdata.HistoricalDataService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -11,14 +11,14 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class HistoricalWarmupController {
 
-    private final HistoricalWarmupService historicalWarmupService;
+    private final HistoricalDataService historicalDataService;
 
     @PostMapping("/warmup")
     public Map<String, Object> warmupHistoricalData(
             @RequestParam String symbol,
             @RequestParam String interval
     ) {
-        historicalWarmupService.backfillLastCandlesAndFeatures(symbol, interval);
+        historicalDataService.backfillLastCandlesAndFeatures(symbol, interval);
 
         return Map.of(
                 "success", true,
