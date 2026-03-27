@@ -29,6 +29,56 @@ public class CacheService {
         this.redisTemplate = redisTemplate;
     }
 
+    public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
+        if (symbol == null || price == null) {
+            return;
+        }
+
+        String key = "latestPrice:" + symbol;
+
+        Map<String, Object> value = new HashMap<>();
+        value.put("symbol", symbol);
+        value.put("price", price.toPlainString());
+        value.put("updatedAt", updatedAt == null ? null : updatedAt.toString());
+
+        redisTemplate.delete(key);
+        redisTemplate.opsForHash().putAll(key, value);
+    }
+
+    public BigDecimal getLatestPrice(String symbol) {
+        if (symbol == null) {
+            return null;
+        }
+
+        String key = "latestPrice:" + symbol;
+        Object value = redisTemplate.opsForHash().get(key, "price");
+
+        if (value == null) {
+            return null;
+        }
+
+        try {
+            return new BigDecimal(String.valueOf(value));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to parse latest price for symbol: " + symbol, e);
+        }
+    }
+
+    public LocalDateTime getLatestPriceUpdatedAt(String symbol) {
+        if (symbol == null) {
+            return null;
+        }
+
+        String key = "latestPrice:" + symbol;
+        Object value = redisTemplate.opsForHash().get(key, "updatedAt");
+
+        if (value == null) {
+            return null;
+        }
+
+        return LocalDateTime.parse(String.valueOf(value));
+    }
+
     public void cacheActiveTrade(UUID tradeId, Trades trade) {
         String tradeKey = TRADE_KEY_PREFIX + tradeId;
 

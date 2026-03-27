@@ -5,6 +5,7 @@ import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.UserStrategyRepository;
 import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.service.cache.CacheService;
 import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
 import id.co.blackheart.service.marketdata.MarketDataService;
@@ -57,7 +58,7 @@ public class BinanceWebSocketClient {
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
     private final UserStrategyRepository userStrategyRepository;
-    private final PortfolioService portfolioService;
+    private final CacheService cacheService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
@@ -165,6 +166,7 @@ public class BinanceWebSocketClient {
             BigDecimal latestPrice =  new BigDecimal(kline.getString("c"));
 
             if ("15m".equals(interval)) {
+                cacheService.saveLatestPrice(SYMBOL, latestPrice, LocalDateTime.now());
                 liveTradeListenerService.process(SYMBOL, latestPrice);
             }
 
