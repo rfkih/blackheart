@@ -1,6 +1,5 @@
 package id.co.blackheart.config;
 
-
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,10 +19,10 @@ import static org.springframework.security.config.Customizer.withDefaults;
 @EnableWebSecurity
 public class SecurityConfig {
 
-    @Value("admin")
+    @Value("${app.security.username:admin}")
     private String username;
 
-    @Value("admin")
+    @Value("${app.security.password:admin}")
     private String password;
 
     @Bean
@@ -33,6 +32,7 @@ public class SecurityConfig {
                 .password(passwordEncoder().encode(password))
                 .roles("USER")
                 .build();
+
         return new InMemoryUserDetailsManager(user);
     }
 
@@ -43,14 +43,17 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        return http.csrf(AbstractHttpConfigurer::disable)
+        return http
+                .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/healthcheck"
-                        )
-                        .permitAll()
-                        .anyRequest()
-                        .authenticated())
-                .httpBasic(withDefaults()).build();
+                        .requestMatchers(
+                                "/healthcheck",
+                                "/ws",
+                                "/ws/**"
+                        ).permitAll()
+                        .anyRequest().authenticated()
+                )
+                .httpBasic(withDefaults())
+                .build();
     }
-
 }
