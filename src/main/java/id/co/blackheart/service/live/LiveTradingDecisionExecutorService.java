@@ -192,7 +192,7 @@ public class LiveTradingDecisionExecutorService {
         }
 
         log.info(
-                "SHORT entry sizing | usdtBalance={} riskAmount={} tradeQuoteNotional={}",
+                "SHORT entry sizing | btcBalance={} riskAmount={} tradeQuoteNotional={}",
                 balance,
                 user.getRiskAmount(),
                 tradeAmount
