@@ -16,5 +16,5 @@ import java.time.LocalDateTime;
 public class LatestPriceResponse {
     private String symbol;
     private BigDecimal price;
-    private LocalDateTime updatedAt;
+    private long updatedAt;
 }
