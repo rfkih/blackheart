@@ -1,15 +1,13 @@
 package id.co.blackheart.stream;
 
 import id.co.blackheart.model.*;
-import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
-import id.co.blackheart.repository.UserStrategyRepository;
-import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.repository.AccountStrategyRepository;
+import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.service.cache.CacheService;
 import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
 import id.co.blackheart.service.marketdata.MarketDataService;
-import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -52,12 +50,12 @@ public class BinanceWebSocketClient {
     private static final ZoneId UTC = ZoneId.of("UTC");
 
     private final MarketDataRepository marketDataRepository;
-    private final UsersRepository usersRepository;
+    private final AccountRepository accountRepository;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
-    private final UserStrategyRepository userStrategyRepository;
+    private final AccountStrategyRepository accountStrategyRepository;
     private final CacheService cacheService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
@@ -282,12 +280,12 @@ public class BinanceWebSocketClient {
         }
 
         if (featureStore != null) {
-            List<UserStrategy> activeStrategies = userStrategyRepository
+            List<AccountStrategy> activeStrategies = accountStrategyRepository
                     .findByEnabledTrueAndIntervalName(interval);
 
-            for (UserStrategy userStrategy : activeStrategies) {
+            for (AccountStrategy accountStrategy : activeStrategies) {
                 try {
-                    Users user = usersRepository.findByUserId(userStrategy.getUserId());
+                    Account user = accountRepository.findByAccountId(accountStrategy.getAccountId()).orElse(null);
 
                     if (user == null || !"1".equals(user.getIsActive())) {
                         continue;
@@ -295,7 +293,7 @@ public class BinanceWebSocketClient {
 
                     liveTradingCoordinatorService.process(
                             user,
-                            userStrategy,
+                            accountStrategy,
                             SYMBOL,
                             interval,
                             marketData,
@@ -304,8 +302,8 @@ public class BinanceWebSocketClient {
 
                 } catch (Exception e) {
                     log.error(
-                            "Live strategy execution failed | userStrategyId={} symbol={} interval={}",
-                            userStrategy.getUserStrategyId(),
+                            "Live strategy execution failed | accountStrategyId={} symbol={} interval={}",
+                            accountStrategy.getAccountStrategyId(),
                             SYMBOL,
                             interval,
                             e

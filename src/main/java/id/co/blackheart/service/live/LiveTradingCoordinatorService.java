@@ -8,8 +8,8 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.UserStrategy;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.AccountStrategy;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.PortfolioRepository;
@@ -44,16 +44,16 @@ public class LiveTradingCoordinatorService {
     private final PortfolioRepository portfolioRepository;
 
     public void process(
-            Users user,
-            UserStrategy userStrategy,
+            Account account,
+            AccountStrategy accountStrategy,
             String asset,
             String interval,
             MarketData marketData,
             FeatureStore featureStore
     ) {
-        String strategyCode = userStrategy.getStrategyCode();
+        String strategyCode = accountStrategy.getStrategyCode();
 
-        if (!interval.equals(userStrategy.getIntervalName())) {
+        if (!interval.equals(accountStrategy.getIntervalName())) {
             return;
         }
 
@@ -62,8 +62,8 @@ public class LiveTradingCoordinatorService {
 
             AssetPair assetPair = resolveAssetPair(asset);
 
-            List<Portfolio> portfolios = portfolioRepository.findAllByUserIdAndAssetIn(
-                    user.getUserId(),
+            List<Portfolio> portfolios = portfolioRepository.findAllByAccountIdAndAssetIn(
+                    account.getAccountId(),
                     List.of(assetPair.baseAsset(), assetPair.quoteAsset())
             );
 
@@ -83,8 +83,8 @@ public class LiveTradingCoordinatorService {
             }
 
             List<Trades> activeTrades = tradesRepository.findAllActiveTrades(
-                    user.getUserId(),
-                    userStrategy.getUserStrategyId(),
+                    account.getAccountId(),
+                    accountStrategy.getAccountStrategyId(),
                     asset,
                     interval,
                     ACTIVE_PARENT_STATUSES
@@ -110,7 +110,7 @@ public class LiveTradingCoordinatorService {
             }
 
             StrategyContext context = StrategyContext.builder()
-                    .user(user)
+                    .account(account)
                     .asset(asset)
                     .interval(interval)
                     .marketData(marketData)
@@ -121,22 +121,22 @@ public class LiveTradingCoordinatorService {
                     .positionSnapshot(positionSnapshot)
                     .cashBalance(cashBalance)
                     .assetBalance(assetBalance)
-                    .riskPerTradePct(user.getRiskAmount())
-                    .userStrategyId(userStrategy.getUserStrategyId())
-                    .strategyCode(userStrategy.getStrategyCode())
+                    .riskPerTradePct(account.getRiskAmount())
+                    .accountStrategyId(accountStrategy.getAccountStrategyId())
+                    .strategyCode(accountStrategy.getStrategyCode())
                     .biasFeatureStore(biasFeatureStore)
                     .biasMarketData(biasMarketData)
-                    .allowLong(Boolean.TRUE.equals(userStrategy.getAllowLong()))
-                    .allowShort(Boolean.TRUE.equals(userStrategy.getAllowShort()))
-                    .maxOpenPositions(userStrategy.getMaxOpenPositions())
+                    .allowLong(Boolean.TRUE.equals(accountStrategy.getAllowLong()))
+                    .allowShort(Boolean.TRUE.equals(accountStrategy.getAllowShort()))
+                    .maxOpenPositions(accountStrategy.getMaxOpenPositions())
                     .currentOpenTradeCount(activeTrades.size())
                     .build();
 
             StrategyDecision decision = executor.execute(context);
 
             log.info(
-                    "Strategy decision | userId={} strategy={} asset={} interval={} decisionType={} reason={} cashBalance={} assetBalance={}",
-                    user.getUserId(),
+                    "Strategy decision | accountId={} strategy={} asset={} interval={} decisionType={} reason={} cashBalance={} assetBalance={}",
+                    account.getAccountId(),
                     strategyCode,
                     asset,
                     interval,
@@ -154,8 +154,8 @@ public class LiveTradingCoordinatorService {
 
         } catch (Exception e) {
             log.error(
-                    "Live trading coordinator failed | userId={} strategy={} asset={} interval={}",
-                    user.getUserId(),
+                    "Live trading coordinator failed | accountId={} strategy={} asset={} interval={}",
+                    account.getAccountId(),
                     strategyCode,
                     asset,
                     interval,

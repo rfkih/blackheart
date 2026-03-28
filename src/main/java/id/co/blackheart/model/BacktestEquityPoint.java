@@ -23,8 +23,8 @@ public class BacktestEquityPoint {
     @Column(name = "backtest_run_id", nullable = false)
     private UUID backtestRunId;
 
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
+    @Column(name = "account_id", nullable = false)
+    private UUID accountId;
 
     @Column(name = "point_time", nullable = false)
     private LocalDateTime pointTime;

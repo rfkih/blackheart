@@ -15,7 +15,7 @@ import java.util.UUID;
 @AllArgsConstructor
 public class BacktestRunRequest {
 
-    private UUID userStrategyId;
+    private UUID accountStrategyId;
 
     private String strategyName;
     private String asset;

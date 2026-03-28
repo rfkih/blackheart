@@ -24,8 +24,8 @@ public class Portfolio {
     @Column(name = "portfolio_id", nullable = false, updatable = false)
     private UUID portfolioId;
 
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
+    @Column(name = "account_id", nullable = false)
+    private UUID accountId;
 
     @Column(name = "asset", nullable = false, length = 10)
     private String asset;

@@ -29,8 +29,8 @@ public class BacktestTradePosition {
     @Column(name = "backtest_run_id", nullable = false)
     private UUID backtestRunId;
 
-    @Column(name = "user_strategy_id")
-    private UUID userStrategyId;
+    @Column(name = "account_strategy_id")
+    private UUID accountStrategyId;
 
     @Column(name = "asset", length = 30, nullable = false)
     private String asset;

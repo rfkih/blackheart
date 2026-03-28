@@ -17,7 +17,7 @@ public class BacktestRunResponse {
 
     private UUID backtestRunId;
 
-    private UUID userStrategyId;
+    private UUID accountStrategyId;
 
     private String strategyName;
 

@@ -19,8 +19,8 @@ public class LivePnlWebSocketController {
 
     @MessageMapping("/pnl.subscribe")
     public void subscribe(SubscribePnlRequest request) {
-        if (request != null && request.getUserId() != null) {
-            subscriptionRegistry.addUser(request.getUserId());
+        if (request != null && request.getAccountId() != null) {
+            subscriptionRegistry.addAccount(request.getAccountId());
         }
     }
 
@@ -28,6 +28,6 @@ public class LivePnlWebSocketController {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class SubscribePnlRequest {
-        private UUID userId;
+        private UUID accountId;
     }
 }

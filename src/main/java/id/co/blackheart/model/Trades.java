@@ -23,11 +23,11 @@ public class Trades {
     @Column(name = "trade_id", nullable = false, updatable = false)
     private UUID tradeId;
 
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
+    @Column(name = "account_id", nullable = false)
+    private UUID accountId;
 
-    @Column(name = "user_strategy_id", nullable = false)
-    private UUID userStrategyId;
+    @Column(name = "account_strategy_id", nullable = false)
+    private UUID accountStrategyId;
 
     @Column(name = "strategy_name", nullable = false, length = 100)
     private String strategyName;

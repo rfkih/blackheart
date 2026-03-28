@@ -7,7 +7,7 @@ import id.co.blackheart.dto.tradelistener.ListenerDecision;
 import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
@@ -49,15 +49,15 @@ public class LiveTradingDecisionExecutorService {
             case OPEN_LONG -> executeOpenLong(context, decision);
             case OPEN_SHORT -> executeOpenShort(context, decision);
             case UPDATE_POSITION_MANAGEMENT -> executeUpdatePositionManagement(activeTrade, decision);
-            case CLOSE_LONG  -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
-            case CLOSE_SHORT -> executeCloseTrade(activeTrade, context.getUser(), decision.getExitReason());
+            case CLOSE_LONG  -> executeCloseTrade(activeTrade, context.getAccount(), decision.getExitReason());
+            case CLOSE_SHORT -> executeCloseTrade(activeTrade, context.getAccount(), decision.getExitReason());
             case HOLD -> log.debug("No execution for HOLD");
             default -> log.debug("Decision type not handled yet: {}", decision.getDecisionType());
         }
     }
 
     public void executeListenerClosePosition(
-            Users user,
+            Account user,
             TradePosition activeTradePosition,
             String asset,
             ListenerDecision listenerDecision
@@ -86,7 +86,7 @@ public class LiveTradingDecisionExecutorService {
     }
 
     public void executeManualClosePosition(
-            Users user,
+            Account user,
             UUID tradePositionId
     ) throws JsonProcessingException {
         TradePosition tradePosition = tradePositionRepository.findByTradePositionId(tradePositionId).orElse(null);
@@ -107,7 +107,7 @@ public class LiveTradingDecisionExecutorService {
     }
 
     public void executeListenerClosePositions(
-            Users user,
+            Account user,
             List<TradePosition> activeTradePositions,
             String asset,
             ListenerDecision listenerDecision
@@ -136,7 +136,7 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(firstPosition.getTradeId());
     }
 
-    public void executeManualCloseTrade(Users user,UUID tradeId) {
+    public void executeManualCloseTrade(Account user, UUID tradeId) {
         List<TradePosition> openPositions = tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
 
         for (TradePosition tradePosition : openPositions) {
@@ -157,7 +157,7 @@ public class LiveTradingDecisionExecutorService {
             StrategyContext context,
             StrategyDecision decision
     ) throws JsonProcessingException {
-        Users user = context.getUser();
+        Account user = context.getAccount();
 
         Portfolio usdtPortfolio = portfolioService.updateAndGetAssetBalance("USDT", user);
         BigDecimal balance = safe(usdtPortfolio.getBalance());
@@ -180,7 +180,7 @@ public class LiveTradingDecisionExecutorService {
             StrategyContext context,
             StrategyDecision decision
     ) throws JsonProcessingException {
-        Users user = context.getUser();
+        Account user = context.getAccount();
 
         Portfolio btcPortfolio = portfolioService.updateAndGetAssetBalance("BTC", user);
         BigDecimal balance = safe(btcPortfolio.getBalance());
@@ -215,7 +215,7 @@ public class LiveTradingDecisionExecutorService {
         refreshParentTradeSummary(activeTrade.getTradeId());
     }
 
-    private void executeCloseTrade(Trades activeTrade,Users user,String exitReason) {
+    private void executeCloseTrade(Trades activeTrade, Account user, String exitReason) {
         if (activeTrade == null || user == null) {
             return;
         }
@@ -326,7 +326,7 @@ public class LiveTradingDecisionExecutorService {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Users user) {
+    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Account user) {
         BigDecimal tradeAmount = usdtBalance
                 .multiply(user.getRiskAmount())
                 .setScale(8, RoundingMode.DOWN);
@@ -334,7 +334,7 @@ public class LiveTradingDecisionExecutorService {
         return tradeAmount.compareTo(MIN_USDT_NOTIONAL) < 0 ? MIN_USDT_NOTIONAL : tradeAmount;
     }
 
-    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Users user) {
+    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Account user) {
         BigDecimal tradeAmount = btcBalance
                 .multiply(user.getRiskAmount())
                 .setScale(8, RoundingMode.DOWN);

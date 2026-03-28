@@ -23,8 +23,8 @@ public class BacktestRun {
     @Column(name = "backtest_run_id", nullable = false, updatable = false)
     private UUID backtestRunId;
 
-    @Column(name = "user_strategy_id")
-    private UUID userStrategyId;
+    @Column(name = "account_strategy_id")
+    private UUID accountStrategyId;
 
     @Column(name = "strategy_name", length = 100, nullable = false)
     private String strategyName;

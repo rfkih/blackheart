@@ -21,12 +21,12 @@ public class LivePnlPublisherService {
 
     @Scheduled(fixedRate = 1000)
     public void publishLivePnl() {
-        for (UUID userId : subscriptionRegistry.getSubscribedUserIds()) {
+        for (UUID accountId : subscriptionRegistry.getSubscribedAcccountId()) {
             try {
-                ActiveTradePnlResponse response = tradePnlQueryService.getCurrentActiveTradePnl(userId);
-                messagingTemplate.convertAndSend("/topic/pnl/" + userId, response);
+                ActiveTradePnlResponse response = tradePnlQueryService.getCurrentActiveTradePnl(accountId);
+                messagingTemplate.convertAndSend("/topic/pnl/" + accountId, response);
             } catch (Exception e) {
-                log.error("Failed to publish live pnl for userId={}", userId, e);
+                log.error("Failed to publish live pnl for accountId={}", accountId, e);
             }
         }
     }

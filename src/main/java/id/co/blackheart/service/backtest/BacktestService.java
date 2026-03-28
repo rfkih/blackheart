@@ -28,7 +28,7 @@ public class BacktestService {
         validateRequest(request);
 
         BacktestRun backtestRun = BacktestRun.builder()
-                .userStrategyId(request.getUserStrategyId())
+                .accountStrategyId(request.getAccountStrategyId())
                 .strategyName(request.getStrategyName())
                 .asset(request.getAsset())
                 .interval(request.getInterval())
@@ -97,8 +97,8 @@ public class BacktestService {
         if (request == null) {
             throw new IllegalArgumentException("BacktestRunRequest cannot be null");
         }
-        if (request.getUserStrategyId() == null) {
-            throw new IllegalArgumentException("userStrategyId cannot be null");
+        if (request.getAccountStrategyId() == null) {
+            throw new IllegalArgumentException("accountStrategyId cannot be null");
         }
         if (request.getStrategyName() == null || request.getStrategyName().isBlank()) {
             throw new IllegalArgumentException("strategyName cannot be blank");

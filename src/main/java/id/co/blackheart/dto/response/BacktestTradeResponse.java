@@ -19,7 +19,7 @@ public class BacktestTradeResponse {
 
     private UUID backtestRunId;
 
-    private UUID userId;
+    private UUID accountId;
 
     private String strategyName;
 

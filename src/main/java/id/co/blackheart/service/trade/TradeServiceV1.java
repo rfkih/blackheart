@@ -7,7 +7,7 @@ import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.cache.CacheService;
@@ -78,7 +78,7 @@ public class TradeServiceV1 {
 
     @Transactional
     public void binanceCloseLongPositionsMarketOrder(
-            Users user,
+            Account user,
             List<TradePosition> tradePositions,
             String asset
     ) {
@@ -87,7 +87,7 @@ public class TradeServiceV1 {
 
     @Transactional
     public void binanceCloseShortPositionsMarketOrder(
-            Users user,
+            Account user,
             List<TradePosition> tradePositions,
             String asset
     ) {
@@ -96,7 +96,7 @@ public class TradeServiceV1 {
 
     @Transactional
     public void binanceCloseLongPositionMarketOrder(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset
     ) {
@@ -105,7 +105,7 @@ public class TradeServiceV1 {
 
     @Transactional
     public void binanceCloseShortPositionMarketOrder(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset
     ) {
@@ -173,7 +173,7 @@ public class TradeServiceV1 {
     }
 
     private void closeSinglePosition(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset,
             TradeType tradeType
@@ -219,7 +219,7 @@ public class TradeServiceV1 {
     }
 
     private void closeGroupedPositions(
-            Users user,
+            Account user,
             List<TradePosition> tradePositions,
             String asset,
             TradeType tradeType
@@ -295,7 +295,7 @@ public class TradeServiceV1 {
                     .orElseThrow(() -> new IllegalStateException("Trade not found after persistence"));
 
             if (STATUS_CLOSED.equalsIgnoreCase(trade.getStatus())) {
-                cacheService.removeClosedTrade(trade.getUserId(), tradeId);
+                cacheService.removeClosedTrade(trade.getAccountId(), tradeId);
                 redisPublisher.publishTradeStateChange(tradeId, STATUS_CLOSED);
                 return;
             }
@@ -304,7 +304,7 @@ public class TradeServiceV1 {
                     tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
 
             cacheService.cacheUserActiveTrade(
-                    trade.getUserId(),
+                    trade.getAccountId(),
                     trade.getTradeId(),
                     trade,
                     openPositions
@@ -321,7 +321,7 @@ public class TradeServiceV1 {
             String asset,
             String side,
             BigDecimal amount,
-            Users user
+            Account user
     ) {
         return BinanceOrderRequest.builder()
                 .symbol(asset)
@@ -545,8 +545,8 @@ public class TradeServiceV1 {
                             .symbol(asset)
                             .side(orderSide)
                             .amount(requestAmount)
-                            .apiKey(context.getUser().getApiKey())
-                            .apiSecret(context.getUser().getApiSecret())
+                            .apiKey(context.getAccount().getApiKey())
+                            .apiSecret(context.getAccount().getApiSecret())
                             .build()
             );
 
@@ -561,8 +561,8 @@ public class TradeServiceV1 {
             }
 
             persistedTrade = Trades.builder()
-                    .userId(context.getUser().getUserId())
-                    .userStrategyId(context.getUserStrategyId())
+                    .accountId(context.getAccount().getAccountId())
+                    .accountStrategyId(context.getAccountStrategyId())
                     .strategyName(context.getStrategyCode())
                     .interval(context.getInterval())
                     .exchange("BINANCE")
@@ -660,7 +660,7 @@ public class TradeServiceV1 {
             return PreTradeValidationResult.invalid("StrategyContext is null");
         }
 
-        if (context.getUser() == null) {
+        if (context.getAccount() == null) {
             return PreTradeValidationResult.invalid("User is null");
         }
 
@@ -770,7 +770,7 @@ public class TradeServiceV1 {
     }
 
     private TradePosition validateClosePositionInputs(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset,
             TradeType tradeType
@@ -855,8 +855,8 @@ public class TradeServiceV1 {
             TradePosition tradePosition = TradePosition.builder()
                     .tradePositionId(UUID.randomUUID())
                     .tradeId(trade.getTradeId())
-                    .userId(trade.getUserId())
-                    .userStrategyId(trade.getUserStrategyId())
+                    .accountId(trade.getAccountId())
+                    .accountStrategyId(trade.getAccountStrategyId())
                     .asset(trade.getAsset())
                     .interval(trade.getInterval())
                     .exchange(trade.getExchange())

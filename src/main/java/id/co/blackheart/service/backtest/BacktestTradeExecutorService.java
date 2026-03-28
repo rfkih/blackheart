@@ -107,7 +107,7 @@ public class BacktestTradeExecutorService {
 
         BacktestTrade trade = BacktestTrade.builder()
                 .backtestRunId(backtestRun.getBacktestRunId())
-                .userStrategyId(backtestRun.getUserStrategyId())
+                .accountStrategyId(backtestRun.getAccountStrategyId())
                 .strategyName(backtestRun.getStrategyName())
                 .asset(backtestRun.getAsset())
                 .interval(backtestRun.getInterval())
@@ -137,7 +137,7 @@ public class BacktestTradeExecutorService {
                     .tradePositionId(UUID.randomUUID())
                     .tradeId(trade.getBacktestTradeId())
                     .backtestRunId(backtestRun.getBacktestRunId())
-                    .userStrategyId(backtestRun.getUserStrategyId())
+                    .accountStrategyId(backtestRun.getAccountStrategyId())
                     .asset(backtestRun.getAsset())
                     .interval(backtestRun.getInterval())
                     .exchange("BINANCE")

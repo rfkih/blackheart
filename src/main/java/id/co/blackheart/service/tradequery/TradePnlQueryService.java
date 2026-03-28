@@ -27,11 +27,11 @@ public class TradePnlQueryService {
     private final CacheService cacheService;
 
 
-    public ActiveTradePnlResponse getCurrentActiveTradePnl(UUID userId) {
+    public ActiveTradePnlResponse getCurrentActiveTradePnl(UUID accountId) {
         List<ActiveTradePnlItemResponse> items = new ArrayList<>();
         BigDecimal totalUnrealizedPnlAmount = BigDecimal.ZERO;
 
-        for (UUID tradeId : cacheService.getUserActiveTradeIds(userId)) {
+        for (UUID tradeId : cacheService.getAccountActiveTradeIds(accountId)) {
             try {
                 Trades trade = cacheService.getTrade(tradeId);
                 if (trade == null) {
@@ -87,14 +87,14 @@ public class TradePnlQueryService {
                 totalUnrealizedPnlAmount = totalUnrealizedPnlAmount.add(unrealizedPnlAmount);
 
             } catch (Exception e) {
-                log.error("Failed to calculate active trade pnl for userId={} tradeId={}", userId, tradeId, e);
+                log.error("Failed to calculate active trade pnl for accountId={} tradeId={}", accountId, tradeId, e);
             }
         }
 
         items.sort(Comparator.comparing(ActiveTradePnlItemResponse::getTradeId));
 
         return ActiveTradePnlResponse.builder()
-                .userId(userId)
+                .accountId(accountId)
                 .totalUnrealizedPnlAmount(format3(totalUnrealizedPnlAmount))
                 .trades(items)
                 .build();

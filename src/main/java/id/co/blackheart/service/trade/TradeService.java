@@ -4,7 +4,7 @@ import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.Account;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,7 +53,7 @@ public class TradeService {
 
     @Transactional
     public void binanceCloseLongPositionsMarketOrder(
-            Users user,
+            Account user,
             List<TradePosition> tradePositions,
             String asset
     ) {
@@ -62,7 +62,7 @@ public class TradeService {
 
     @Transactional
     public void binanceCloseShortPositionsMarketOrder(
-            Users user,
+            Account user,
             List<TradePosition> tradePositions,
             String asset
     ) {
@@ -71,7 +71,7 @@ public class TradeService {
 
     @Transactional
     public void binanceCloseLongPositionMarketOrder(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset
     ) {
@@ -80,7 +80,7 @@ public class TradeService {
 
     @Transactional
     public void binanceCloseShortPositionMarketOrder(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset
     ) {

@@ -86,8 +86,8 @@ public class TradeOpenService {
                     .symbol(asset)
                     .side(orderSide)
                     .amount(requestAmount)
-                    .apiKey(context.getUser().getApiKey())
-                    .apiSecret(context.getUser().getApiSecret())
+                    .apiKey(context.getAccount().getApiKey())
+                    .apiSecret(context.getAccount().getApiSecret())
                     .build();
 
             BinanceOrderResponse response = tradeExecutionService.binanceMarketOrder(request);
@@ -102,8 +102,8 @@ public class TradeOpenService {
             }
 
             persistedTrade = Trades.builder()
-                    .userId(context.getUser().getUserId())
-                    .userStrategyId(context.getUserStrategyId())
+                    .accountId(context.getAccount().getAccountId())
+                    .accountStrategyId(context.getAccountStrategyId())
                     .strategyName(context.getStrategyCode())
                     .interval(context.getInterval())
                     .exchange("BINANCE")
@@ -180,7 +180,7 @@ public class TradeOpenService {
             return PreTradeValidationResult.invalid("StrategyContext is null");
         }
 
-        if (context.getUser() == null) {
+        if (context.getAccount() == null) {
             return PreTradeValidationResult.invalid("User is null");
         }
 
@@ -377,8 +377,8 @@ public class TradeOpenService {
             TradePosition tradePosition = TradePosition.builder()
                     .tradePositionId(UUID.randomUUID())
                     .tradeId(trade.getTradeId())
-                    .userId(trade.getUserId())
-                    .userStrategyId(trade.getUserStrategyId())
+                    .accountId(trade.getAccountId())
+                    .accountStrategyId(trade.getAccountStrategyId())
                     .asset(trade.getAsset())
                     .interval(trade.getInterval())
                     .exchange(trade.getExchange())

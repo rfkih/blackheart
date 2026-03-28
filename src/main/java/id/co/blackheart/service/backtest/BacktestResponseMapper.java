@@ -10,7 +10,7 @@ public class BacktestResponseMapper {
     public BacktestRunResponse toRunResponse(BacktestRun run) {
         return BacktestRunResponse.builder()
                 .backtestRunId(run.getBacktestRunId())
-                .userStrategyId(run.getUserStrategyId())
+                .accountStrategyId(run.getAccountStrategyId())
                 .strategyName(run.getStrategyName())
                 .asset(run.getAsset())
                 .interval(run.getInterval())

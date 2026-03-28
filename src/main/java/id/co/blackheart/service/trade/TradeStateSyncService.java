@@ -31,7 +31,7 @@ public class TradeStateSyncService {
                     .orElseThrow(() -> new IllegalStateException("Trade not found after persistence"));
 
             if (STATUS_CLOSED.equalsIgnoreCase(trade.getStatus())) {
-                cacheService.removeClosedTrade(trade.getUserId(), tradeId);
+                cacheService.removeClosedTrade(trade.getAccountId(), tradeId);
                 redisPublisher.publishTradeStateChange(tradeId, STATUS_CLOSED);
                 return;
             }
@@ -40,7 +40,7 @@ public class TradeStateSyncService {
                     tradePositionRepository.findAllByTradeIdAndStatus(tradeId, STATUS_OPEN);
 
             cacheService.cacheUserActiveTrade(
-                    trade.getUserId(),
+                    trade.getAccountId(),
                     trade.getTradeId(),
                     trade,
                     openPositions

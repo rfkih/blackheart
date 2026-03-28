@@ -16,7 +16,6 @@ import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.service.strategy.StrategyExecutor;
 import id.co.blackheart.service.strategy.StrategyExecutorFactory;
 import id.co.blackheart.service.tradelistener.TradeListenerService;
-import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -284,10 +283,10 @@ public class BacktestCoordinatorService {
         }
 
         StrategyContext strategyContext = StrategyContext.builder()
-                .user(null)
+                .account(null)
                 .asset(backtestRun.getAsset())
                 .interval(strategyInterval)
-                .userStrategyId(backtestRun.getUserStrategyId())
+                .accountStrategyId(backtestRun.getAccountStrategyId())
                 .strategyCode(backtestRun.getStrategyName())
                 .marketData(strategyCandle)
                 .featureStore(strategyFeature)
