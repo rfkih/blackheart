@@ -1,20 +1,21 @@
 package id.co.blackheart.service.live;
 
+import id.co.blackheart.dto.strategy.BaseStrategyContext;
+import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
-import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
+import id.co.blackheart.dto.strategy.StrategyRequirements;
+import id.co.blackheart.model.Account;
+import id.co.blackheart.model.AccountStrategy;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.AccountStrategy;
-import id.co.blackheart.model.Account;
-import id.co.blackheart.repository.FeatureStoreRepository;
-import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.PortfolioRepository;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.service.strategy.StrategyContextEnrichmentService;
 import id.co.blackheart.service.strategy.StrategyExecutor;
 import id.co.blackheart.service.strategy.StrategyExecutorFactory;
 import lombok.RequiredArgsConstructor;
@@ -23,25 +24,23 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
-
-import static id.co.blackheart.util.TradeConstant.DecisionType.HOLD;
+import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class LiveTradingCoordinatorService {
 
-    private static final String SYMBOL = "BTCUSDT";
     private static final List<String> ACTIVE_PARENT_STATUSES = List.of("OPEN", "PARTIALLY_CLOSED");
 
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
+    private final PortfolioRepository portfolioRepository;
     private final StrategyExecutorFactory strategyExecutorFactory;
+    private final StrategyContextEnrichmentService strategyContextEnrichmentService;
     private final LiveTradingDecisionExecutorService liveTradingDecisionExecutorService;
     private final LivePositionSnapshotMapper livePositionSnapshotMapper;
-    private final FeatureStoreRepository featureStoreRepository;
-    private final MarketDataRepository marketDataRepository;
-    private final PortfolioRepository portfolioRepository;
 
     public void process(
             Account account,
@@ -51,106 +50,52 @@ public class LiveTradingCoordinatorService {
             MarketData marketData,
             FeatureStore featureStore
     ) {
-        String strategyCode = accountStrategy.getStrategyCode();
-
-        if (!interval.equals(accountStrategy.getIntervalName())) {
+        if (!isApplicable(accountStrategy, interval)) {
             return;
         }
 
+        String strategyCode = accountStrategy.getStrategyCode();
+
         try {
             StrategyExecutor executor = strategyExecutorFactory.get(strategyCode);
+            StrategyRequirements requirements = executor.getRequirements();
 
-            AssetPair assetPair = resolveAssetPair(asset);
+            LiveState liveState = loadLiveState(account, accountStrategy, asset, interval);
 
-            List<Portfolio> portfolios = portfolioRepository.findAllByAccountIdAndAssetIn(
-                    account.getAccountId(),
-                    List.of(assetPair.baseAsset(), assetPair.quoteAsset())
-            );
-
-            BigDecimal cashBalance = BigDecimal.ZERO;
-            BigDecimal assetBalance = BigDecimal.ZERO;
-
-            for (Portfolio portfolio : portfolios) {
-                if (portfolio == null || portfolio.getAsset() == null) {
-                    continue;
-                }
-
-                if (assetPair.quoteAsset().equalsIgnoreCase(portfolio.getAsset())) {
-                    cashBalance = safe(portfolio.getBalance());
-                } else if (assetPair.baseAsset().equalsIgnoreCase(portfolio.getAsset())) {
-                    assetBalance = safe(portfolio.getBalance());
-                }
-            }
-
-            List<Trades> activeTrades = tradesRepository.findAllActiveTrades(
-                    account.getAccountId(),
-                    accountStrategy.getAccountStrategyId(),
+            BaseStrategyContext baseContext = buildBaseContext(
+                    account,
+                    accountStrategy,
                     asset,
                     interval,
-                    ACTIVE_PARENT_STATUSES
+                    marketData,
+                    featureStore,
+                    liveState
             );
 
-            Trades activeTrade = activeTrades.isEmpty() ? null : activeTrades.getFirst();
-
-            List<TradePosition> activeTradePositions =
-                    activeTrade == null
-                            ? List.of()
-                            : tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), "OPEN");
-
-            PositionSnapshot positionSnapshot = activeTradePositions.isEmpty()
-                    ? livePositionSnapshotMapper.toSnapshot(activeTrade)
-                    : livePositionSnapshotMapper.toSnapshot(activeTradePositions.getFirst());
-
-            FeatureStore biasFeatureStore = null;
-            MarketData biasMarketData = null;
-
-            if ("PULLBACK_15M_WITH_4H_BIAS".equals(strategyCode) && "15m".equalsIgnoreCase(interval)) {
-                biasFeatureStore = featureStoreRepository.findLatestBySymbolAndInterval(SYMBOL, "4h").orElse(null);
-                biasMarketData = marketDataRepository.findLatestBySymbolAndInterval(SYMBOL, "4h").orElse(null);
-            }
-
-            StrategyContext context = StrategyContext.builder()
-                    .account(account)
-                    .asset(asset)
-                    .interval(interval)
-                    .marketData(marketData)
-                    .featureStore(featureStore)
-                    .activeTrade(activeTrade)
-                    .activeTrades(activeTrades)
-                    .activeTradePositions(activeTradePositions)
-                    .positionSnapshot(positionSnapshot)
-                    .cashBalance(cashBalance)
-                    .assetBalance(assetBalance)
-                    .riskPerTradePct(account.getRiskAmount())
-                    .accountStrategyId(accountStrategy.getAccountStrategyId())
-                    .strategyCode(accountStrategy.getStrategyCode())
-                    .biasFeatureStore(biasFeatureStore)
-                    .biasMarketData(biasMarketData)
-                    .allowLong(Boolean.TRUE.equals(accountStrategy.getAllowLong()))
-                    .allowShort(Boolean.TRUE.equals(accountStrategy.getAllowShort()))
-                    .maxOpenPositions(accountStrategy.getMaxOpenPositions())
-                    .currentOpenTradeCount(activeTrades.size())
-                    .build();
+            EnrichedStrategyContext context =
+                    strategyContextEnrichmentService.enrich(baseContext, requirements);
 
             StrategyDecision decision = executor.execute(context);
 
             log.info(
-                    "Strategy decision | accountId={} strategy={} asset={} interval={} decisionType={} reason={} cashBalance={} assetBalance={}",
-                    account.getAccountId(),
-                    strategyCode,
-                    asset,
+                    "Strategy decision |  interval={} decisionType={} signalType={} setupType={} regime={} reason={}",
                     interval,
                     decision.getDecisionType(),
-                    decision.getReason(),
-                    cashBalance,
-                    assetBalance
+                    decision.getSignalType(),
+                    decision.getSetupType(),
+                    decision.getRegimeLabel(),
+                    decision.getReason()
             );
 
-            if (HOLD.equals(decision.getDecisionType())) {
+            if (decision.isNoAction()) {
                 return;
             }
 
-            liveTradingDecisionExecutorService.execute(activeTrade, context, decision);
+            liveTradingDecisionExecutorService.execute(
+                    liveState.activeTrade(),
+                    context,
+                    decision
+            );
 
         } catch (Exception e) {
             log.error(
@@ -162,6 +107,128 @@ public class LiveTradingCoordinatorService {
                     e
             );
         }
+    }
+
+    private boolean isApplicable(AccountStrategy accountStrategy, String interval) {
+        return accountStrategy != null
+                && accountStrategy.getStrategyCode() != null
+                && interval != null
+                && interval.equalsIgnoreCase(accountStrategy.getIntervalName());
+    }
+
+    private BaseStrategyContext buildBaseContext(
+            Account account,
+            AccountStrategy accountStrategy,
+            String asset,
+            String interval,
+            MarketData marketData,
+            FeatureStore featureStore,
+            LiveState liveState
+    ) {
+        return BaseStrategyContext.builder()
+                .account(account)
+                .accountStrategy(accountStrategy)
+                .asset(asset)
+                .interval(interval)
+                .marketData(marketData)
+                .featureStore(featureStore)
+                .positionSnapshot(liveState.positionSnapshot())
+                .hasOpenPosition(liveState.positionSnapshot() != null
+                        && Boolean.TRUE.equals(liveState.positionSnapshot().isHasOpenPosition()))
+                .openPositionCount(liveState.openPositionCount())
+                .executionMetadata(buildExecutionMetadata(liveState))
+                .cashBalance(liveState.cashBalance())
+                .assetBalance(liveState.assetBalance())
+                .riskPerTradePct(account.getRiskAmount())
+                .allowLong(Boolean.TRUE.equals(accountStrategy.getAllowLong()))
+                .allowShort(Boolean.TRUE.equals(accountStrategy.getAllowShort()))
+                .maxOpenPositions(accountStrategy.getMaxOpenPositions())
+                .currentOpenTradeCount(liveState.currentOpenTradeCount())
+                .diagnostics(Map.of(
+                        "source", "live",
+                        "strategyCode", accountStrategy.getStrategyCode()
+                ))
+                .build();
+    }
+
+    private LiveState loadLiveState(
+            Account account,
+            AccountStrategy accountStrategy,
+            String asset,
+            String interval
+    ) {
+        AssetPair assetPair = resolveAssetPair(asset);
+
+        List<Portfolio> portfolios = portfolioRepository.findAllByAccountIdAndAssetIn(
+                account.getAccountId(),
+                List.of(assetPair.baseAsset(), assetPair.quoteAsset())
+        );
+
+        BigDecimal cashBalance = BigDecimal.ZERO;
+        BigDecimal assetBalance = BigDecimal.ZERO;
+
+        for (Portfolio portfolio : portfolios) {
+            if (portfolio == null || portfolio.getAsset() == null) {
+                continue;
+            }
+
+            if (assetPair.quoteAsset().equalsIgnoreCase(portfolio.getAsset())) {
+                cashBalance = safe(portfolio.getBalance());
+            } else if (assetPair.baseAsset().equalsIgnoreCase(portfolio.getAsset())) {
+                assetBalance = safe(portfolio.getBalance());
+            }
+        }
+
+        List<Trades> activeTrades = tradesRepository.findAllActiveTrades(
+                account.getAccountId(),
+                accountStrategy.getAccountStrategyId(),
+                asset,
+                interval,
+                ACTIVE_PARENT_STATUSES
+        );
+
+        Trades activeTrade = activeTrades.isEmpty() ? null : activeTrades.getFirst();
+
+        List<TradePosition> activeTradePositions =
+                activeTrade == null
+                        ? List.of()
+                        : tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), "OPEN");
+
+        PositionSnapshot positionSnapshot = buildPositionSnapshot(activeTrade, activeTradePositions);
+
+        return new LiveState(
+                cashBalance,
+                assetBalance,
+                activeTrade,
+                activeTrades.size(),
+                activeTradePositions.size(),
+                positionSnapshot
+        );
+    }
+
+    private Map<String, Object> buildExecutionMetadata(LiveState liveState) {
+        UUID activeTradeId = liveState.activeTrade() != null ? liveState.activeTrade().getTradeId() : null;
+
+        return Map.of(
+                "source", "live",
+                "activeTradeId", activeTradeId == null ? "" : activeTradeId.toString(),
+                "currentOpenTradeCount", liveState.currentOpenTradeCount(),
+                "openPositionCount", liveState.openPositionCount()
+        );
+    }
+
+    private PositionSnapshot buildPositionSnapshot(Trades activeTrade, List<TradePosition> activeTradePositions) {
+        if (activeTradePositions != null && !activeTradePositions.isEmpty()) {
+            return livePositionSnapshotMapper.toSnapshot(activeTradePositions.getFirst());
+        }
+
+        if (activeTrade != null) {
+            return livePositionSnapshotMapper.toSnapshot(activeTrade);
+        }
+
+        return PositionSnapshot.builder()
+                .hasOpenPosition(false)
+                .build();
     }
 
     private AssetPair resolveAssetPair(String symbol) {
@@ -184,5 +251,15 @@ public class LiveTradingCoordinatorService {
     }
 
     private record AssetPair(String baseAsset, String quoteAsset) {
+    }
+
+    private record LiveState(
+            BigDecimal cashBalance,
+            BigDecimal assetBalance,
+            Trades activeTrade,
+            Integer currentOpenTradeCount,
+            Integer openPositionCount,
+            PositionSnapshot positionSnapshot
+    ) {
     }
 }

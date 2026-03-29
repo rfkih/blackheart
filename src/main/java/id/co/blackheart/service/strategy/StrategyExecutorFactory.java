@@ -7,20 +7,15 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class StrategyExecutorFactory {
 
-    private final TimeSeriesMomentumService tsmom;
-//    private final Breakout4hStrategyService breakout;
     private final TrendPullbackSingleExitStrategyService trendPullbackSingleExitStrategyService;
-
-    private final TrendFollowingStrategyService trendFollowing;
     private final ExecutionTestService executionTestService;
+    private final RahtV1StrategyExecutor rahtV1StrategyExecutor;
 
     public StrategyExecutor get(String strategyName) {
         return switch (strategyName) {
-            case "TSMOM" -> tsmom;
-//            case "BREAKOUT" -> breakout;
             case "TREND_PULLBACK_SINGLE_EXIT" -> trendPullbackSingleExitStrategyService;
-            case "TREND_FOLLOWING" -> trendFollowing;
             case "TEST" -> executionTestService;
+            case "RAHT_V1" -> rahtV1StrategyExecutor;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyName);
         };
     }

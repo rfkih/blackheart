@@ -23,8 +23,8 @@ public class BacktestTradePosition {
     @Column(name = "trade_position_id", nullable = false, updatable = false)
     private UUID tradePositionId;
 
-    @Column(name = "trade_id", nullable = false)
-    private UUID tradeId;
+    @Column(name = "backtest_trade_id", nullable = false)
+    private UUID backtestTradeId;
 
     @Column(name = "backtest_run_id", nullable = false)
     private UUID backtestRunId;

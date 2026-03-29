@@ -1,0 +1,17 @@
+package id.co.blackheart.dto.strategy;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class StrategyRequirements {
+
+    private boolean requireBiasTimeframe;
+    private String biasInterval;
+
+    private boolean requireRegimeSnapshot;
+    private boolean requireVolatilitySnapshot;
+    private boolean requireRiskSnapshot;
+    private boolean requireMarketQualitySnapshot;
+}

@@ -1,11 +1,11 @@
 package id.co.blackheart.service.strategy;
 
+import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
-import id.co.blackheart.dto.strategy.StrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
+import id.co.blackheart.dto.strategy.StrategyRequirements;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
-import id.co.blackheart.model.Trades;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,77 +13,117 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class TrendPullbackSingleExitStrategyService implements StrategyExecutor {
 
+    public static final String STRATEGY_CODE = "TREND_PULLBACK_SINGLE_EXIT";
     public static final String STRATEGY_NAME = "TREND_PULLBACK_SINGLE_EXIT";
+    public static final String STRATEGY_VERSION = "v1";
 
     private static final String SIDE_LONG = "LONG";
     private static final String SIDE_SHORT = "SHORT";
+
+    private static final String SOURCE_LIVE = "live";
+    private static final String SOURCE_BACKTEST = "backtest";
 
     private static final String EXIT_STRUCTURE_SINGLE = "SINGLE";
     private static final String TARGET_ALL = "ALL";
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
-    private static final BigDecimal ONE = BigDecimal.ONE;
 
-    private static final BigDecimal MIN_ADX = new BigDecimal("20");
-    private static final BigDecimal BIAS_MIN_ADX = new BigDecimal("18");
-
-    private static final BigDecimal LONG_MIN_RSI = new BigDecimal("52");
-    private static final BigDecimal SHORT_MAX_RSI = new BigDecimal("48");
-
-    private static final BigDecimal MIN_BODY_TO_RANGE = new BigDecimal("0.50");
-    private static final BigDecimal MIN_LONG_CLV = new BigDecimal("0.60");
-    private static final BigDecimal MAX_SHORT_CLV = new BigDecimal("0.40");
-
-    private static final BigDecimal MIN_RELATIVE_VOLUME = new BigDecimal("0.90");
-
-    private static final BigDecimal STOP_BUFFER_ATR = new BigDecimal("0.50");
     private static final BigDecimal TAKE_PROFIT_R = new BigDecimal("1.50");
     private static final BigDecimal BREAK_EVEN_TRIGGER_R = new BigDecimal("1.00");
+    private static final BigDecimal STOP_BUFFER_ATR = new BigDecimal("0.50");
 
     @Override
-    public StrategyDecision execute(StrategyContext context) {
+    public StrategyRequirements getRequirements() {
+        return StrategyRequirements.builder()
+                .requireBiasTimeframe(true)
+                .biasInterval("4h")
+                .requireRegimeSnapshot(false)
+                .requireVolatilitySnapshot(false)
+                .requireRiskSnapshot(false)
+                .requireMarketQualitySnapshot(false)
+                .build();
+    }
+
+    @Override
+    public StrategyDecision execute(EnrichedStrategyContext context) {
         if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
             return hold(context, "Invalid context or missing market/feature data");
         }
 
         MarketData marketData = context.getMarketData();
         FeatureStore feature = context.getFeatureStore();
-        Trades activeTrade = context.getActiveTrade();
         PositionSnapshot positionSnapshot = context.getPositionSnapshot();
 
-        if (activeTrade == null || positionSnapshot == null || !positionSnapshot.isHasOpenPosition()) {
+        if (!context.hasTradablePosition() || positionSnapshot == null) {
             return handleNoActiveTrade(context, marketData, feature);
         }
 
         return handleActiveTrade(context, marketData, positionSnapshot);
     }
 
-    private boolean isValidShortSetup(StrategyContext context, MarketData marketData, FeatureStore feature) {
-        FeatureStore biasFeature = context.getBiasFeatureStore();
-        MarketData biasMarket = context.getBiasMarketData();
-
-        return isBearishTrendV2(feature, marketData)
-                && isBearishPullbackSignal(feature)
-                && isBearishBiasAlignedV2(biasFeature, biasMarket)
-                && bearishSupportScore(feature) >= 2;
-    }
-
     private StrategyDecision handleNoActiveTrade(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             MarketData marketData,
             FeatureStore feature
     ) {
-        if (context.isAllowLong() && isValidLongSetup(context, marketData, feature)) {
+        FeatureStore biasFeature = context.getBiasFeatureStore();
+        MarketData biasMarket = context.getBiasMarketData();
+
+        boolean longAllowed = context.isLongAllowed();
+        boolean shortAllowed = context.isShortAllowed();
+
+        boolean bullishTrend = isBullishTrendV2(feature, marketData);
+        boolean bullishPullback = isBullishPullbackSignal(feature);
+        boolean bullishBias = isBullishBiasAlignedV2(biasFeature, biasMarket);
+        int bullishScore = bullishSupportScore(feature);
+        boolean bullishScorePass = bullishScore >= 2;
+        boolean validLongSetup = longAllowed
+                && bullishTrend
+                && bullishPullback
+                && bullishBias
+                && bullishScorePass;
+
+        boolean bearishTrend = isBearishTrendV2(feature, marketData);
+        boolean bearishPullback = isBearishPullbackSignal(feature);
+        boolean bearishBias = isBearishBiasAlignedV2(biasFeature, biasMarket);
+        int bearishScore = bearishSupportScore(feature);
+        boolean bearishScorePass = bearishScore >= 2;
+        boolean validShortSetup = shortAllowed
+                && bearishTrend
+                && bearishPullback
+                && bearishBias
+                && bearishScorePass;
+
+        if (longAllowed && validLongSetup) {
+            log.info(
+                    "OPEN_LONG selected | time={} asset={} interval={} close={} bullishScore={}",
+                    marketData.getEndTime(),
+                    context != null ? context.getAsset() : null,
+                    context != null ? context.getInterval() : null,
+                    marketData.getClosePrice(),
+                    bullishScore
+            );
             return buildOpenLongDecision(context, marketData, feature);
         }
 
-        if (context.isAllowShort() && isValidShortSetup(context, marketData, feature)) {
+        if (shortAllowed && validShortSetup) {
+            log.info(
+                    "OPEN_SHORT selected | time={} asset={} interval={} close={} bearishScore={}",
+                    marketData.getEndTime(),
+                    context != null ? context.getAsset() : null,
+                    context != null ? context.getInterval() : null,
+                    marketData.getClosePrice(),
+                    bearishScore
+            );
             return buildOpenShortDecision(context, marketData, feature);
         }
 
@@ -91,7 +131,7 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
     }
 
     private StrategyDecision handleActiveTrade(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             MarketData marketData,
             PositionSnapshot snapshot
     ) {
@@ -115,24 +155,39 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
         return hold(context, "Unknown active position side");
     }
 
-
     private StrategyDecision buildOpenLongDecision(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             MarketData marketData,
             FeatureStore feature
     ) {
         BigDecimal entryPrice = marketData.getClosePrice();
         BigDecimal stopLoss = calculateLongStopLoss(marketData, feature);
         BigDecimal takeProfit = calculateLongTakeProfit(entryPrice, stopLoss);
-        BigDecimal positionSize = calculatePositionSize(context, SIDE_LONG);
+        BigDecimal notionalSize = calculateEntryNotional(context, SIDE_LONG);
+
+        if (!isValidRiskStructure(entryPrice, stopLoss, takeProfit, true)) {
+            return hold(context, "Invalid long risk structure");
+        }
+
+        if (notionalSize.compareTo(ZERO) <= 0) {
+            return hold(context, "Calculated long notional size is zero");
+        }
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_LONG)
+                .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
+                .signalType("TREND_PULLBACK")
+                .setupType("BULLISH_PULLBACK_SINGLE_EXIT")
                 .side(SIDE_LONG)
+                .regimeLabel(feature.getTrendRegime())
                 .reason("Bullish trend pullback setup confirmed")
-                .positionSize(positionSize)
+                .signalScore(new BigDecimal("0.70"))
+                .confidenceScore(new BigDecimal("0.70"))
+                .notionalSize(notionalSize)
+                .positionSize(null)
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(takeProfit)
@@ -144,59 +199,52 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 .entryAtr(feature.getAtr())
                 .entryRsi(feature.getRsi())
                 .entryTrendRegime(feature.getTrendRegime())
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("ENTRY", "TREND_PULLBACK", "LONG", "SINGLE_EXIT"))
+                .diagnostics(Map.of(
+                        "strategy", STRATEGY_CODE,
+                        "source", resolveExecutionSource(context),
+                        "entryPrice", entryPrice,
+                        "stopLoss", stopLoss,
+                        "takeProfit", takeProfit,
+                        "notionalSize", notionalSize
+                ))
                 .build();
     }
 
-
-    private BigDecimal calculatePositionSize(StrategyContext context, String side) {
-        if (context == null || side == null || side.isBlank()) {
-            return ZERO;
-        }
-
-        BigDecimal riskPerTradePct = context.getRiskPerTradePct();
-        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
-            return ZERO;
-        }
-
-
-
-        if ("SHORT".equalsIgnoreCase(side)) {
-            BigDecimal assetBalance = context.getAssetBalance();
-            BigDecimal price = context.getMarketData() != null ? context.getMarketData().getClosePrice() : null;
-
-            if (assetBalance == null || assetBalance.compareTo(ZERO) <= 0 || price == null || price.compareTo(ZERO) <= 0) {
-                return ZERO;
-            }
-
-            BigDecimal sellableNotional = assetBalance.multiply(price);
-            return sellableNotional.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
-        }
-
-        BigDecimal cashBalance = context.getCashBalance();
-        if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
-            return ZERO;
-        }
-
-        return cashBalance.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
-    }
-
     private StrategyDecision buildOpenShortDecision(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             MarketData marketData,
             FeatureStore feature
     ) {
         BigDecimal entryPrice = marketData.getClosePrice();
         BigDecimal stopLoss = calculateShortStopLoss(marketData, feature);
         BigDecimal takeProfit = calculateShortTakeProfit(entryPrice, stopLoss);
-        BigDecimal positionSize = calculatePositionSize(context, SIDE_SHORT);
+        BigDecimal notionalSize = calculateEntryNotional(context, SIDE_SHORT);
+
+        if (!isValidRiskStructure(entryPrice, stopLoss, takeProfit, false)) {
+            return hold(context, "Invalid short risk structure");
+        }
+
+        if (notionalSize.compareTo(ZERO) <= 0) {
+            return hold(context, "Calculated short notional size is zero");
+        }
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_SHORT)
+                .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
+                .signalType("TREND_PULLBACK")
+                .setupType("BEARISH_PULLBACK_SINGLE_EXIT")
                 .side(SIDE_SHORT)
+                .regimeLabel(feature.getTrendRegime())
                 .reason("Bearish trend pullback setup confirmed")
-                .positionSize(positionSize)
+                .signalScore(new BigDecimal("0.70"))
+                .confidenceScore(new BigDecimal("0.70"))
+                .notionalSize(notionalSize)
+                .positionSize(null)
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(takeProfit)
@@ -208,11 +256,21 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 .entryAtr(feature.getAtr())
                 .entryRsi(feature.getRsi())
                 .entryTrendRegime(feature.getTrendRegime())
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("ENTRY", "TREND_PULLBACK", "SHORT", "SINGLE_EXIT"))
+                .diagnostics(Map.of(
+                        "strategy", STRATEGY_CODE,
+                        "source", resolveExecutionSource(context),
+                        "entryPrice", entryPrice,
+                        "stopLoss", stopLoss,
+                        "takeProfit", takeProfit,
+                        "notionalSize", notionalSize
+                ))
                 .build();
     }
 
     private StrategyDecision buildLongManagementDecision(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             MarketData marketData,
             PositionSnapshot snapshot
     ) {
@@ -239,8 +297,12 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
+                .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
+                .signalType("POSITION_MANAGEMENT")
+                .setupType("LONG_BREAK_EVEN_UPDATE")
                 .side(SIDE_LONG)
                 .reason("Move long stop to break-even after 1R")
                 .stopLossPrice(breakEvenStop)
@@ -249,11 +311,19 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 .takeProfitPrice2(null)
                 .takeProfitPrice3(null)
                 .targetPositionRole(TARGET_ALL)
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("MANAGEMENT", "LONG", "BREAK_EVEN"))
+                .diagnostics(Map.of(
+                        "entryPrice", entryPrice,
+                        "currentStop", currentStop,
+                        "closePrice", closePrice,
+                        "initialRisk", initialRisk
+                ))
                 .build();
     }
 
     private StrategyDecision buildShortManagementDecision(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             MarketData marketData,
             PositionSnapshot snapshot
     ) {
@@ -280,8 +350,12 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
+                .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
+                .signalType("POSITION_MANAGEMENT")
+                .setupType("SHORT_BREAK_EVEN_UPDATE")
                 .side(SIDE_SHORT)
                 .reason("Move short stop to break-even after 1R")
                 .stopLossPrice(breakEvenStop)
@@ -290,7 +364,104 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 .takeProfitPrice2(null)
                 .takeProfitPrice3(null)
                 .targetPositionRole(TARGET_ALL)
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("MANAGEMENT", "SHORT", "BREAK_EVEN"))
+                .diagnostics(Map.of(
+                        "entryPrice", entryPrice,
+                        "currentStop", currentStop,
+                        "closePrice", closePrice,
+                        "initialRisk", initialRisk
+                ))
                 .build();
+    }
+
+    private boolean isValidLongSetup(EnrichedStrategyContext context, MarketData marketData, FeatureStore feature) {
+        FeatureStore biasFeature = context.getBiasFeatureStore();
+        MarketData biasMarket = context.getBiasMarketData();
+
+        return isBullishTrendV2(feature, marketData)
+                && isBullishPullbackSignal(feature)
+                && isBullishBiasAlignedV2(biasFeature, biasMarket)
+                && bullishSupportScore(feature) >= 2;
+    }
+
+    private boolean isValidShortSetup(EnrichedStrategyContext context, MarketData marketData, FeatureStore feature) {
+        FeatureStore biasFeature = context.getBiasFeatureStore();
+        MarketData biasMarket = context.getBiasMarketData();
+
+        return isBearishTrendV2(feature, marketData)
+                && isBearishPullbackSignal(feature)
+                && isBearishBiasAlignedV2(biasFeature, biasMarket)
+                && bearishSupportScore(feature) >= 2;
+    }
+
+    private BigDecimal calculateEntryNotional(EnrichedStrategyContext context, String side) {
+        if (context == null || side == null || side.isBlank()) {
+            return ZERO;
+        }
+
+        BigDecimal riskPerTradePct = context.getRiskSnapshot() != null
+                ? context.getRiskSnapshot().getFinalRiskPct()
+                : null;
+
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
+            riskPerTradePct = context.getRuntimeConfig() != null
+                    ? context.getRuntimeConfig().getRiskPerTradePct()
+                    : null;
+        }
+
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
+            riskPerTradePct = context.getAccount() != null
+                    ? context.getAccount().getRiskAmount()
+                    : null;
+        }
+
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
+            return ZERO;
+        }
+
+        String source = resolveExecutionSource(context);
+
+        if (SIDE_LONG.equalsIgnoreCase(side)) {
+            BigDecimal cashBalance = context.getCashBalance();
+            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
+                return ZERO;
+            }
+
+            return cashBalance.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
+        }
+
+        if (SIDE_SHORT.equalsIgnoreCase(side)) {
+            if (SOURCE_LIVE.equalsIgnoreCase(source)) {
+                BigDecimal assetBalance = context.getAssetBalance();
+                BigDecimal price = context.getMarketData() != null ? context.getMarketData().getClosePrice() : null;
+
+                if (assetBalance == null || assetBalance.compareTo(ZERO) <= 0
+                        || price == null || price.compareTo(ZERO) <= 0) {
+                    return ZERO;
+                }
+
+                BigDecimal sellableNotional = assetBalance.multiply(price);
+                return sellableNotional.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
+            }
+
+            BigDecimal cashBalance = context.getCashBalance();
+            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
+                return ZERO;
+            }
+
+            return cashBalance.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
+        }
+
+        return ZERO;
+    }
+
+    private String resolveExecutionSource(EnrichedStrategyContext context) {
+        String source = context.getExecutionMetadata("source", String.class);
+        if (source == null || source.isBlank()) {
+            return SOURCE_BACKTEST;
+        }
+        return source;
     }
 
     private boolean isBullishTrendV2(FeatureStore feature, MarketData marketData) {
@@ -301,36 +472,6 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 && marketData.getClosePrice().compareTo(feature.getEma50()) > 0
                 && feature.getEma50().compareTo(feature.getEma200()) > 0
                 && feature.getEma50Slope().compareTo(ZERO) > 0
-                && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
-    }
-
-    private boolean isBullishTrend(FeatureStore feature, MarketData marketData) {
-        return hasValue(marketData.getClosePrice())
-                && hasValue(feature.getEma20())
-                && hasValue(feature.getEma50())
-                && hasValue(feature.getEma200())
-                && hasValue(feature.getEma50Slope())
-                && hasValue(feature.getAdx())
-                && hasValue(feature.getPlusDI())
-                && hasValue(feature.getMinusDI())
-                && hasValue(feature.getRsi())
-                && hasValue(feature.getMacdHistogram())
-                && hasValue(feature.getBodyToRangeRatio())
-                && hasValue(feature.getCloseLocationValue())
-                && hasValue(feature.getRelativeVolume20())
-                && marketData.getClosePrice().compareTo(feature.getEma50()) > 0
-                && feature.getEma20().compareTo(feature.getEma50()) > 0
-                && feature.getEma50().compareTo(feature.getEma200()) > 0
-                && feature.getEma50Slope().compareTo(ZERO) > 0
-                && safe(feature.getEma200Slope()).compareTo(ZERO) >= 0
-                && feature.getAdx().compareTo(MIN_ADX) >= 0
-                && feature.getPlusDI().compareTo(feature.getMinusDI()) > 0
-                && feature.getRsi().compareTo(LONG_MIN_RSI) >= 0
-                && feature.getMacdHistogram().compareTo(ZERO) > 0
-                && feature.getBodyToRangeRatio().compareTo(MIN_BODY_TO_RANGE) >= 0
-                && feature.getCloseLocationValue().compareTo(MIN_LONG_CLV) >= 0
-                && feature.getRelativeVolume20().compareTo(MIN_RELATIVE_VOLUME) >= 0
-                && !"BEARISH".equalsIgnoreCase(feature.getEntryBias())
                 && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
     }
 
@@ -366,7 +507,6 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 && !"RANGE".equalsIgnoreCase(bias.getTrendRegime());
     }
 
-
     private boolean isBearishBiasAlignedV2(FeatureStore bias, MarketData biasMarket) {
         if (bias == null || biasMarket == null) {
             return true;
@@ -379,7 +519,6 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
                 && bias.getEma50().compareTo(bias.getEma200()) < 0
                 && !"RANGE".equalsIgnoreCase(bias.getTrendRegime());
     }
-
 
     private int bullishSupportScore(FeatureStore feature) {
         int score = 0;
@@ -457,16 +596,6 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
         return score;
     }
 
-    private boolean isValidLongSetup(StrategyContext context, MarketData marketData, FeatureStore feature) {
-        FeatureStore biasFeature = context.getBiasFeatureStore();
-        MarketData biasMarket = context.getBiasMarketData();
-
-        return isBullishTrendV2(feature, marketData)
-                && isBullishPullbackSignal(feature)
-                && isBullishBiasAlignedV2(biasFeature, biasMarket)
-                && bullishSupportScore(feature) >= 2;
-    }
-
     private BigDecimal calculateLongStopLoss(MarketData marketData, FeatureStore feature) {
         BigDecimal atr = safe(feature.getAtr());
         BigDecimal structureLow = firstNonNull(feature.getLowestLow20(), marketData.getLowPrice());
@@ -521,12 +650,17 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
         return risk.compareTo(ZERO) > 0;
     }
 
-    private StrategyDecision hold(StrategyContext context, String reason) {
+    private StrategyDecision hold(EnrichedStrategyContext context, String reason) {
         return StrategyDecision.builder()
                 .decisionType(DecisionType.HOLD)
+                .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context != null ? context.getInterval() : null)
+                .signalType("TREND_PULLBACK")
                 .reason(reason)
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("HOLD", "TREND_PULLBACK"))
                 .build();
     }
 

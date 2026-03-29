@@ -3,7 +3,7 @@ package id.co.blackheart.service.trade;
 import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.response.BinanceOrderFill;
 import id.co.blackheart.dto.response.BinanceOrderResponse;
-import id.co.blackheart.dto.strategy.StrategyContext;
+import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
@@ -32,7 +32,7 @@ public class TradeOpenService {
     private final TradeStateSyncService tradeStateSyncService;
 
     public void openMarketOrder(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             StrategyDecision decision,
             BigDecimal tradeAmount,
             TradeType tradeType,
@@ -49,7 +49,7 @@ public class TradeOpenService {
     }
 
     private UUID openParentTrade(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             StrategyDecision decision,
             BigDecimal tradeQuoteNotional,
             TradeType tradeType,
@@ -103,8 +103,8 @@ public class TradeOpenService {
 
             persistedTrade = Trades.builder()
                     .accountId(context.getAccount().getAccountId())
-                    .accountStrategyId(context.getAccountStrategyId())
-                    .strategyName(context.getStrategyCode())
+                    .accountStrategyId(context.getAccountStrategy().getAccountStrategyId())
+                    .strategyName(resolveStrategyName(context, decision))
                     .interval(context.getInterval())
                     .exchange("BINANCE")
                     .asset(asset)
@@ -168,20 +168,23 @@ public class TradeOpenService {
         }
     }
 
-
     private PreTradeValidationResult validateBeforeOpen(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             StrategyDecision decision,
             BigDecimal tradeAmount,
             TradeType tradeType,
             String asset
     ) {
         if (context == null) {
-            return PreTradeValidationResult.invalid("StrategyContext is null");
+            return PreTradeValidationResult.invalid("EnrichedStrategyContext is null");
         }
 
         if (context.getAccount() == null) {
-            return PreTradeValidationResult.invalid("User is null");
+            return PreTradeValidationResult.invalid("Account is null");
+        }
+
+        if (context.getAccountStrategy() == null) {
+            return PreTradeValidationResult.invalid("AccountStrategy is null");
         }
 
         if (asset == null || asset.isBlank()) {
@@ -255,15 +258,31 @@ public class TradeOpenService {
                 estimatedPlan.tradeMode
         );
     }
+
+    private String resolveStrategyName(EnrichedStrategyContext context, StrategyDecision decision) {
+        if (decision != null && decision.getStrategyCode() != null && !decision.getStrategyCode().isBlank()) {
+            return decision.getStrategyCode();
+        }
+
+        if (context != null
+                && context.getAccountStrategy() != null
+                && context.getAccountStrategy().getStrategyCode() != null
+                && !context.getAccountStrategy().getStrategyCode().isBlank()) {
+            return context.getAccountStrategy().getStrategyCode();
+        }
+
+        return "UNKNOWN_STRATEGY";
+    }
+
     private BigDecimal resolveReferencePrice(StrategyDecision decision, TradeType tradeType) {
         BigDecimal tp1 = decision.getTakeProfitPrice1();
         BigDecimal tp2 = decision.getTakeProfitPrice2();
         BigDecimal stop = decision.getStopLossPrice();
 
-        // Calculate midpoint between TP1 and stop loss
         if (tp1 != null && stop != null) {
-            boolean isValidMidpoint = (tradeType == TradeType.LONG && tp1.compareTo(stop) > 0) ||
-                    (tradeType != TradeType.LONG && stop.compareTo(tp1) > 0);
+            boolean isValidMidpoint =
+                    (tradeType == TradeType.LONG && tp1.compareTo(stop) > 0)
+                            || (tradeType == TradeType.SHORT && stop.compareTo(tp1) > 0);
 
             if (isValidMidpoint) {
                 return tp1.add(stop).divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
@@ -279,6 +298,7 @@ public class TradeOpenService {
         if (stop != null && stop.compareTo(BigDecimal.ZERO) > 0) {
             return stop;
         }
+
         return null;
     }
 
@@ -329,7 +349,6 @@ public class TradeOpenService {
         BigDecimal avgPrice = totalQuote.divide(totalQty, 8, RoundingMode.HALF_UP);
         return new FillProcessingResult(totalQty, totalQuote, totalFee, feeCurrency, avgPrice);
     }
-
 
     private void allocateAndPersistTradePositions(
             Trades trade,
@@ -512,8 +531,7 @@ public class TradeOpenService {
 
         BigDecimal allocatedTotal = tp1Qty.add(tp2Qty).add(runnerQty);
         if (allocatedTotal.compareTo(normalizedTotalQty) != 0) {
-            log.error("Three-slice allocation mismatch | totalQty={} allocated={}",
-                    normalizedTotalQty, allocatedTotal);
+            log.error("Three-slice allocation mismatch | totalQty={} allocated={}", normalizedTotalQty, allocatedTotal);
             return invalidPlan();
         }
 
@@ -554,7 +572,6 @@ public class TradeOpenService {
         );
     }
 
-
     private SplitPlan tryTwoSlicePlan(
             BigDecimal totalQty,
             BigDecimal avgEntryPrice,
@@ -574,8 +591,7 @@ public class TradeOpenService {
 
         BigDecimal allocatedTotal = tp1Qty.add(runnerQty);
         if (allocatedTotal.compareTo(normalizedTotalQty) != 0) {
-            log.error("Two-slice allocation mismatch | totalQty={} allocated={}",
-                    normalizedTotalQty, allocatedTotal);
+            log.error("Two-slice allocation mismatch | totalQty={} allocated={}", normalizedTotalQty, allocatedTotal);
             return invalidPlan();
         }
 
@@ -683,40 +699,6 @@ public class TradeOpenService {
 
     private SplitPlan invalidPlan() {
         return new SplitPlan("INVALID", List.of());
-    }
-
-    private BigDecimal calculatePLAmount(
-            BigDecimal entryPrice,
-            BigDecimal exitPrice,
-            BigDecimal qty,
-            TradeType tradeType
-    ) {
-        if (entryPrice == null || exitPrice == null || qty == null) {
-            return BigDecimal.ZERO;
-        }
-
-        return switch (tradeType) {
-            case LONG -> exitPrice.subtract(entryPrice).multiply(qty);
-            case SHORT -> entryPrice.subtract(exitPrice).multiply(qty);
-        };
-    }
-
-    private BigDecimal calculatePLPercentage(
-            BigDecimal entryPrice,
-            BigDecimal exitPrice,
-            TradeType tradeType
-    ) {
-        if (entryPrice == null || exitPrice == null || entryPrice.compareTo(BigDecimal.ZERO) == 0) {
-            return BigDecimal.ZERO;
-        }
-
-        BigDecimal diff = switch (tradeType) {
-            case LONG -> exitPrice.subtract(entryPrice);
-            case SHORT -> entryPrice.subtract(exitPrice);
-        };
-
-        return diff.divide(entryPrice, 8, RoundingMode.HALF_UP)
-                .multiply(new BigDecimal("100"));
     }
 
     private BigDecimal floorToStep(BigDecimal qty) {

@@ -18,6 +18,7 @@ public class BacktestRunRequest {
     private UUID accountStrategyId;
 
     private String strategyName;
+    private String strategyCode;
     private String asset;
     private String interval;
 

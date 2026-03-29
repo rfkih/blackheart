@@ -19,7 +19,6 @@ import java.util.UUID;
 public class BacktestTrade {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "backtest_trade_id", nullable = false, updatable = false)
     private UUID backtestTradeId;
 

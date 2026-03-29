@@ -17,4 +17,13 @@ public class BacktestExecutionSummary {
     private BigDecimal maxDrawdownPercent;
     private BigDecimal totalReturnPercent;
     private BigDecimal sharpeRatio;
+
+    private BigDecimal netProfit;
+    private BigDecimal grossProfit;
+    private BigDecimal grossLoss;
+    private BigDecimal expectancy;
+    private BigDecimal avgWin;
+    private BigDecimal avgLoss;
+    private BigDecimal maxDrawdownAmount;
+    private BigDecimal sortinoRatio;
 }
