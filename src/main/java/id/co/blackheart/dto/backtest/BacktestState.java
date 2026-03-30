@@ -1,5 +1,6 @@
 package id.co.blackheart.dto.backtest;
 
+import id.co.blackheart.model.BacktestEquityPoint;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.model.BacktestTradePosition;
@@ -44,6 +45,8 @@ public class BacktestState {
      */
     private List<BacktestTradePosition> completedTradePositions;
 
+    private List<BacktestEquityPoint> equityPoints;
+
     public static BacktestState initial(BacktestRun run) {
         return BacktestState.builder()
                 .cashBalance(run.getInitialCapital())
@@ -54,6 +57,7 @@ public class BacktestState {
                 .activeTradePositions(new ArrayList<>())
                 .completedTrades(new ArrayList<>())
                 .completedTradePositions(new ArrayList<>())
+                .equityPoints(new ArrayList<>())
                 .build();
     }
 }

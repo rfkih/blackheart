@@ -321,14 +321,14 @@ public class TradeServiceV1 {
             String asset,
             String side,
             BigDecimal amount,
-            Account user
+            Account account
     ) {
         return BinanceOrderRequest.builder()
                 .symbol(asset)
                 .side(side)
                 .amount(amount)
-                .apiKey(user.getApiKey())
-                .apiSecret(user.getApiSecret())
+                .apiKey(account.getApiKey())
+                .apiSecret(account.getApiSecret())
                 .build();
     }
 
@@ -661,7 +661,7 @@ public class TradeServiceV1 {
         }
 
         if (context.getAccount() == null) {
-            return PreTradeValidationResult.invalid("User is null");
+            return PreTradeValidationResult.invalid("Account is null");
         }
 
         if (asset == null || asset.isBlank()) {

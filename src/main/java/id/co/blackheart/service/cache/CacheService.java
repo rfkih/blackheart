@@ -18,7 +18,7 @@ public class CacheService {
 
     private static final String TRADE_KEY_PREFIX = "trade:";
     private static final String TRADE_POSITIONS_KEY_PREFIX = "tradePositions:";
-    private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "userActiveTrades:";
+    private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "accountActiveTrades:";
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final ZoneId DEFAULT_ZONE_ID = ZoneId.systemDefault();

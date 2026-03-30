@@ -86,11 +86,6 @@ public class BacktestTradeExecutorService {
         BigDecimal requestedQuoteAmount = resolveRequestedQuoteAmount(decision);
         BigDecimal entryPrice = safe(context.getMarketData().getClosePrice());
 
-        log.info("Backtest decision sizing | side={} notionalSize={} positionSize={} requestedQuoteAmount={}",
-                tradeType,
-                decision.getNotionalSize(),
-                decision.getPositionSize(),
-                requestedQuoteAmount);
 
         if (requestedQuoteAmount.compareTo(BigDecimal.ZERO) <= 0 || entryPrice.compareTo(BigDecimal.ZERO) <= 0) {
             log.warn("Backtest {} rejected | asset={} reason=Invalid size or entry price",

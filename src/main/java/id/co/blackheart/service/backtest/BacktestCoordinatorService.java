@@ -53,6 +53,7 @@ public class BacktestCoordinatorService {
     private final BacktestPositionSnapshotMapper backtestPositionSnapshotMapper;
     private final BacktestStateService backtestStateService;
     private final BacktestPersistenceService backtestPersistenceService;
+    private final BacktestEquityPointRecorder backtestEquityPointRecorder;
 
     public BacktestExecutionSummary execute(BacktestRun backtestRun) {
         validateBacktestRun(backtestRun);
@@ -133,17 +134,16 @@ public class BacktestCoordinatorService {
             }
 
             backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
+            backtestEquityPointRecorder.record(state, backtestRun, monitorCandle);
         }
 
-        MarketData finalCandle = monitorCandles.get(monitorCandles.size() - 1);
+        MarketData finalCandle = monitorCandles.getLast();
 
         forceCloseRemainingOpenTrade(backtestRun, state, finalCandle);
         backtestStateService.updateEquityAndDrawdown(state, finalCandle.getClosePrice());
 
         BacktestExecutionSummary summary = backtestMetricsService.buildSummary(backtestRun, state);
 
-        // false = persist only backtest_run summary
-        // true  = persist backtest_run + completed trades + completed positions
         backtestPersistenceService.persist(backtestRun, state, summary, true);
 
         return summary;

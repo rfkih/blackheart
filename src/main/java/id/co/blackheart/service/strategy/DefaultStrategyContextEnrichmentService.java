@@ -38,7 +38,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         MarketData biasMarketData = null;
         FeatureStore biasFeatureStore = null;
 
-        if (Boolean.TRUE.equals(requirements.isRequireBiasTimeframe())
+        if (requirements.isRequireBiasTimeframe()
                 && requirements.getBiasInterval() != null
                 && !requirements.getBiasInterval().isBlank()) {
             biasFeatureStore = featureStoreRepository
@@ -50,19 +50,19 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
                     .orElse(null);
         }
 
-        RegimeSnapshot regimeSnapshot = Boolean.TRUE.equals(requirements.isRequireRegimeSnapshot())
+        RegimeSnapshot regimeSnapshot = requirements.isRequireRegimeSnapshot()
                 ? buildRegimeSnapshot(baseContext, biasFeatureStore, biasMarketData)
                 : null;
 
-        VolatilitySnapshot volatilitySnapshot = Boolean.TRUE.equals(requirements.isRequireVolatilitySnapshot())
+        VolatilitySnapshot volatilitySnapshot = requirements.isRequireVolatilitySnapshot()
                 ? buildVolatilitySnapshot(baseContext)
                 : null;
 
-        RiskSnapshot riskSnapshot = Boolean.TRUE.equals(requirements.isRequireRiskSnapshot())
+        RiskSnapshot riskSnapshot = requirements.isRequireRiskSnapshot()
                 ? buildRiskSnapshot(baseContext, volatilitySnapshot)
                 : null;
 
-        MarketQualitySnapshot marketQualitySnapshot = Boolean.TRUE.equals(requirements.isRequireMarketQualitySnapshot())
+        MarketQualitySnapshot marketQualitySnapshot =requirements.isRequireMarketQualitySnapshot()
                 ? buildMarketQualitySnapshot(baseContext)
                 : null;
 

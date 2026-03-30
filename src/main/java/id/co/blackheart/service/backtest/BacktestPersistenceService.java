@@ -3,6 +3,7 @@ package id.co.blackheart.service.backtest;
 import id.co.blackheart.dto.backtest.BacktestExecutionSummary;
 import id.co.blackheart.dto.backtest.BacktestState;
 import id.co.blackheart.model.BacktestRun;
+import id.co.blackheart.repository.BacktestEquityPointRepository;
 import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.repository.BacktestTradePositionRepository;
 import id.co.blackheart.repository.BacktestTradeRepository;
@@ -17,6 +18,7 @@ public class BacktestPersistenceService {
     private final BacktestRunRepository backtestRunRepository;
     private final BacktestTradeRepository backtestTradeRepository;
     private final BacktestTradePositionRepository backtestTradePositionRepository;
+    private final BacktestEquityPointRepository backtestEquityPointRepository;
 
     @Transactional
     public void persist(
@@ -35,6 +37,10 @@ public class BacktestPersistenceService {
 
         applySummary(backtestRun, summary);
         backtestRunRepository.saveAndFlush(backtestRun);
+
+        if (state != null && state.getEquityPoints() != null && !state.getEquityPoints().isEmpty()) {
+            backtestEquityPointRepository.saveAllAndFlush(state.getEquityPoints());
+        }
 
         if (!persistTradeDetails) {
             return;

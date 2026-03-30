@@ -23,6 +23,7 @@ public class LivePnlPublisherService {
     public void publishLivePnl() {
         for (UUID accountId : subscriptionRegistry.getSubscribedAcccountId()) {
             try {
+                log.info("accountId : {}", accountId);
                 ActiveTradePnlResponse response = tradePnlQueryService.getCurrentActiveTradePnl(accountId);
                 messagingTemplate.convertAndSend("/topic/pnl/" + accountId, response);
             } catch (Exception e) {
