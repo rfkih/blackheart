@@ -130,6 +130,10 @@ public class BacktestTradeExecutorService {
                 .realizedPnlAmount(BigDecimal.ZERO)
                 .realizedPnlPercent(BigDecimal.ZERO)
                 .totalFeeAmount(entryFee)
+                .entryTrendRegime(context.getFeatureStore().getTrendRegime())
+                .entryAdx(context.getFeatureStore().getAdx())
+                .entryAtr(context.getFeatureStore().getAtr())
+                .entryRsi(context.getFeatureStore().getRsi())
                 .exitReason(null)
                 .entryTime(entryTime)
                 .exitTime(null)
@@ -181,9 +185,9 @@ public class BacktestTradeExecutorService {
         state.setActiveTrade(trade);
         state.setActiveTradePositions(new ArrayList<>(positions));
 
-        log.info("Backtest {} opened | tradeId={} qty={} quote={} fee={} positions={}",
+        log.info("Backtest {} opened | timeOpen={} qty={} quote={} fee={} positions={}",
                 tradeType,
-                trade.getBacktestTradeId(),
+                trade.getEntryTime(),
                 totalQty,
                 requestedQuoteAmount,
                 entryFee,

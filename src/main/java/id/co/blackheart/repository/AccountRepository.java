@@ -13,7 +13,12 @@ import java.util.UUID;
 
 @Repository
 public interface AccountRepository extends JpaRepository<Account, Long> {
-    List<Account> findByIsActive(String isActive);
+    @Query(
+            value = "SELECT * FROM accounts WHERE is_active = :isActive",
+            nativeQuery = true
+    )
+    List<Account> findByIsActive(@Param("isActive") String isActive);
+
     @Query(value = """
     SELECT a.*
     FROM accounts a

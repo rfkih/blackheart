@@ -38,13 +38,14 @@ public class PortfolioService {
     @Async
     public void reloadAsset() {
         log.info("Starting portfolio reload...");
-        List<Account> userList = accountRepository.findByIsActive("1");
-
-        userList.parallelStream().forEach(user -> {
+        List<Account> accountList = accountRepository.findByIsActive("1");
+        log.info("account {}", accountList);
+        accountList.parallelStream().forEach(account -> {
             try {
-                updateAndGetBinanceAssetBalance(user);
+                log.info("account {}", account);
+                updateAndGetBinanceAssetBalance(account);
             } catch (Exception e) {
-                log.error("Error processing User: {} in reloadAsset()", user.getUsername(), e);
+                log.error("Error processing User: {} in reloadAsset()", account.getUsername(), e);
             }
         });
 
@@ -66,16 +67,16 @@ public class PortfolioService {
         return savePortfolio(user, asset, assetData.getFree(), assetData.getLocked());
     }
 
-    public void updateAndGetBinanceAssetBalance(Account user) {
+    public void updateAndGetBinanceAssetBalance(Account account) {
         BinanceAssetRequest binanceAssetRequest = new BinanceAssetRequest();
-        binanceAssetRequest.setApiKey(user.getApiKey());
-        binanceAssetRequest.setApiSecret(user.getApiSecret());
+        binanceAssetRequest.setApiKey(account.getApiKey());
+        binanceAssetRequest.setApiSecret(account.getApiSecret());
         binanceAssetRequest.setRecvWindow(RECV_WINDOW);
 
         BinanceAssetResponse binanceAssetResponse = binanceClientService.getBinanceAssetDetails(binanceAssetRequest);
 
 
-        saveAllBinanceAssets(user, binanceAssetResponse.getAssets());
+        saveAllBinanceAssets(account, binanceAssetResponse.getAssets());
 
     }
 

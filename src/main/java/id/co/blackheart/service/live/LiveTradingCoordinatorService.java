@@ -78,13 +78,11 @@ public class LiveTradingCoordinatorService {
             StrategyDecision decision = executor.execute(context);
 
             log.info(
-                    "Strategy decision |  interval={} decisionType={} signalType={} setupType={} regime={} reason={}",
+                    "Strategy decision |  interval={} decision={} side={} score={} ",
                     interval,
                     decision.getDecisionType(),
-                    decision.getSignalType(),
-                    decision.getSetupType(),
-                    decision.getRegimeLabel(),
-                    decision.getReason()
+                    decision.getSide(),
+                    decision.getConfidenceScore()
             );
 
             if (decision.isNoAction()) {

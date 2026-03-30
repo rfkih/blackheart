@@ -18,38 +18,38 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
-@Component("RAHT_V1")
-public class RahtV1StrategyExecutor implements StrategyExecutor {
+@Component("TSMOM_V1")
+public class TsMomV1StrategyExecutor implements StrategyExecutor {
 
-    private static final String STRATEGY_CODE = "RAHT_V2";
-    private static final String STRATEGY_NAME = "Regime Adaptive Hierarchical Trend V2";
-    private static final String STRATEGY_VERSION = "v2";
+    private static final String STRATEGY_CODE = "TSMOM_V1";
+    private static final String STRATEGY_NAME = "Time Series Momentum";
+    private static final String STRATEGY_VERSION = "v1";
 
     private static final String SIDE_LONG = "LONG";
     private static final String SIDE_SHORT = "SHORT";
 
-    private static final String SIGNAL_TYPE_TREND_PULLBACK = "TREND_PULLBACK";
+    private static final String SIGNAL_TYPE_TREND = "TREND";
     private static final String SIGNAL_TYPE_POSITION_MANAGEMENT = "POSITION_MANAGEMENT";
 
-    private static final String SETUP_LONG = "BULL_PULLBACK_RECLAIM";
-    private static final String SETUP_SHORT = "BEAR_PULLBACK_RECLAIM";
-    private static final String SETUP_LONG_BREAK_EVEN = "LONG_BREAK_EVEN_UPDATE";
-    private static final String SETUP_SHORT_BREAK_EVEN = "SHORT_BREAK_EVEN_UPDATE";
+    private static final String SETUP_LONG = "TSMOM_LONG_CONTINUATION";
+    private static final String SETUP_SHORT = "TSMOM_SHORT_CONTINUATION";
+    private static final String SETUP_LONG_BREAK_EVEN = "TSMOM_LONG_BREAK_EVEN";
+    private static final String SETUP_SHORT_BREAK_EVEN = "TSMOM_SHORT_BREAK_EVEN";
 
-    private static final String EXIT_STRUCTURE = "TP1_TP2_RUNNER";
+    private static final String EXIT_STRUCTURE = "SINGLE";
     private static final String TARGET_ALL = "ALL";
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal ONE = BigDecimal.ONE;
 
-    private static final BigDecimal DEFAULT_STOP_ATR_MULT = new BigDecimal("1.50");
-    private static final BigDecimal DEFAULT_TP1_R = new BigDecimal("1.50");
-    private static final BigDecimal DEFAULT_TP2_R = new BigDecimal("2.50");
-    private static final BigDecimal DEFAULT_TP3_R = new BigDecimal("4.00");
+    private static final BigDecimal DEFAULT_STOP_ATR_MULT = new BigDecimal("1.40");
+    private static final BigDecimal DEFAULT_TP1_R = new BigDecimal("1.20");
+    private static final BigDecimal DEFAULT_TP2_R = new BigDecimal("2.20");
+    private static final BigDecimal DEFAULT_TP3_R = new BigDecimal("3.60");
     private static final BigDecimal DEFAULT_BREAK_EVEN_R = new BigDecimal("1.00");
 
-    private static final BigDecimal MIN_SIGNAL_SCORE = new BigDecimal("0.60");
-    private static final BigDecimal MIN_CONFIDENCE_SCORE = new BigDecimal("0.60");
+    private static final BigDecimal DEFAULT_MIN_SIGNAL_SCORE = new BigDecimal("0.55");
+    private static final BigDecimal DEFAULT_MIN_CONFIDENCE_SCORE = new BigDecimal("0.55");
 
     @Override
     public StrategyRequirements getRequirements() {
@@ -100,7 +100,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
             }
         }
 
-        return hold(context, "No qualified RAHT setup");
+        return hold(context, "No qualified TSMOM setup");
     }
 
     private boolean isMarketVetoed(EnrichedStrategyContext context) {
@@ -114,8 +114,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 && volatilitySnapshot.getJumpRiskScore() != null
                 && context.getRuntimeConfig() != null
                 && context.getRuntimeConfig().getMaxJumpRiskScore() != null
-                && volatilitySnapshot.getJumpRiskScore()
-                .compareTo(context.getRuntimeConfig().getMaxJumpRiskScore()) > 0) {
+                && volatilitySnapshot.getJumpRiskScore().compareTo(context.getRuntimeConfig().getMaxJumpRiskScore()) > 0) {
             return true;
         }
 
@@ -127,11 +126,11 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
             MarketData marketData,
             FeatureStore feature
     ) {
-        if (!isBullishRegime(context, feature, marketData)) {
+        if (!isBullishTrend(context, feature, marketData)) {
             return null;
         }
 
-        if (!isBullishPullbackSignal(feature)) {
+        if (!isBullishEntryConfirmation(feature, marketData)) {
             return null;
         }
 
@@ -148,7 +147,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
         BigDecimal tp2 = entryPrice.add(riskPerUnit.multiply(resolveTp2R(context)));
         BigDecimal tp3 = entryPrice.add(riskPerUnit.multiply(resolveTp3R(context)));
 
-        BigDecimal signalScore = calculateLongSignalScore(context, feature);
+        BigDecimal signalScore = calculateLongSignalScore(context, feature, marketData);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore);
 
         if (signalScore.compareTo(resolveMinSignalScore(context)) < 0
@@ -156,8 +155,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notionalSize = calculateNotionalSize(context);
-
+        BigDecimal notionalSize = calculateLongNotionalSize(context);
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Calculated long notional size is zero");
         }
@@ -168,11 +166,11 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
-                .signalType(SIGNAL_TYPE_TREND_PULLBACK)
+                .signalType(SIGNAL_TYPE_TREND)
                 .setupType(SETUP_LONG)
                 .side(SIDE_LONG)
                 .regimeLabel(resolveRegimeLabel(context, feature))
-                .reason("Qualified bullish pullback continuation setup")
+                .reason("Qualified bullish time-series momentum continuation setup")
                 .signalScore(signalScore)
                 .confidenceScore(confidenceScore)
                 .regimeScore(resolveRegimeScore(context))
@@ -191,14 +189,16 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .entryRsi(feature.getRsi())
                 .entryTrendRegime(feature.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", "RAHT", "TREND", "LONG"))
+                .tags(List.of("ENTRY", "TSMOM", "LONG", "TREND"))
                 .diagnostics(Map.of(
-                        "module", "RahtV2StrategyExecutor",
+                        "module", "TsMomV1StrategyExecutor",
                         "entryPrice", entryPrice,
                         "stopLoss", stopLoss,
                         "tp1", tp1,
                         "tp2", tp2,
-                        "tp3", tp3
+                        "tp3", tp3,
+                        "signalScore", signalScore,
+                        "confidenceScore", confidenceScore
                 ))
                 .build();
     }
@@ -208,11 +208,11 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
             MarketData marketData,
             FeatureStore feature
     ) {
-        if (!isBearishRegime(context, feature, marketData)) {
+        if (!isBearishTrend(context, feature, marketData)) {
             return null;
         }
 
-        if (!isBearishPullbackSignal(feature)) {
+        if (!isBearishEntryConfirmation(feature, marketData)) {
             return null;
         }
 
@@ -229,7 +229,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
         BigDecimal tp2 = entryPrice.subtract(riskPerUnit.multiply(resolveTp2R(context)));
         BigDecimal tp3 = entryPrice.subtract(riskPerUnit.multiply(resolveTp3R(context)));
 
-        BigDecimal signalScore = calculateShortSignalScore(context, feature);
+        BigDecimal signalScore = calculateShortSignalScore(context, feature, marketData);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore);
 
         if (signalScore.compareTo(resolveMinSignalScore(context)) < 0
@@ -237,8 +237,8 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal quoteNotional = calculateShortQuoteNotional(context);
-        if (quoteNotional.compareTo(ZERO) <= 0) {
+        BigDecimal positionSize = calculateShortQuoteNotional(context);
+        if (positionSize.compareTo(ZERO) <= 0) {
             return hold(context, "Calculated short quote notional is zero");
         }
 
@@ -248,17 +248,17 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
-                .signalType(SIGNAL_TYPE_TREND_PULLBACK)
+                .signalType(SIGNAL_TYPE_TREND)
                 .setupType(SETUP_SHORT)
                 .side(SIDE_SHORT)
                 .regimeLabel(resolveRegimeLabel(context, feature))
-                .reason("Qualified bearish pullback continuation setup")
+                .reason("Qualified bearish time-series momentum continuation setup")
                 .signalScore(signalScore)
                 .confidenceScore(confidenceScore)
                 .regimeScore(resolveRegimeScore(context))
                 .riskMultiplier(resolveRiskMultiplier(context))
                 .jumpRiskScore(resolveJumpRisk(context))
-                .positionSize(quoteNotional)
+                .positionSize(positionSize)
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(tp1)
@@ -271,14 +271,16 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .entryRsi(feature.getRsi())
                 .entryTrendRegime(feature.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", "RAHT", "TREND", "SHORT"))
+                .tags(List.of("ENTRY", "TSMOM", "SHORT", "TREND"))
                 .diagnostics(Map.of(
-                        "module", "RahtV2StrategyExecutor",
+                        "module", "TsMomV1StrategyExecutor",
                         "entryPrice", entryPrice,
                         "stopLoss", stopLoss,
                         "tp1", tp1,
                         "tp2", tp2,
-                        "tp3", tp3
+                        "tp3", tp3,
+                        "signalScore", signalScore,
+                        "confidenceScore", confidenceScore
                 ))
                 .build();
     }
@@ -347,7 +349,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .takeProfitPrice3(null)
                 .targetPositionRole(TARGET_ALL)
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("MANAGEMENT", "RAHT", "LONG", "BREAK_EVEN"))
+                .tags(List.of("MANAGEMENT", "TSMOM", "LONG", "BREAK_EVEN"))
                 .diagnostics(Map.of(
                         "entryPrice", entryPrice,
                         "currentStop", currentStop,
@@ -400,7 +402,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .takeProfitPrice3(null)
                 .targetPositionRole(TARGET_ALL)
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("MANAGEMENT", "RAHT", "SHORT", "BREAK_EVEN"))
+                .tags(List.of("MANAGEMENT", "TSMOM", "SHORT", "BREAK_EVEN"))
                 .diagnostics(Map.of(
                         "entryPrice", entryPrice,
                         "currentStop", currentStop,
@@ -410,7 +412,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .build();
     }
 
-    private boolean isBullishRegime(
+    private boolean isBullishTrend(
             EnrichedStrategyContext context,
             FeatureStore feature,
             MarketData marketData
@@ -439,7 +441,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
         return currentTrend && biasTrend;
     }
 
-    private boolean isBearishRegime(
+    private boolean isBearishTrend(
             EnrichedStrategyContext context,
             FeatureStore feature,
             MarketData marketData
@@ -468,26 +470,55 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
         return currentTrend && biasTrend;
     }
 
-    private boolean isBullishPullbackSignal(FeatureStore feature) {
-        return Boolean.TRUE.equals(feature.getIsBullishPullback());
+    private boolean isBullishEntryConfirmation(FeatureStore feature, MarketData marketData) {
+        return hasValue(feature.getMacdHistogram())
+                && hasValue(feature.getRsi())
+                && hasValue(feature.getAdx())
+                && hasValue(marketData.getClosePrice())
+                && hasValue(feature.getEma50())
+                && feature.getMacdHistogram().compareTo(ZERO) > 0
+                && feature.getRsi().compareTo(new BigDecimal("50")) >= 0
+                && feature.getAdx().compareTo(new BigDecimal("18")) >= 0
+                && marketData.getClosePrice().compareTo(feature.getEma50()) > 0;
     }
 
-    private boolean isBearishPullbackSignal(FeatureStore feature) {
-        return Boolean.TRUE.equals(feature.getIsBearishPullback());
+    private boolean isBearishEntryConfirmation(FeatureStore feature, MarketData marketData) {
+        return hasValue(feature.getMacdHistogram())
+                && hasValue(feature.getRsi())
+                && hasValue(feature.getAdx())
+                && hasValue(marketData.getClosePrice())
+                && hasValue(feature.getEma50())
+                && feature.getMacdHistogram().compareTo(ZERO) < 0
+                && feature.getRsi().compareTo(new BigDecimal("50")) <= 0
+                && feature.getAdx().compareTo(new BigDecimal("18")) >= 0
+                && marketData.getClosePrice().compareTo(feature.getEma50()) < 0;
     }
 
-    private BigDecimal calculateLongSignalScore(EnrichedStrategyContext context, FeatureStore feature) {
-        BigDecimal score = new BigDecimal("0.40");
+    private BigDecimal calculateLongSignalScore(
+            EnrichedStrategyContext context,
+            FeatureStore feature,
+            MarketData marketData
+    ) {
+        BigDecimal score = new BigDecimal("0.35");
 
         if (hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("50")) >= 0) {
+        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("52")) >= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
         if (hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) > 0) {
+            score = score.add(new BigDecimal("0.15"));
+        }
+
+        if (hasValue(feature.getEma50Slope()) && feature.getEma50Slope().compareTo(ZERO) > 0) {
+            score = score.add(new BigDecimal("0.10"));
+        }
+
+        if (hasValue(marketData.getClosePrice()) && hasValue(feature.getEma50())
+                && marketData.getClosePrice().compareTo(feature.getEma50()) > 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
@@ -503,21 +534,34 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        return score.min(ONE);
+        return score.min(ONE).setScale(4, RoundingMode.HALF_UP);
     }
 
-    private BigDecimal calculateShortSignalScore(EnrichedStrategyContext context, FeatureStore feature) {
-        BigDecimal score = new BigDecimal("0.40");
+    private BigDecimal calculateShortSignalScore(
+            EnrichedStrategyContext context,
+            FeatureStore feature,
+            MarketData marketData
+    ) {
+        BigDecimal score = new BigDecimal("0.35");
 
         if (hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("50")) <= 0) {
+        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("48")) <= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
         if (hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) < 0) {
+            score = score.add(new BigDecimal("0.15"));
+        }
+
+        if (hasValue(feature.getEma50Slope()) && feature.getEma50Slope().compareTo(ZERO) < 0) {
+            score = score.add(new BigDecimal("0.10"));
+        }
+
+        if (hasValue(marketData.getClosePrice()) && hasValue(feature.getEma50())
+                && marketData.getClosePrice().compareTo(feature.getEma50()) < 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
@@ -533,7 +577,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        return score.min(ONE);
+        return score.min(ONE).setScale(4, RoundingMode.HALF_UP);
     }
 
     private BigDecimal calculateConfidenceScore(EnrichedStrategyContext context, BigDecimal signalScore) {
@@ -555,7 +599,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
         return confidence.min(ONE).setScale(4, RoundingMode.HALF_UP);
     }
 
-    private BigDecimal calculateNotionalSize(EnrichedStrategyContext context) {
+    private BigDecimal calculateLongNotionalSize(EnrichedStrategyContext context) {
         BigDecimal cashBalance = safe(context.getCashBalance());
         BigDecimal riskPct = resolveRiskPct(context);
 
@@ -626,16 +670,17 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
         BigDecimal value = context.getRuntimeConfig() != null
                 ? context.getRuntimeConfig().getMinSignalScore()
                 : null;
-        return value != null ? value : MIN_SIGNAL_SCORE;
+        return value != null ? value : DEFAULT_MIN_SIGNAL_SCORE;
     }
 
     private BigDecimal resolveMinConfidenceScore(EnrichedStrategyContext context) {
-        return MIN_CONFIDENCE_SCORE;
+        return DEFAULT_MIN_CONFIDENCE_SCORE;
     }
 
     private BigDecimal resolveRiskPct(EnrichedStrategyContext context) {
         RiskSnapshot riskSnapshot = context.getRiskSnapshot();
-        if (riskSnapshot != null && riskSnapshot.getFinalRiskPct() != null
+        if (riskSnapshot != null
+                && riskSnapshot.getFinalRiskPct() != null
                 && riskSnapshot.getFinalRiskPct().compareTo(ZERO) > 0) {
             return riskSnapshot.getFinalRiskPct();
         }
@@ -687,10 +732,10 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context != null ? context.getInterval() : null)
-                .signalType("RAHT")
+                .signalType("TSMOM")
                 .reason(reason)
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("HOLD", "RAHT"))
+                .tags(List.of("HOLD", "TSMOM"))
                 .build();
     }
 
@@ -709,7 +754,7 @@ public class RahtV1StrategyExecutor implements StrategyExecutor {
                 .reason("Decision vetoed by risk layer")
                 .jumpRiskScore(resolveJumpRisk(context))
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("VETO", "RAHT", "RISK_LAYER"))
+                .tags(List.of("VETO", "TSMOM", "RISK_LAYER"))
                 .diagnostics(Map.of())
                 .build();
     }
