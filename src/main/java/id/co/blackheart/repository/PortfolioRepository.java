@@ -29,7 +29,7 @@ public interface PortfolioRepository extends JpaRepository<Portfolio, Long> {
     FROM portfolio p
     WHERE p.account_id = :accountId
       AND p.asset IN (:assets)
-      AND p.is_active = 'Y'
+      AND p.is_active = '1'
     """, nativeQuery = true)
     List<Portfolio> findAllByAccountIdAndAssetIn(UUID accountId, List<String> assets);
 }

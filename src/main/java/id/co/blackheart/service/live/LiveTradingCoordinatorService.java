@@ -157,10 +157,16 @@ public class LiveTradingCoordinatorService {
     ) {
         AssetPair assetPair = resolveAssetPair(asset);
 
+        log.info("assetPair {},", assetPair);
+
         List<Portfolio> portfolios = portfolioRepository.findAllByAccountIdAndAssetIn(
                 account.getAccountId(),
                 List.of(assetPair.baseAsset(), assetPair.quoteAsset())
         );
+
+        log.info("portfolioSize {},", portfolios.size());
+
+
 
         BigDecimal cashBalance = BigDecimal.ZERO;
         BigDecimal assetBalance = BigDecimal.ZERO;

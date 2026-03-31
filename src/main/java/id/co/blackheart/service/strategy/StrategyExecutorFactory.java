@@ -1,10 +1,12 @@
 package id.co.blackheart.service.strategy;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class StrategyExecutorFactory {
 
     private final TrendPullbackSingleExitStrategyService trendPullbackSingleExitStrategyService;
@@ -13,6 +15,7 @@ public class StrategyExecutorFactory {
     private final TsMomV1StrategyExecutor tsMomV1StrategyExecutor;
 
     public StrategyExecutor get(String strategyName) {
+        log.info("Getting strategy executor for strategy: {}", strategyName);
         return switch (strategyName) {
             case "TREND_PULLBACK_SINGLE_EXIT" -> trendPullbackSingleExitStrategyService;
             case "TEST" -> executionTestService;
