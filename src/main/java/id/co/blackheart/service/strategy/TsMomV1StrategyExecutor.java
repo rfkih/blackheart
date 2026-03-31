@@ -31,12 +31,27 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     private static final String SIGNAL_TYPE_TREND = "TREND";
     private static final String SIGNAL_TYPE_POSITION_MANAGEMENT = "POSITION_MANAGEMENT";
 
+    private static final String POSITION_ROLE_RUNNER = "RUNNER";
+
+    private static final BigDecimal RUNNER_BREAK_EVEN_R = new BigDecimal("1.00");
+    private static final BigDecimal RUNNER_TRAIL_PHASE_1_R = new BigDecimal("2.00");
+    private static final BigDecimal RUNNER_TRAIL_PHASE_2_R = new BigDecimal("3.00");
+
+    private static final BigDecimal RUNNER_TRAIL_ATR_PHASE_1 = new BigDecimal("1.20");
+    private static final BigDecimal RUNNER_TRAIL_ATR_PHASE_2 = new BigDecimal("0.80");
+
+    private static final BigDecimal RUNNER_LOCK_R_PHASE_1 = new BigDecimal("0.50");
+    private static final BigDecimal RUNNER_LOCK_R_PHASE_2 = new BigDecimal("1.50");
+
+    private static final String SETUP_LONG_RUNNER_TRAIL = "TSMOM_LONG_RUNNER_TRAIL";
+    private static final String SETUP_SHORT_RUNNER_TRAIL = "TSMOM_SHORT_RUNNER_TRAIL";
+
     private static final String SETUP_LONG = "TSMOM_LONG_CONTINUATION";
     private static final String SETUP_SHORT = "TSMOM_SHORT_CONTINUATION";
     private static final String SETUP_LONG_BREAK_EVEN = "TSMOM_LONG_BREAK_EVEN";
     private static final String SETUP_SHORT_BREAK_EVEN = "TSMOM_SHORT_BREAK_EVEN";
 
-    private static final String EXIT_STRUCTURE = "SINGLE";
+    private static final String EXIT_STRUCTURE = "TP1_TP2_RUNNER";
     private static final String TARGET_ALL = "ALL";
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
@@ -83,7 +98,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
         }
 
         if (context.hasTradablePosition() && snapshot != null) {
-            return manageOpenPosition(context, marketData, snapshot);
+            return manageOpenPosition(context, snapshot);
         }
 
         if (context.isLongAllowed()) {
@@ -102,6 +117,210 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
 
         return hold(context, "No qualified TSMOM setup");
     }
+
+    private StrategyDecision manageOpenPosition(
+            EnrichedStrategyContext context,
+            PositionSnapshot snapshot
+    ) {
+        String side = snapshot.getSide();
+        if (side == null || snapshot.getEntryPrice() == null || snapshot.getCurrentStopLossPrice() == null) {
+            return hold(context, "Open position exists but management inputs are incomplete");
+        }
+
+        boolean isRunner = snapshot.getPositionRole() != null
+                && POSITION_ROLE_RUNNER.equalsIgnoreCase(snapshot.getPositionRole());
+
+        if (SIDE_LONG.equalsIgnoreCase(side)) {
+            return isRunner
+                    ? manageLongRunnerPosition(context, context.getMarketData(), context.getFeatureStore(), snapshot)
+                    : manageLongPosition(context, context.getMarketData(), snapshot);
+        }
+
+        if (SIDE_SHORT.equalsIgnoreCase(side)) {
+            return isRunner
+                    ? manageShortRunnerPosition(context, context.getMarketData(), context.getFeatureStore(), snapshot)
+                    : manageShortPosition(context, context.getMarketData(), snapshot);
+        }
+
+        return hold(context, "Unknown open position side");
+    }
+
+    private StrategyDecision manageLongRunnerPosition(
+            EnrichedStrategyContext context,
+            MarketData marketData,
+            FeatureStore feature,
+            PositionSnapshot snapshot
+    ) {
+        BigDecimal entryPrice = safe(snapshot.getEntryPrice());
+        BigDecimal currentStop = safe(snapshot.getCurrentStopLossPrice());
+        BigDecimal closePrice = safe(marketData.getClosePrice());
+        BigDecimal atr = resolveAtr(feature);
+
+        BigDecimal initialStop = snapshot.getInitialStopLossPrice() != null
+                ? snapshot.getInitialStopLossPrice()
+                : currentStop;
+
+        BigDecimal initialRisk = entryPrice.subtract(initialStop);
+        if (initialRisk.compareTo(ZERO) <= 0) {
+            return hold(context, "Invalid long runner risk structure");
+        }
+
+        BigDecimal move = closePrice.subtract(entryPrice);
+        if (move.compareTo(ZERO) <= 0) {
+            return hold(context, "Long runner not yet in profit");
+        }
+
+        BigDecimal rMultiple = move.divide(initialRisk, 6, RoundingMode.HALF_UP);
+
+        BigDecimal candidateStop = null;
+        String reason = null;
+        String setupType = null;
+
+        if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_2_R) >= 0) {
+            BigDecimal atrStop = closePrice.subtract(atr.multiply(RUNNER_TRAIL_ATR_PHASE_2));
+            BigDecimal lockedProfitStop = entryPrice.add(initialRisk.multiply(RUNNER_LOCK_R_PHASE_2));
+            candidateStop = atrStop.max(lockedProfitStop).max(entryPrice);
+            reason = "Trail long runner aggressively after 3R+";
+            setupType = SETUP_LONG_RUNNER_TRAIL;
+        } else if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_1_R) >= 0) {
+            BigDecimal atrStop = closePrice.subtract(atr.multiply(RUNNER_TRAIL_ATR_PHASE_1));
+            BigDecimal lockedProfitStop = entryPrice.add(initialRisk.multiply(RUNNER_LOCK_R_PHASE_1));
+            candidateStop = atrStop.max(lockedProfitStop).max(entryPrice);
+            reason = "Trail long runner after 2R+";
+            setupType = SETUP_LONG_RUNNER_TRAIL;
+        } else if (rMultiple.compareTo(RUNNER_BREAK_EVEN_R) >= 0) {
+            candidateStop = entryPrice;
+            reason = "Move long runner stop to break-even after 1R";
+            setupType = SETUP_LONG_BREAK_EVEN;
+        }
+
+        if (candidateStop == null) {
+            return hold(context, "Long runner not ready for trailing update");
+        }
+
+        if (candidateStop.compareTo(currentStop) <= 0 || candidateStop.compareTo(closePrice) >= 0) {
+            return hold(context, "Long runner stop already optimal");
+        }
+
+        return StrategyDecision.builder()
+                .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
+                .strategyCode(STRATEGY_CODE)
+                .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
+                .strategyInterval(context.getInterval())
+                .signalType(SIGNAL_TYPE_POSITION_MANAGEMENT)
+                .setupType(setupType)
+                .side(SIDE_LONG)
+                .reason(reason)
+                .stopLossPrice(candidateStop)
+                .trailingStopPrice(candidateStop)
+                .takeProfitPrice1(snapshot.getTakeProfitPrice())
+                .takeProfitPrice2(null)
+                .takeProfitPrice3(null)
+                .targetPositionRole(TARGET_ALL)
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("MANAGEMENT", "TSMOM", "LONG", "RUNNER_TRAIL"))
+                .diagnostics(Map.of(
+                        "entryPrice", entryPrice,
+                        "currentStop", currentStop,
+                        "closePrice", closePrice,
+                        "initialRisk", initialRisk,
+                        "rMultiple", rMultiple,
+                        "candidateStop", candidateStop,
+                        "positionRole", snapshot.getPositionRole()
+                ))
+                .build();
+    }
+
+
+    private StrategyDecision manageShortRunnerPosition(
+            EnrichedStrategyContext context,
+            MarketData marketData,
+            FeatureStore feature,
+            PositionSnapshot snapshot
+    ) {
+        BigDecimal entryPrice = safe(snapshot.getEntryPrice());
+        BigDecimal currentStop = safe(snapshot.getCurrentStopLossPrice());
+        BigDecimal closePrice = safe(marketData.getClosePrice());
+        BigDecimal atr = resolveAtr(feature);
+
+        BigDecimal initialStop = snapshot.getInitialStopLossPrice() != null
+                ? snapshot.getInitialStopLossPrice()
+                : currentStop;
+
+        BigDecimal initialRisk = initialStop.subtract(entryPrice);
+        if (initialRisk.compareTo(ZERO) <= 0) {
+            return hold(context, "Invalid short runner risk structure");
+        }
+
+        BigDecimal move = entryPrice.subtract(closePrice);
+        if (move.compareTo(ZERO) <= 0) {
+            return hold(context, "Short runner not yet in profit");
+        }
+
+        BigDecimal rMultiple = move.divide(initialRisk, 6, RoundingMode.HALF_UP);
+
+        BigDecimal candidateStop = null;
+        String reason = null;
+        String setupType = null;
+
+        if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_2_R) >= 0) {
+            BigDecimal atrStop = closePrice.add(atr.multiply(RUNNER_TRAIL_ATR_PHASE_2));
+            BigDecimal lockedProfitStop = entryPrice.subtract(initialRisk.multiply(RUNNER_LOCK_R_PHASE_2));
+            candidateStop = atrStop.min(lockedProfitStop).min(entryPrice);
+            reason = "Trail short runner aggressively after 3R+";
+            setupType = SETUP_SHORT_RUNNER_TRAIL;
+        } else if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_1_R) >= 0) {
+            BigDecimal atrStop = closePrice.add(atr.multiply(RUNNER_TRAIL_ATR_PHASE_1));
+            BigDecimal lockedProfitStop = entryPrice.subtract(initialRisk.multiply(RUNNER_LOCK_R_PHASE_1));
+            candidateStop = atrStop.min(lockedProfitStop).min(entryPrice);
+            reason = "Trail short runner after 2R+";
+            setupType = SETUP_SHORT_RUNNER_TRAIL;
+        } else if (rMultiple.compareTo(RUNNER_BREAK_EVEN_R) >= 0) {
+            candidateStop = entryPrice;
+            reason = "Move short runner stop to break-even after 1R";
+            setupType = SETUP_SHORT_BREAK_EVEN;
+        }
+
+        if (candidateStop == null) {
+            return hold(context, "Short runner not ready for trailing update");
+        }
+
+        if (candidateStop.compareTo(currentStop) >= 0 || candidateStop.compareTo(closePrice) <= 0) {
+            return hold(context, "Short runner stop already optimal");
+        }
+
+        return StrategyDecision.builder()
+                .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
+                .strategyCode(STRATEGY_CODE)
+                .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
+                .strategyInterval(context.getInterval())
+                .signalType(SIGNAL_TYPE_POSITION_MANAGEMENT)
+                .setupType(setupType)
+                .side(SIDE_SHORT)
+                .reason(reason)
+                .stopLossPrice(candidateStop)
+                .trailingStopPrice(candidateStop)
+                .takeProfitPrice1(snapshot.getTakeProfitPrice())
+                .takeProfitPrice2(null)
+                .takeProfitPrice3(null)
+                .targetPositionRole(TARGET_ALL)
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("MANAGEMENT", "TSMOM", "SHORT", "RUNNER_TRAIL"))
+                .diagnostics(Map.of(
+                        "entryPrice", entryPrice,
+                        "currentStop", currentStop,
+                        "closePrice", closePrice,
+                        "initialRisk", initialRisk,
+                        "rMultiple", rMultiple,
+                        "candidateStop", candidateStop,
+                        "positionRole", snapshot.getPositionRole()
+                ))
+                .build();
+    }
+
+
 
     private boolean isMarketVetoed(EnrichedStrategyContext context) {
         if (context.getMarketQualitySnapshot() != null
@@ -285,26 +504,6 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
                 .build();
     }
 
-    private StrategyDecision manageOpenPosition(
-            EnrichedStrategyContext context,
-            MarketData marketData,
-            PositionSnapshot snapshot
-    ) {
-        String side = snapshot.getSide();
-        if (side == null || snapshot.getEntryPrice() == null || snapshot.getCurrentStopLossPrice() == null) {
-            return hold(context, "Open position exists but management inputs are incomplete");
-        }
-
-        if (SIDE_LONG.equalsIgnoreCase(side)) {
-            return manageLongPosition(context, marketData, snapshot);
-        }
-
-        if (SIDE_SHORT.equalsIgnoreCase(side)) {
-            return manageShortPosition(context, marketData, snapshot);
-        }
-
-        return hold(context, "Unknown open position side");
-    }
 
     private StrategyDecision manageLongPosition(
             EnrichedStrategyContext context,

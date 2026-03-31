@@ -59,8 +59,6 @@ public class TrendPullbackSingleExitStrategyService implements StrategyExecutor 
             return hold(context, "Invalid context or missing market/feature data");
         }
 
-        log.info("Executing context: {}", context);
-
         MarketData marketData = context.getMarketData();
         FeatureStore feature = context.getFeatureStore();
         PositionSnapshot positionSnapshot = context.getPositionSnapshot();
