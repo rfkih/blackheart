@@ -51,7 +51,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     private static final String SETUP_LONG_BREAK_EVEN = "TSMOM_LONG_BREAK_EVEN";
     private static final String SETUP_SHORT_BREAK_EVEN = "TSMOM_SHORT_BREAK_EVEN";
 
-    private static final String EXIT_STRUCTURE = "TP1_TP2_RUNNER";
+    private static final String EXIT_STRUCTURE = "TP1_RUNNER";
     private static final String TARGET_ALL = "ALL";
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;

@@ -2,6 +2,7 @@ package id.co.blackheart.service.cache;
 
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +15,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class CacheService {
 
     private static final String TRADE_KEY_PREFIX = "trade:";
@@ -30,19 +32,26 @@ public class CacheService {
     }
 
     public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
-        if (symbol == null || price == null) {
+        if (symbol == null || symbol.isBlank() || price == null) {
             return;
         }
 
         String key = "latestPrice:" + symbol;
 
-        Map<String, Object> value = new HashMap<>();
+        Map<String, String> value = new HashMap<>();
         value.put("symbol", symbol);
         value.put("price", price.toPlainString());
-        value.put("updatedAt", updatedAt == null ? null : updatedAt.toString());
 
-        redisTemplate.delete(key);
-        redisTemplate.opsForHash().putAll(key, value);
+        if (updatedAt != null) {
+            value.put("updatedAt", updatedAt.toString());
+        }
+
+        try {
+            redisTemplate.opsForHash().putAll(key, value);
+        } catch (Exception e) {
+            log.error("Failed to save latest price to Redis | symbol={} price={} updatedAt={}",
+                    symbol, price, updatedAt, e);
+        }
     }
 
     public BigDecimal getLatestPrice(String symbol) {
