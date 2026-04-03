@@ -13,7 +13,6 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -26,6 +25,8 @@ import java.util.Map;
 @Slf4j
 @RequiredArgsConstructor
 public class TsMomV1StrategyExecutor implements StrategyExecutor {
+
+    private final StrategyHelper strategyHelper;
 
     private static final String STRATEGY_CODE = "TSMOM_V1";
     private static final String STRATEGY_NAME = "Time Series Momentum";
@@ -69,8 +70,6 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     private static final BigDecimal DEFAULT_TP3_R = new BigDecimal("3.60");
     private static final BigDecimal DEFAULT_BREAK_EVEN_R = new BigDecimal("1.00");
 
-    private static final String SOURCE_LIVE = "live";
-    private static final String SOURCE_BACKTEST = "backtest";
     private static final BigDecimal MIN_BTC_NOTIONAL = new BigDecimal("0.00001");
 
     private static final BigDecimal DEFAULT_MIN_SIGNAL_SCORE = new BigDecimal("0.55");
@@ -99,7 +98,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
         FeatureStore feature = context.getFeatureStore();
         PositionSnapshot snapshot = context.getPositionSnapshot();
 
-        BigDecimal closePrice = safe(marketData.getClosePrice());
+        BigDecimal closePrice = strategyHelper.safe(marketData.getClosePrice());
         if (closePrice.compareTo(ZERO) <= 0) {
             return hold(context, "Close price is invalid");
         }
@@ -162,9 +161,9 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             FeatureStore feature,
             PositionSnapshot snapshot
     ) {
-        BigDecimal entryPrice = safe(snapshot.getEntryPrice());
-        BigDecimal currentStop = safe(snapshot.getCurrentStopLossPrice());
-        BigDecimal closePrice = safe(marketData.getClosePrice());
+        BigDecimal entryPrice = strategyHelper.safe(snapshot.getEntryPrice());
+        BigDecimal currentStop = strategyHelper.safe(snapshot.getCurrentStopLossPrice());
+        BigDecimal closePrice = strategyHelper.safe(marketData.getClosePrice());
         BigDecimal atr = resolveAtr(feature);
 
         BigDecimal initialStop = snapshot.getInitialStopLossPrice() != null
@@ -250,9 +249,9 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             FeatureStore feature,
             PositionSnapshot snapshot
     ) {
-        BigDecimal entryPrice = safe(snapshot.getEntryPrice());
-        BigDecimal currentStop = safe(snapshot.getCurrentStopLossPrice());
-        BigDecimal closePrice = safe(marketData.getClosePrice());
+        BigDecimal entryPrice = strategyHelper.safe(snapshot.getEntryPrice());
+        BigDecimal currentStop = strategyHelper.safe(snapshot.getCurrentStopLossPrice());
+        BigDecimal closePrice = strategyHelper.safe(marketData.getClosePrice());
         BigDecimal atr = resolveAtr(feature);
 
         BigDecimal initialStop = snapshot.getInitialStopLossPrice() != null
@@ -364,7 +363,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal entryPrice = safe(marketData.getClosePrice());
+        BigDecimal entryPrice = strategyHelper.safe(marketData.getClosePrice());
         BigDecimal atr = resolveAtr(feature);
         BigDecimal stopLoss = entryPrice.subtract(atr.multiply(resolveStopAtrMult(context)));
         BigDecimal riskPerUnit = entryPrice.subtract(stopLoss);
@@ -385,7 +384,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notionalSize = calculateEntryNotional(context, SIDE_LONG);
+        BigDecimal notionalSize = strategyHelper.calculateEntryNotional(context, SIDE_LONG);
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Calculated long notional size is zero");
         }
@@ -446,7 +445,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal entryPrice = safe(marketData.getClosePrice());
+        BigDecimal entryPrice = strategyHelper.safe(marketData.getClosePrice());
         BigDecimal atr = resolveAtr(feature);
         BigDecimal stopLoss = entryPrice.add(atr.multiply(resolveStopAtrMult(context)));
         BigDecimal riskPerUnit = stopLoss.subtract(entryPrice);
@@ -468,9 +467,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
         }
 
 
-        BigDecimal notionalSize = calculateEntryNotional(context, SIDE_SHORT);
-        log.info("Calculated short quote notional: {}", notionalSize);
-        BigDecimal positionSize = calculateShortTradeAmount(context.getAssetBalance(), context.getAccount());
+        BigDecimal notionalSize = strategyHelper.calculateEntryNotional(context, SIDE_SHORT);
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Calculated short quote notional is zero");
         }
@@ -492,7 +489,6 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
                 .riskMultiplier(resolveRiskMultiplier(context))
                 .jumpRiskScore(resolveJumpRisk(context))
                 .notionalSize(notionalSize)
-                .positionSize(positionSize)
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(tp1)
@@ -538,9 +534,9 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             MarketData marketData,
             PositionSnapshot snapshot
     ) {
-        BigDecimal entryPrice = safe(snapshot.getEntryPrice());
-        BigDecimal currentStop = safe(snapshot.getCurrentStopLossPrice());
-        BigDecimal closePrice = safe(marketData.getClosePrice());
+        BigDecimal entryPrice = strategyHelper.safe(snapshot.getEntryPrice());
+        BigDecimal currentStop = strategyHelper.safe(snapshot.getCurrentStopLossPrice());
+        BigDecimal closePrice = strategyHelper.safe(marketData.getClosePrice());
 
         BigDecimal initialRisk = entryPrice.subtract(currentStop);
         if (initialRisk.compareTo(ZERO) <= 0) {
@@ -591,9 +587,9 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             MarketData marketData,
             PositionSnapshot snapshot
     ) {
-        BigDecimal entryPrice = safe(snapshot.getEntryPrice());
-        BigDecimal currentStop = safe(snapshot.getCurrentStopLossPrice());
-        BigDecimal closePrice = safe(marketData.getClosePrice());
+        BigDecimal entryPrice = strategyHelper.safe(snapshot.getEntryPrice());
+        BigDecimal currentStop = strategyHelper.safe(snapshot.getCurrentStopLossPrice());
+        BigDecimal closePrice = strategyHelper.safe(marketData.getClosePrice());
 
         BigDecimal initialRisk = currentStop.subtract(entryPrice);
         if (initialRisk.compareTo(ZERO) <= 0) {
@@ -647,19 +643,19 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
         FeatureStore biasFeature = context.getBiasFeatureStore();
         MarketData biasMarket = context.getBiasMarketData();
 
-        boolean currentTrend = hasValue(marketData.getClosePrice())
-                && hasValue(feature.getEma50())
-                && hasValue(feature.getEma200())
-                && hasValue(feature.getEma50Slope())
+        boolean currentTrend = strategyHelper.hasValue(marketData.getClosePrice())
+                && strategyHelper.hasValue(feature.getEma50())
+                && strategyHelper.hasValue(feature.getEma200())
+                && strategyHelper.hasValue(feature.getEma50Slope())
                 && marketData.getClosePrice().compareTo(feature.getEma50()) > 0
                 && feature.getEma50().compareTo(feature.getEma200()) > 0
                 && feature.getEma50Slope().compareTo(ZERO) > 0
                 && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
 
         boolean biasTrend = biasFeature == null || biasMarket == null || (
-                hasValue(biasMarket.getClosePrice())
-                        && hasValue(biasFeature.getEma50())
-                        && hasValue(biasFeature.getEma200())
+                strategyHelper.hasValue(biasMarket.getClosePrice())
+                        && strategyHelper.hasValue(biasFeature.getEma50())
+                        && strategyHelper.hasValue(biasFeature.getEma200())
                         && biasMarket.getClosePrice().compareTo(biasFeature.getEma50()) > 0
                         && biasFeature.getEma50().compareTo(biasFeature.getEma200()) > 0
                         && !"RANGE".equalsIgnoreCase(biasFeature.getTrendRegime())
@@ -676,19 +672,19 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
         FeatureStore biasFeature = context.getBiasFeatureStore();
         MarketData biasMarket = context.getBiasMarketData();
 
-        boolean currentTrend = hasValue(marketData.getClosePrice())
-                && hasValue(feature.getEma50())
-                && hasValue(feature.getEma200())
-                && hasValue(feature.getEma50Slope())
+        boolean currentTrend = strategyHelper.hasValue(marketData.getClosePrice())
+                && strategyHelper.hasValue(feature.getEma50())
+                && strategyHelper.hasValue(feature.getEma200())
+                && strategyHelper.hasValue(feature.getEma50Slope())
                 && marketData.getClosePrice().compareTo(feature.getEma50()) < 0
                 && feature.getEma50().compareTo(feature.getEma200()) < 0
                 && feature.getEma50Slope().compareTo(ZERO) < 0
                 && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
 
         boolean biasTrend = biasFeature == null || biasMarket == null || (
-                hasValue(biasMarket.getClosePrice())
-                        && hasValue(biasFeature.getEma50())
-                        && hasValue(biasFeature.getEma200())
+                strategyHelper.hasValue(biasMarket.getClosePrice())
+                        && strategyHelper.hasValue(biasFeature.getEma50())
+                        && strategyHelper.hasValue(biasFeature.getEma200())
                         && biasMarket.getClosePrice().compareTo(biasFeature.getEma50()) < 0
                         && biasFeature.getEma50().compareTo(biasFeature.getEma200()) < 0
                         && !"RANGE".equalsIgnoreCase(biasFeature.getTrendRegime())
@@ -698,11 +694,11 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     }
 
     private boolean isBullishEntryConfirmation(FeatureStore feature, MarketData marketData) {
-        return hasValue(feature.getMacdHistogram())
-                && hasValue(feature.getRsi())
-                && hasValue(feature.getAdx())
-                && hasValue(marketData.getClosePrice())
-                && hasValue(feature.getEma50())
+        return strategyHelper.hasValue(feature.getMacdHistogram())
+                && strategyHelper.hasValue(feature.getRsi())
+                && strategyHelper.hasValue(feature.getAdx())
+                && strategyHelper.hasValue(marketData.getClosePrice())
+                && strategyHelper.hasValue(feature.getEma50())
                 && feature.getMacdHistogram().compareTo(ZERO) > 0
                 && feature.getRsi().compareTo(new BigDecimal("50")) >= 0
                 && feature.getAdx().compareTo(new BigDecimal("18")) >= 0
@@ -710,11 +706,11 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     }
 
     private boolean isBearishEntryConfirmation(FeatureStore feature, MarketData marketData) {
-        return hasValue(feature.getMacdHistogram())
-                && hasValue(feature.getRsi())
-                && hasValue(feature.getAdx())
-                && hasValue(marketData.getClosePrice())
-                && hasValue(feature.getEma50())
+        return strategyHelper.hasValue(feature.getMacdHistogram())
+                && strategyHelper.hasValue(feature.getRsi())
+                && strategyHelper.hasValue(feature.getAdx())
+                && strategyHelper.hasValue(marketData.getClosePrice())
+                && strategyHelper.hasValue(feature.getEma50())
                 && feature.getMacdHistogram().compareTo(ZERO) < 0
                 && feature.getRsi().compareTo(new BigDecimal("50")) <= 0
                 && feature.getAdx().compareTo(new BigDecimal("18")) >= 0
@@ -728,23 +724,23 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     ) {
         BigDecimal score = new BigDecimal("0.35");
 
-        if (hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
+        if (strategyHelper.hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("52")) >= 0) {
+        if (strategyHelper.hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("52")) >= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) > 0) {
+        if (strategyHelper.hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) > 0) {
             score = score.add(new BigDecimal("0.15"));
         }
 
-        if (hasValue(feature.getEma50Slope()) && feature.getEma50Slope().compareTo(ZERO) > 0) {
+        if (strategyHelper.hasValue(feature.getEma50Slope()) && feature.getEma50Slope().compareTo(ZERO) > 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(marketData.getClosePrice()) && hasValue(feature.getEma50())
+        if (strategyHelper.hasValue(marketData.getClosePrice()) && strategyHelper.hasValue(feature.getEma50())
                 && marketData.getClosePrice().compareTo(feature.getEma50()) > 0) {
             score = score.add(new BigDecimal("0.10"));
         }
@@ -771,23 +767,23 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     ) {
         BigDecimal score = new BigDecimal("0.35");
 
-        if (hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
+        if (strategyHelper.hasValue(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("48")) <= 0) {
+        if (strategyHelper.hasValue(feature.getRsi()) && feature.getRsi().compareTo(new BigDecimal("48")) <= 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) < 0) {
+        if (strategyHelper.hasValue(feature.getMacdHistogram()) && feature.getMacdHistogram().compareTo(ZERO) < 0) {
             score = score.add(new BigDecimal("0.15"));
         }
 
-        if (hasValue(feature.getEma50Slope()) && feature.getEma50Slope().compareTo(ZERO) < 0) {
+        if (strategyHelper.hasValue(feature.getEma50Slope()) && feature.getEma50Slope().compareTo(ZERO) < 0) {
             score = score.add(new BigDecimal("0.10"));
         }
 
-        if (hasValue(marketData.getClosePrice()) && hasValue(feature.getEma50())
+        if (strategyHelper.hasValue(marketData.getClosePrice()) && strategyHelper.hasValue(feature.getEma50())
                 && marketData.getClosePrice().compareTo(feature.getEma50()) < 0) {
             score = score.add(new BigDecimal("0.10"));
         }
@@ -808,7 +804,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     }
 
     private BigDecimal calculateConfidenceScore(EnrichedStrategyContext context, BigDecimal signalScore) {
-        BigDecimal confidence = safe(signalScore);
+        BigDecimal confidence = strategyHelper.safe(signalScore);
 
         BigDecimal regimeContribution = resolveRegimeScore(context).multiply(new BigDecimal("0.20"));
         BigDecimal riskContribution = resolveRiskMultiplier(context).multiply(new BigDecimal("0.10"));
@@ -824,86 +820,6 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
         }
 
         return confidence.min(ONE).setScale(4, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculateLongNotionalSize(EnrichedStrategyContext context) {
-        BigDecimal cashBalance = safe(context.getCashBalance());
-        BigDecimal riskPct = resolveRiskPct(context);
-
-        if (cashBalance.compareTo(ZERO) <= 0 || riskPct.compareTo(ZERO) <= 0) {
-            return ZERO;
-        }
-
-        return cashBalance.multiply(riskPct).setScale(8, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculateEntryNotional(EnrichedStrategyContext context, String side) {
-        if (context == null || side == null || side.isBlank()) {
-            return ZERO;
-        }
-
-        BigDecimal riskPerTradePct = context.getRiskSnapshot() != null
-                ? context.getRiskSnapshot().getFinalRiskPct()
-                : null;
-
-        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
-            riskPerTradePct = context.getRuntimeConfig() != null
-                    ? context.getRuntimeConfig().getRiskPerTradePct()
-                    : null;
-        }
-
-        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
-            riskPerTradePct = context.getAccount() != null
-                    ? context.getAccount().getRiskAmount()
-                    : null;
-        }
-
-        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
-            return ZERO;
-        }
-
-        String source = resolveExecutionSource(context);
-
-        if (SIDE_LONG.equalsIgnoreCase(side)) {
-            BigDecimal cashBalance = context.getCashBalance();
-            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
-                return ZERO;
-            }
-
-            return cashBalance.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
-        }
-
-        if (SIDE_SHORT.equalsIgnoreCase(side)) {
-            if (SOURCE_LIVE.equalsIgnoreCase(source)) {
-                BigDecimal assetBalance = context.getAssetBalance();
-                BigDecimal price = context.getMarketData() != null ? context.getMarketData().getClosePrice() : null;
-
-                if (assetBalance == null || assetBalance.compareTo(ZERO) <= 0
-                        || price == null || price.compareTo(ZERO) <= 0) {
-                    return ZERO;
-                }
-
-                BigDecimal sellableNotional = assetBalance.multiply(price);
-                return sellableNotional.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
-            }
-
-            BigDecimal cashBalance = context.getCashBalance();
-            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
-                return ZERO;
-            }
-
-            return cashBalance.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
-        }
-
-        return ZERO;
-    }
-
-    private String resolveExecutionSource(EnrichedStrategyContext context) {
-        String source = context.getExecutionMetadata("source", String.class);
-        if (source == null || source.isBlank()) {
-            return SOURCE_BACKTEST;
-        }
-        return source;
     }
 
     private BigDecimal resolveAtr(FeatureStore feature) {
@@ -1039,13 +955,5 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
                 .tags(List.of("VETO", "TSMOM", "RISK_LAYER"))
                 .diagnostics(Map.of())
                 .build();
-    }
-
-    private BigDecimal safe(BigDecimal value) {
-        return value == null ? ZERO : value;
-    }
-
-    private boolean hasValue(BigDecimal value) {
-        return value != null;
     }
 }

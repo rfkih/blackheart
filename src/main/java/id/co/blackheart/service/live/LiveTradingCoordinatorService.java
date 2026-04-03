@@ -82,7 +82,7 @@ public class LiveTradingCoordinatorService {
                     interval,
                     decision.getDecisionType(),
                     decision.getReason(),
-                    decision.getSide()
+                    decision.getConfidenceScore()
             );
 
             if (decision.isNoAction()) {
