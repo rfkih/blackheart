@@ -8,7 +8,6 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
-import java.util.List;
 import java.util.Map;
 
 @Data
@@ -92,7 +91,7 @@ public class EnrichedStrategyContext {
     public boolean hasTradablePosition() {
         return Boolean.TRUE.equals(hasOpenPosition)
                 && positionSnapshot != null
-                && Boolean.TRUE.equals(positionSnapshot.isHasOpenPosition());
+                && positionSnapshot.isHasOpenPosition();
     }
 
     public int safeOpenPositionCount() {

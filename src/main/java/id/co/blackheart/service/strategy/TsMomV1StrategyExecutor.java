@@ -7,10 +7,14 @@ import id.co.blackheart.dto.strategy.RiskSnapshot;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.strategy.StrategyRequirements;
 import id.co.blackheart.dto.strategy.VolatilitySnapshot;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.util.TradeConstant.DecisionType;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -18,7 +22,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
-@Component("TSMOM_V1")
+@Service
+@Slf4j
+@RequiredArgsConstructor
 public class TsMomV1StrategyExecutor implements StrategyExecutor {
 
     private static final String STRATEGY_CODE = "TSMOM_V1";
@@ -63,6 +69,10 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     private static final BigDecimal DEFAULT_TP3_R = new BigDecimal("3.60");
     private static final BigDecimal DEFAULT_BREAK_EVEN_R = new BigDecimal("1.00");
 
+    private static final String SOURCE_LIVE = "live";
+    private static final String SOURCE_BACKTEST = "backtest";
+    private static final BigDecimal MIN_BTC_NOTIONAL = new BigDecimal("0.00001");
+
     private static final BigDecimal DEFAULT_MIN_SIGNAL_SCORE = new BigDecimal("0.55");
     private static final BigDecimal DEFAULT_MIN_CONFIDENCE_SCORE = new BigDecimal("0.55");
 
@@ -79,6 +89,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     }
 
     @Override
+
     public StrategyDecision execute(EnrichedStrategyContext context) {
         if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
             return hold(context, "Invalid context or missing market/feature data");
@@ -374,7 +385,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notionalSize = calculateLongNotionalSize(context);
+        BigDecimal notionalSize = calculateEntryNotional(context, SIDE_LONG);
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Calculated long notional size is zero");
         }
@@ -456,8 +467,11 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal positionSize = calculateShortQuoteNotional(context);
-        if (positionSize.compareTo(ZERO) <= 0) {
+
+        BigDecimal notionalSize = calculateEntryNotional(context, SIDE_SHORT);
+        log.info("Calculated short quote notional: {}", notionalSize);
+        BigDecimal positionSize = calculateShortTradeAmount(context.getAssetBalance(), context.getAccount());
+        if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Calculated short quote notional is zero");
         }
 
@@ -477,6 +491,7 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
                 .regimeScore(resolveRegimeScore(context))
                 .riskMultiplier(resolveRiskMultiplier(context))
                 .jumpRiskScore(resolveJumpRisk(context))
+                .notionalSize(notionalSize)
                 .positionSize(positionSize)
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
@@ -502,6 +517,19 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
                         "confidenceScore", confidenceScore
                 ))
                 .build();
+    }
+
+
+    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Account account) {
+        if (btcBalance == null || account == null || account.getRiskAmount() == null) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal tradeAmount = btcBalance
+                .multiply(account.getRiskAmount())
+                .setScale(8, RoundingMode.DOWN);
+
+        return tradeAmount.compareTo(MIN_BTC_NOTIONAL) < 0 ? MIN_BTC_NOTIONAL : tradeAmount;
     }
 
 
@@ -809,18 +837,73 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
         return cashBalance.multiply(riskPct).setScale(8, RoundingMode.HALF_UP);
     }
 
-    private BigDecimal calculateShortQuoteNotional(EnrichedStrategyContext context) {
-        BigDecimal assetBalance = safe(context.getAssetBalance());
-        BigDecimal closePrice = context.getMarketData() != null
-                ? safe(context.getMarketData().getClosePrice())
-                : ZERO;
-        BigDecimal riskPct = resolveRiskPct(context);
-
-        if (assetBalance.compareTo(ZERO) <= 0 || closePrice.compareTo(ZERO) <= 0 || riskPct.compareTo(ZERO) <= 0) {
+    private BigDecimal calculateEntryNotional(EnrichedStrategyContext context, String side) {
+        if (context == null || side == null || side.isBlank()) {
             return ZERO;
         }
 
-        return assetBalance.multiply(closePrice).multiply(riskPct).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal riskPerTradePct = context.getRiskSnapshot() != null
+                ? context.getRiskSnapshot().getFinalRiskPct()
+                : null;
+
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
+            riskPerTradePct = context.getRuntimeConfig() != null
+                    ? context.getRuntimeConfig().getRiskPerTradePct()
+                    : null;
+        }
+
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
+            riskPerTradePct = context.getAccount() != null
+                    ? context.getAccount().getRiskAmount()
+                    : null;
+        }
+
+        if (riskPerTradePct == null || riskPerTradePct.compareTo(ZERO) <= 0) {
+            return ZERO;
+        }
+
+        String source = resolveExecutionSource(context);
+
+        if (SIDE_LONG.equalsIgnoreCase(side)) {
+            BigDecimal cashBalance = context.getCashBalance();
+            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
+                return ZERO;
+            }
+
+            return cashBalance.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
+        }
+
+        if (SIDE_SHORT.equalsIgnoreCase(side)) {
+            if (SOURCE_LIVE.equalsIgnoreCase(source)) {
+                BigDecimal assetBalance = context.getAssetBalance();
+                BigDecimal price = context.getMarketData() != null ? context.getMarketData().getClosePrice() : null;
+
+                if (assetBalance == null || assetBalance.compareTo(ZERO) <= 0
+                        || price == null || price.compareTo(ZERO) <= 0) {
+                    return ZERO;
+                }
+
+                BigDecimal sellableNotional = assetBalance.multiply(price);
+                return sellableNotional.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
+            }
+
+            BigDecimal cashBalance = context.getCashBalance();
+            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
+                return ZERO;
+            }
+
+            return cashBalance.multiply(riskPerTradePct).setScale(8, RoundingMode.HALF_UP);
+        }
+
+        return ZERO;
+    }
+
+    private String resolveExecutionSource(EnrichedStrategyContext context) {
+        String source = context.getExecutionMetadata("source", String.class);
+        if (source == null || source.isBlank()) {
+            return SOURCE_BACKTEST;
+        }
+        return source;
     }
 
     private BigDecimal resolveAtr(FeatureStore feature) {
