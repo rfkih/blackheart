@@ -47,9 +47,15 @@ public class BacktestMetricsService {
                 .divide(BigDecimal.valueOf(totalTrades), 6, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal("100"));
 
-        BigDecimal profitFactor = grossLoss.compareTo(BigDecimal.ZERO) == 0
-                ? BigDecimal.ZERO
-                : grossProfit.divide(grossLoss, 6, RoundingMode.HALF_UP);
+        BigDecimal profitFactor;
+        if (grossLoss.compareTo(BigDecimal.ZERO) == 0) {
+            // No losing trades — profit factor is infinite; use 9999 as sentinel
+            profitFactor = grossProfit.compareTo(BigDecimal.ZERO) > 0
+                    ? new BigDecimal("9999.000000")
+                    : BigDecimal.ZERO;
+        } else {
+            profitFactor = grossProfit.divide(grossLoss, 6, RoundingMode.HALF_UP);
+        }
 
         BigDecimal finalCapital = state.getCashBalance().setScale(3, RoundingMode.HALF_UP);
 

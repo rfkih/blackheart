@@ -86,6 +86,33 @@ public class BacktestStateService {
         return equity;
     }
 
+    /**
+     * Checks worst-case intra-bar drawdown using the given price (e.g. candle LOW for LONG,
+     * candle HIGH for SHORT) without updating currentEquity or peakEquity.
+     */
+    public void checkIntraBarDrawdown(BacktestState state, BigDecimal worstCasePrice) {
+        if (state == null || worstCasePrice == null || worstCasePrice.compareTo(ZERO) <= 0) {
+            return;
+        }
+
+        if (state.getPeakEquity() == null || state.getPeakEquity().compareTo(ZERO) <= 0) {
+            return;
+        }
+
+        BigDecimal worstEquity = calculateCurrentEquity(state, worstCasePrice);
+
+        BigDecimal drawdownPct = state.getPeakEquity()
+                .subtract(worstEquity)
+                .divide(state.getPeakEquity(), 8, RoundingMode.HALF_UP)
+                .multiply(HUNDRED);
+
+        if (drawdownPct.compareTo(ZERO) > 0
+                && (state.getMaxDrawdownPercent() == null
+                || drawdownPct.compareTo(state.getMaxDrawdownPercent()) > 0)) {
+            state.setMaxDrawdownPercent(drawdownPct);
+        }
+    }
+
     private BigDecimal safe(BigDecimal value) {
         return value == null ? ZERO : value;
     }

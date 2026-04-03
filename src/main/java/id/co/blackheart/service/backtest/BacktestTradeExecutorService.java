@@ -126,16 +126,17 @@ public class BacktestTradeExecutorService {
                 rawEntryPrice, backtestRun.getSlippagePct(), tradeType
         );
 
-        BigDecimal totalQty = requestedQuoteAmount.divide(entryPrice, 12, RoundingMode.DOWN);
+        BigDecimal feePct = safe(backtestRun.getFeePct());
+        BigDecimal entryFee = requestedQuoteAmount.multiply(feePct).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal effectiveQuote = requestedQuoteAmount.subtract(entryFee);
+        BigDecimal totalCashRequired = requestedQuoteAmount;
+
+        BigDecimal totalQty = effectiveQuote.divide(entryPrice, 12, RoundingMode.DOWN);
         if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
             log.warn("Backtest {} rejected | asset={} reason=Calculated quantity is zero",
                     tradeType, backtestRun.getAsset());
             return;
         }
-
-        BigDecimal feePct = safe(backtestRun.getFeePct());
-        BigDecimal entryFee = requestedQuoteAmount.multiply(feePct).setScale(8, RoundingMode.HALF_UP);
-        BigDecimal totalCashRequired = requestedQuoteAmount.add(entryFee);
 
         if (safe(state.getCashBalance()).compareTo(totalCashRequired) < 0) {
             log.warn("Backtest {} rejected | asset={} reason=Insufficient synthetic cash balance",

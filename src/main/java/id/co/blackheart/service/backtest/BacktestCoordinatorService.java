@@ -133,6 +133,8 @@ public class BacktestCoordinatorService {
                 );
             }
 
+            backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getLowPrice());
+            backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getHighPrice());
             backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
             backtestEquityPointRecorder.record(state, backtestRun, monitorCandle);
         }
@@ -168,6 +170,8 @@ public class BacktestCoordinatorService {
             if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
                 continue;
             }
+
+            updatePriceExtremes(position, monitorCandle);
 
             PositionSnapshot snapshot = backtestPositionSnapshotMapper.toSnapshot(position);
 
@@ -480,6 +484,22 @@ public class BacktestCoordinatorService {
 
         if (!backtestRun.getStartTime().isBefore(backtestRun.getEndTime())) {
             throw new IllegalArgumentException("Backtest startTime must be before endTime");
+        }
+    }
+
+    private void updatePriceExtremes(BacktestTradePosition position, MarketData candle) {
+        if ("LONG".equalsIgnoreCase(position.getSide()) && candle.getHighPrice() != null) {
+            BigDecimal high = candle.getHighPrice();
+            if (position.getHighestPriceSinceEntry() == null
+                    || high.compareTo(position.getHighestPriceSinceEntry()) > 0) {
+                position.setHighestPriceSinceEntry(high);
+            }
+        } else if ("SHORT".equalsIgnoreCase(position.getSide()) && candle.getLowPrice() != null) {
+            BigDecimal low = candle.getLowPrice();
+            if (position.getLowestPriceSinceEntry() == null
+                    || low.compareTo(position.getLowestPriceSinceEntry()) < 0) {
+                position.setLowestPriceSinceEntry(low);
+            }
         }
     }
 
