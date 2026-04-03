@@ -40,10 +40,10 @@ public class BinanceWebSocketClient {
 
     private static final String SYMBOL = "BTCUSDT";
     private static final String WS_BASE = "wss://stream.binance.com:9443";
-    private static final String STREAMS = "btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h";
+    private static final String STREAMS = "btcusdt@kline_5m/btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h";
     private static final String BINANCE_WS_URL = WS_BASE + "/stream?streams=" + STREAMS;
 
-    private static final Set<String> ACCEPTED_INTERVALS = Set.of("15m", "1h", "4h");
+    private static final Set<String> ACCEPTED_INTERVALS = Set.of("5m", "15m", "1h", "4h");
 
     private static final Duration STALE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration RECONNECT_DELAY = Duration.ofSeconds(5);
@@ -66,8 +66,6 @@ public class BinanceWebSocketClient {
                 thread.setDaemon(true);
                 return thread;
             });
-
-    private final Map<String, LocalDateTime> lastSavedEndTimeByInterval = new ConcurrentHashMap<>();
 
     private volatile boolean running = false;
     private volatile Instant lastMessageTime = Instant.now();
@@ -163,7 +161,7 @@ public class BinanceWebSocketClient {
 
             BigDecimal latestPrice =  new BigDecimal(kline.getString("c"));
 
-            if ("15m".equals(interval)) {
+            if ("5m".equals(interval)) {
                 cacheService.saveLatestPrice(SYMBOL, latestPrice, LocalDateTime.now());
                 liveTradeListenerService.process(SYMBOL, latestPrice);
             }
@@ -267,7 +265,6 @@ public class BinanceWebSocketClient {
 
     private void persistMarketData(String interval, MarketData marketData) {
         marketDataRepository.save(marketData);
-        lastSavedEndTimeByInterval.put(interval, marketData.getEndTime());
 
         log.info("Inserted candle | symbol={} interval={} endTime={} close={}",SYMBOL,interval,marketData.getEndTime(),marketData.getClosePrice());
     }
@@ -316,7 +313,7 @@ public class BinanceWebSocketClient {
     }
 
     private boolean requiresFeatureComputation(String interval) {
-        return "1h".equals(interval) || "4h".equals(interval) || "15m".equals(interval);
+        return "5m".equals(interval) || "15m".equals(interval) || "1h".equals(interval) || "4h".equals(interval);
     }
 
     private void startWatchdog() {

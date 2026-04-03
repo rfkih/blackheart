@@ -8,6 +8,7 @@ import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -17,6 +18,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -31,6 +33,8 @@ public class HistoricalDataService {
 
     private static final String INTERVAL_4H = "4h";
     private static final String INTERVAL_15M = "15m";
+    private static final String INTERVAL_5M = "5m";
+    private static final String INTERVAL_1H = "1h";
 
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
@@ -40,6 +44,7 @@ public class HistoricalDataService {
             .baseUrl(BINANCE_BASE_URL)
             .build();
 
+    @Async("taskExecutor")
     public void backfillLastCandlesAndFeatures(String symbol, String interval) {
         backfillLastNCandlesAndRepairMissingFeatures(symbol, interval, 5000, 300, true);
     }
@@ -87,7 +92,10 @@ public class HistoricalDataService {
         );
 
         if (INTERVAL_4H.equalsIgnoreCase(interval)) {
-            warm15mFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures);
+            CompletableFuture<Void> f1h  = CompletableFuture.runAsync(() -> warm1hFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures));
+            CompletableFuture<Void> f15m = CompletableFuture.runAsync(() -> warm15mFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures));
+            CompletableFuture<Void> f5m  = CompletableFuture.runAsync(() -> warm5mFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures));
+            CompletableFuture.allOf(f1h, f15m, f5m).join();
         }
     }
 
@@ -148,6 +156,154 @@ public class HistoricalDataService {
 
             log.info("""
                             15m companion feature warmup finished
+                            symbol={}
+                            startTime={}
+                            endTime={}
+                            insertedFeatures={}
+                            skippedFeatures={}
+                            targetRangeSize={}
+                            """,
+                    symbol,
+                    startTime,
+                    endTime,
+                    featureStats.insertedFeatures(),
+                    featureStats.skippedFeatures(),
+                    featureStats.targetRangeSize()
+            );
+        }
+    }
+
+    private void warm1hFor4hCoverage(
+            String symbol,
+            int targetCandles,
+            int warmupCandles,
+            boolean fillListenerFeatures
+    ) {
+        int totalNeeded4h = targetCandles + warmupCandles;
+
+        List<MarketData> latest4hCandles = marketDataRepository.findLatestCandles(symbol, INTERVAL_4H, totalNeeded4h);
+
+        if (latest4hCandles == null || latest4hCandles.isEmpty()) {
+            log.warn("Skip 1h warmup because no 4h market_data found | symbol={}", symbol);
+            return;
+        }
+
+        latest4hCandles.sort(Comparator.comparing(MarketData::getStartTime));
+
+        LocalDateTime startTime = latest4hCandles.getFirst().getStartTime();
+        LocalDateTime endTime = latest4hCandles.getLast().getEndTime();
+
+        log.info("Starting 1h companion warmup for 4h coverage | symbol={} startTime={} endTime={} fillListenerFeatures={}",
+                symbol, startTime, endTime, fillListenerFeatures);
+
+        MarketDataRangeBackfillStats marketStats = backfillMissingMarketDataByRange(
+                symbol,
+                INTERVAL_1H,
+                startTime,
+                endTime
+        );
+
+        log.info("""
+                        1h companion market warmup finished
+                        symbol={}
+                        startTime={}
+                        endTime={}
+                        fetchedCandles={}
+                        insertedMarketData={}
+                        skippedMarketData={}
+                        """,
+                symbol,
+                startTime,
+                endTime,
+                marketStats.fetchedCandles(),
+                marketStats.insertedMarketData(),
+                marketStats.skippedMarketData()
+        );
+
+        if (fillListenerFeatures) {
+            FeatureRepairRangeStats featureStats = repairMissingFeatureStoreByRange(
+                    symbol,
+                    INTERVAL_1H,
+                    startTime,
+                    endTime
+            );
+
+            log.info("""
+                            1h companion feature warmup finished
+                            symbol={}
+                            startTime={}
+                            endTime={}
+                            insertedFeatures={}
+                            skippedFeatures={}
+                            targetRangeSize={}
+                            """,
+                    symbol,
+                    startTime,
+                    endTime,
+                    featureStats.insertedFeatures(),
+                    featureStats.skippedFeatures(),
+                    featureStats.targetRangeSize()
+            );
+        }
+    }
+
+    private void warm5mFor4hCoverage(
+            String symbol,
+            int targetCandles,
+            int warmupCandles,
+            boolean fillListenerFeatures
+    ) {
+        int totalNeeded4h = targetCandles + warmupCandles;
+
+        List<MarketData> latest4hCandles = marketDataRepository.findLatestCandles(symbol, INTERVAL_4H, totalNeeded4h);
+
+        if (latest4hCandles == null || latest4hCandles.isEmpty()) {
+            log.warn("Skip 5m warmup because no 4h market_data found | symbol={}", symbol);
+            return;
+        }
+
+        latest4hCandles.sort(Comparator.comparing(MarketData::getStartTime));
+
+        LocalDateTime startTime = latest4hCandles.getFirst().getStartTime();
+        LocalDateTime endTime = latest4hCandles.getLast().getEndTime();
+
+        log.info("Starting 5m companion warmup for 4h coverage | symbol={} startTime={} endTime={} fillListenerFeatures={}",
+                symbol, startTime, endTime, fillListenerFeatures);
+
+        MarketDataRangeBackfillStats marketStats = backfillMissingMarketDataByRange(
+                symbol,
+                INTERVAL_5M,
+                startTime,
+                endTime
+        );
+
+        log.info("""
+                        5m companion market warmup finished
+                        symbol={}
+                        startTime={}
+                        endTime={}
+                        fetchedCandles={}
+                        insertedMarketData={}
+                        skippedMarketData={}
+                        """,
+                symbol,
+                startTime,
+                endTime,
+                marketStats.fetchedCandles(),
+                marketStats.insertedMarketData(),
+                marketStats.skippedMarketData()
+        );
+
+        if (fillListenerFeatures) {
+            FeatureRepairRangeStats featureStats = repairMissingFeatureStoreByRange(
+                    symbol,
+                    INTERVAL_5M,
+                    startTime,
+                    endTime
+            );
+
+            log.info("""
+                            5m companion feature warmup finished
                             symbol={}
                             startTime={}
                             endTime={}

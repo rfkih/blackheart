@@ -72,10 +72,12 @@ public class BacktestStateService {
                 /**
                  * Synthetic short model:
                  * equity contribution = reserved quote notional + unrealized pnl
+                 * Clamped at zero — max loss is the collateral put up at entry;
+                 * markToMarketValue cannot go negative (position liquidated at that point).
                  */
                 BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
                 unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
-                markToMarketValue = reservedNotional.add(unrealizedPnl);
+                markToMarketValue = reservedNotional.add(unrealizedPnl).max(ZERO);
             }
 
             equity = equity.add(markToMarketValue);

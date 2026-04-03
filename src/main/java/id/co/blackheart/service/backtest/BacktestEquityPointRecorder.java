@@ -43,11 +43,18 @@ public class BacktestEquityPointRecorder {
         BigDecimal assetValue = totalEquity.subtract(cashBalance).max(BigDecimal.ZERO);
         int openPositions = countOpenPositions(state);
 
-        BacktestEquityPoint previousDayPoint = findPreviousDayPoint(state.getEquityPoints(), equityDate);
+        LocalDate previousDate = state.getEquityPointIndex().lowerKey(equityDate);
+        BacktestEquityPoint previousDayPoint = previousDate != null
+                ? state.getEquityPointIndex().get(previousDate)
+                : null;
         BigDecimal dailyReturnPct = calculateDailyReturnPct(previousDayPoint, totalEquity);
 
+        BacktestEquityPoint existing = state.getEquityPointIndex().get(equityDate);
+        UUID pointId = existing != null ? existing.getBacktestEquityPointId() : UUID.randomUUID();
+        LocalDateTime createdAt = existing != null ? existing.getCreatedAt() : LocalDateTime.now();
+
         BacktestEquityPoint point = BacktestEquityPoint.builder()
-                .backtestEquityPointId(UUID.randomUUID())
+                .backtestEquityPointId(pointId)
                 .backtestRunId(backtestRun.getBacktestRunId())
                 .accountId(resolveAccountId(backtestRun))
                 .equityDate(equityDate)
@@ -57,45 +64,10 @@ public class BacktestEquityPointRecorder {
                 .drawdownPercent(safe(state.getMaxDrawdownPercent()))
                 .dailyReturnPct(dailyReturnPct)
                 .openPositions(openPositions)
-                .createdAt(LocalDateTime.now())
+                .createdAt(createdAt)
                 .build();
 
-        upsertDailyPoint(state.getEquityPoints(), point);
-    }
-
-    private void upsertDailyPoint(List<BacktestEquityPoint> equityPoints, BacktestEquityPoint newPoint) {
-        for (int i = 0; i < equityPoints.size(); i++) {
-            BacktestEquityPoint existing = equityPoints.get(i);
-            if (existing != null && newPoint.getEquityDate().equals(existing.getEquityDate())) {
-                newPoint.setBacktestEquityPointId(existing.getBacktestEquityPointId());
-                newPoint.setCreatedAt(existing.getCreatedAt());
-                equityPoints.set(i, newPoint);
-                return;
-            }
-        }
-
-        equityPoints.add(newPoint);
-    }
-
-    private BacktestEquityPoint findPreviousDayPoint(List<BacktestEquityPoint> equityPoints, LocalDate currentDate) {
-        if (equityPoints == null || equityPoints.isEmpty()) {
-            return null;
-        }
-
-        BacktestEquityPoint candidate = null;
-        for (BacktestEquityPoint point : equityPoints) {
-            if (point == null || point.getEquityDate() == null) {
-                continue;
-            }
-
-            if (point.getEquityDate().isBefore(currentDate)) {
-                if (candidate == null || point.getEquityDate().isAfter(candidate.getEquityDate())) {
-                    candidate = point;
-                }
-            }
-        }
-
-        return candidate;
+        state.getEquityPointIndex().put(equityDate, point);
     }
 
     private BigDecimal calculateDailyReturnPct(BacktestEquityPoint previousDayPoint, BigDecimal currentTotalEquity) {

@@ -32,24 +32,28 @@ public class TradeListenerService {
         }
 
         if (SIDE_LONG.equalsIgnoreCase(position.getSide())) {
-            return evaluateLong(position, context.getLatestPrice());
+            return evaluateLong(position, context.getLatestPrice(), context.getCandleHigh(), context.getCandleLow());
         }
 
         if (SIDE_SHORT.equalsIgnoreCase(position.getSide())) {
-            return evaluateShort(position, context.getLatestPrice());
+            return evaluateShort(position, context.getLatestPrice(), context.getCandleHigh(), context.getCandleLow());
         }
 
         return ListenerDecision.none();
     }
 
-    private ListenerDecision evaluateLong(PositionSnapshot position, BigDecimal latestPrice) {
+    private ListenerDecision evaluateLong(PositionSnapshot position, BigDecimal latestPrice, BigDecimal candleHigh, BigDecimal candleLow) {
         BigDecimal stopLoss = position.getCurrentStopLossPrice();
         BigDecimal trailingStop = position.getTrailingStopPrice();
         BigDecimal takeProfit = position.getTakeProfitPrice();
 
-        boolean stopHit = stopLoss != null && latestPrice.compareTo(stopLoss) <= 0;
-        boolean trailingHit = trailingStop != null && latestPrice.compareTo(trailingStop) <= 0;
-        boolean takeProfitHit = takeProfit != null && latestPrice.compareTo(takeProfit) >= 0;
+        // For LONG: stops are hit when price goes LOW enough; TP is hit when price goes HIGH enough
+        BigDecimal stopCheckPrice = candleLow != null ? candleLow : latestPrice;
+        BigDecimal tpCheckPrice = candleHigh != null ? candleHigh : latestPrice;
+
+        boolean stopHit = stopLoss != null && stopCheckPrice.compareTo(stopLoss) <= 0;
+        boolean trailingHit = trailingStop != null && stopCheckPrice.compareTo(trailingStop) <= 0;
+        boolean takeProfitHit = takeProfit != null && tpCheckPrice.compareTo(takeProfit) >= 0;
 
         if (trailingHit) {
             return ListenerDecision.builder()
@@ -81,14 +85,18 @@ public class TradeListenerService {
         return ListenerDecision.none();
     }
 
-    private ListenerDecision evaluateShort(PositionSnapshot position, BigDecimal latestPrice) {
+    private ListenerDecision evaluateShort(PositionSnapshot position, BigDecimal latestPrice, BigDecimal candleHigh, BigDecimal candleLow) {
         BigDecimal stopLoss = position.getCurrentStopLossPrice();
         BigDecimal trailingStop = position.getTrailingStopPrice();
         BigDecimal takeProfit = position.getTakeProfitPrice();
 
-        boolean stopHit = stopLoss != null && latestPrice.compareTo(stopLoss) >= 0;
-        boolean trailingHit = trailingStop != null && latestPrice.compareTo(trailingStop) >= 0;
-        boolean takeProfitHit = takeProfit != null && latestPrice.compareTo(takeProfit) <= 0;
+        // For SHORT: stops are hit when price goes HIGH enough; TP is hit when price goes LOW enough
+        BigDecimal stopCheckPrice = candleHigh != null ? candleHigh : latestPrice;
+        BigDecimal tpCheckPrice = candleLow != null ? candleLow : latestPrice;
+
+        boolean stopHit = stopLoss != null && stopCheckPrice.compareTo(stopLoss) >= 0;
+        boolean trailingHit = trailingStop != null && stopCheckPrice.compareTo(trailingStop) >= 0;
+        boolean takeProfitHit = takeProfit != null && tpCheckPrice.compareTo(takeProfit) <= 0;
 
         if (trailingHit) {
             return ListenerDecision.builder()

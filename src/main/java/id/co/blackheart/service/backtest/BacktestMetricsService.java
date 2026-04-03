@@ -2,6 +2,7 @@ package id.co.blackheart.service.backtest;
 
 import id.co.blackheart.dto.backtest.BacktestExecutionSummary;
 import id.co.blackheart.dto.backtest.BacktestState;
+import id.co.blackheart.model.BacktestEquityPoint;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
 import org.springframework.stereotype.Service;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 public class BacktestMetricsService {
@@ -64,7 +66,43 @@ public class BacktestMetricsService {
                 .profitFactor(profitFactor)
                 .maxDrawdownPercent(state.getMaxDrawdownPercent())
                 .totalReturnPercent(totalReturnPercent)
-                .sharpeRatio(BigDecimal.ZERO)
+                .sharpeRatio(calculateSharpeRatio(state))
                 .build();
+    }
+
+    private BigDecimal calculateSharpeRatio(BacktestState state) {
+        if (state.getEquityPoints() == null || state.getEquityPoints().size() < 2) {
+            return BigDecimal.ZERO;
+        }
+
+        List<BigDecimal> dailyReturns = state.getEquityPoints().stream()
+                .map(BacktestEquityPoint::getDailyReturnPct)
+                .filter(Objects::nonNull)
+                .toList();
+
+        if (dailyReturns.size() < 2) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal n = BigDecimal.valueOf(dailyReturns.size());
+        BigDecimal mean = dailyReturns.stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(n, 10, RoundingMode.HALF_UP);
+
+        BigDecimal variance = dailyReturns.stream()
+                .map(r -> r.subtract(mean).pow(2))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(dailyReturns.size() - 1), 10, RoundingMode.HALF_UP);
+
+        if (variance.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal stdDev = BigDecimal.valueOf(Math.sqrt(variance.doubleValue()));
+        BigDecimal annualizationFactor = BigDecimal.valueOf(Math.sqrt(252));
+
+        return mean.divide(stdDev, 10, RoundingMode.HALF_UP)
+                .multiply(annualizationFactor)
+                .setScale(4, RoundingMode.HALF_UP);
     }
 }

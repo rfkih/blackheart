@@ -19,4 +19,6 @@ public class ListenerContext {
     private String interval;
     private PositionSnapshot positionSnapshot;
     private BigDecimal latestPrice;
+    private BigDecimal candleHigh;
+    private BigDecimal candleLow;
 }

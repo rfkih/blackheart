@@ -27,11 +27,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -40,7 +36,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class BacktestCoordinatorService {
 
-    private static final String MONITOR_INTERVAL = "15m";
+    private static final String MONITOR_INTERVAL = "5m";
     private static final String EXECUTION_SOURCE = "backtest";
 
     private final MarketDataRepository marketDataRepository;
@@ -117,6 +113,10 @@ public class BacktestCoordinatorService {
         BiasData biasData = preloadBiasData(backtestRun, requirements);
 
         for (MarketData monitorCandle : monitorCandles) {
+            backtestTradeExecutorService.fillPendingEntry(
+                    backtestRun, state, monitorCandle.getOpenPrice(), monitorCandle.getStartTime()
+            );
+
             boolean anyPositionClosed = handleListenerStep(backtestRun, state, monitorCandle);
 
             if (!anyPositionClosed) {
@@ -141,6 +141,8 @@ public class BacktestCoordinatorService {
 
         forceCloseRemainingOpenTrade(backtestRun, state, finalCandle);
         backtestStateService.updateEquityAndDrawdown(state, finalCandle.getClosePrice());
+
+        state.setEquityPoints(new ArrayList<>(state.getEquityPointIndex().values()));
 
         BacktestExecutionSummary summary = backtestMetricsService.buildSummary(backtestRun, state);
 
@@ -174,6 +176,8 @@ public class BacktestCoordinatorService {
                     .interval(MONITOR_INTERVAL)
                     .positionSnapshot(snapshot)
                     .latestPrice(monitorCandle.getClosePrice())
+                    .candleHigh(monitorCandle.getHighPrice())
+                    .candleLow(monitorCandle.getLowPrice())
                     .build();
 
             ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
@@ -243,7 +247,7 @@ public class BacktestCoordinatorService {
                 .marketData(strategyCandle)
                 .featureStore(strategyFeature)
                 .positionSnapshot(positionSnapshot)
-                .hasOpenPosition(positionSnapshot != null && Boolean.TRUE.equals(positionSnapshot.isHasOpenPosition()))
+                .hasOpenPosition(positionSnapshot != null && positionSnapshot.isHasOpenPosition())
                 .openPositionCount(openPositionCount)
                 .executionMetadata(executionMetadata)
                 .cashBalance(state.getCashBalance())
@@ -261,7 +265,7 @@ public class BacktestCoordinatorService {
         MarketData resolvedBiasMarket = null;
         FeatureStore resolvedBiasFeature = null;
 
-        if (requirements != null && Boolean.TRUE.equals(requirements.isRequireBiasTimeframe())) {
+        if (requirements != null && requirements.isRequireBiasTimeframe()) {
             resolvedBiasMarket = resolveLatestCompletedBiasCandle(
                     biasData.biasCandles(),
                     monitorCandle.getEndTime()

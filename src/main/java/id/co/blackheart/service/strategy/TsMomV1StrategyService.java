@@ -7,7 +7,6 @@ import id.co.blackheart.dto.strategy.RiskSnapshot;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.strategy.StrategyRequirements;
 import id.co.blackheart.dto.strategy.VolatilitySnapshot;
-import id.co.blackheart.model.Account;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.util.TradeConstant.DecisionType;
@@ -24,7 +23,7 @@ import java.util.Map;
 @Service
 @Slf4j
 @RequiredArgsConstructor
-public class TsMomV1StrategyExecutor implements StrategyExecutor {
+public class TsMomV1StrategyService implements StrategyExecutor {
 
     private final StrategyHelper strategyHelper;
 
@@ -516,18 +515,6 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
     }
 
 
-    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Account account) {
-        if (btcBalance == null || account == null || account.getRiskAmount() == null) {
-            return BigDecimal.ZERO;
-        }
-
-        BigDecimal tradeAmount = btcBalance
-                .multiply(account.getRiskAmount())
-                .setScale(8, RoundingMode.DOWN);
-
-        return tradeAmount.compareTo(MIN_BTC_NOTIONAL) < 0 ? MIN_BTC_NOTIONAL : tradeAmount;
-    }
-
 
     private StrategyDecision manageLongPosition(
             EnrichedStrategyContext context,
@@ -873,23 +860,6 @@ public class TsMomV1StrategyExecutor implements StrategyExecutor {
 
     private BigDecimal resolveMinConfidenceScore(EnrichedStrategyContext context) {
         return DEFAULT_MIN_CONFIDENCE_SCORE;
-    }
-
-    private BigDecimal resolveRiskPct(EnrichedStrategyContext context) {
-        RiskSnapshot riskSnapshot = context.getRiskSnapshot();
-        if (riskSnapshot != null
-                && riskSnapshot.getFinalRiskPct() != null
-                && riskSnapshot.getFinalRiskPct().compareTo(ZERO) > 0) {
-            return riskSnapshot.getFinalRiskPct();
-        }
-
-        if (context.getAccount() != null
-                && context.getAccount().getRiskAmount() != null
-                && context.getAccount().getRiskAmount().compareTo(ZERO) > 0) {
-            return context.getAccount().getRiskAmount();
-        }
-
-        return ZERO;
     }
 
     private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext context) {

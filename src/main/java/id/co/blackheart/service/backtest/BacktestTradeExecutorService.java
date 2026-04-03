@@ -6,7 +6,9 @@ import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.model.BacktestTradePosition;
+import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.util.TradeConstant.DecisionType;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -19,7 +21,10 @@ import java.util.UUID;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class BacktestTradeExecutorService {
+
+    private final BacktestPricingService backtestPricingService;
 
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_CLOSED = "CLOSED";
@@ -45,8 +50,8 @@ public class BacktestTradeExecutorService {
         }
 
         switch (decision.getDecisionType()) {
-            case OPEN_LONG -> openTrade(backtestRun, state, context, decision, "LONG");
-            case OPEN_SHORT -> openTrade(backtestRun, state, context, decision, "SHORT");
+            case OPEN_LONG -> storePendingEntry(state, context, decision, "LONG");
+            case OPEN_SHORT -> storePendingEntry(state, context, decision, "SHORT");
             case UPDATE_POSITION_MANAGEMENT -> updateOpenPositions(state, decision);
             case CLOSE_LONG, CLOSE_SHORT -> {
                 if (context == null || context.getMarketData() == null) {
@@ -66,32 +71,60 @@ public class BacktestTradeExecutorService {
         }
     }
 
-    private void openTrade(
-            BacktestRun backtestRun,
+    private void storePendingEntry(
             BacktestState state,
             EnrichedStrategyContext context,
             StrategyDecision decision,
-            String tradeType
+            String side
     ) {
+        if (state.getActiveTrade() != null || state.getPendingEntry() != null) {
+            return;
+        }
+        state.setPendingEntry(new BacktestState.PendingEntry(decision, side, context.getFeatureStore()));
+        log.debug("Backtest pending entry stored | side={} strategy={}", side, decision.getStrategyCode());
+    }
+
+    public void fillPendingEntry(
+            BacktestRun backtestRun,
+            BacktestState state,
+            BigDecimal openPrice,
+            LocalDateTime entryTime
+    ) {
+        BacktestState.PendingEntry pending = state.getPendingEntry();
+        if (pending == null) {
+            return;
+        }
+
+        state.setPendingEntry(null);
+
         if (state.getActiveTrade() != null) {
+            log.warn("Pending entry skipped | asset={} reason=Active trade already exists", backtestRun.getAsset());
             return;
         }
 
-        if (context == null || context.getMarketData() == null) {
-            log.warn("Backtest {} rejected | asset={} reason=Missing market data context",
-                    tradeType, backtestRun.getAsset());
-            return;
-        }
+        openTrade(backtestRun, state, pending.decision(), pending.side(), pending.featureStore(), openPrice, entryTime);
+    }
 
+    private void openTrade(
+            BacktestRun backtestRun,
+            BacktestState state,
+            StrategyDecision decision,
+            String tradeType,
+            FeatureStore featureStore,
+            BigDecimal rawEntryPrice,
+            LocalDateTime entryTime
+    ) {
         BigDecimal requestedQuoteAmount = resolveRequestedQuoteAmount(decision);
-        BigDecimal entryPrice = safe(context.getMarketData().getClosePrice());
 
-
-        if (requestedQuoteAmount.compareTo(BigDecimal.ZERO) <= 0 || entryPrice.compareTo(BigDecimal.ZERO) <= 0) {
+        if (requestedQuoteAmount.compareTo(BigDecimal.ZERO) <= 0 || safe(rawEntryPrice).compareTo(BigDecimal.ZERO) <= 0) {
             log.warn("Backtest {} rejected | asset={} reason=Invalid size or entry price",
                     tradeType, backtestRun.getAsset());
             return;
         }
+
+        BigDecimal entryPrice = backtestPricingService.applyEntrySlippage(
+                rawEntryPrice, backtestRun.getSlippagePct(), tradeType
+        );
 
         BigDecimal totalQty = requestedQuoteAmount.divide(entryPrice, 12, RoundingMode.DOWN);
         if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
@@ -109,8 +142,6 @@ public class BacktestTradeExecutorService {
                     tradeType, backtestRun.getAsset());
             return;
         }
-
-        LocalDateTime entryTime = context.getMarketData().getEndTime();
 
         BacktestTrade trade = BacktestTrade.builder()
                 .backtestTradeId(UUID.randomUUID())
@@ -130,10 +161,10 @@ public class BacktestTradeExecutorService {
                 .realizedPnlAmount(BigDecimal.ZERO)
                 .realizedPnlPercent(BigDecimal.ZERO)
                 .totalFeeAmount(entryFee)
-                .entryTrendRegime(context.getFeatureStore().getTrendRegime())
-                .entryAdx(context.getFeatureStore().getAdx())
-                .entryAtr(context.getFeatureStore().getAtr())
-                .entryRsi(context.getFeatureStore().getRsi())
+                .entryTrendRegime(featureStore != null ? featureStore.getTrendRegime() : null)
+                .entryAdx(featureStore != null ? featureStore.getAdx() : null)
+                .entryAtr(featureStore != null ? featureStore.getAtr() : null)
+                .entryRsi(featureStore != null ? featureStore.getRsi() : null)
                 .exitReason(null)
                 .entryTime(entryTime)
                 .exitTime(null)
@@ -213,6 +244,10 @@ public class BacktestTradeExecutorService {
         if (remainingQty.compareTo(BigDecimal.ZERO) <= 0 || cleanExitPrice.compareTo(BigDecimal.ZERO) <= 0) {
             return;
         }
+
+        cleanExitPrice = backtestPricingService.applyExitSlippage(
+                cleanExitPrice, backtestRun.getSlippagePct(), position.getSide()
+        );
 
         BigDecimal exitQuoteQty = remainingQty.multiply(cleanExitPrice).setScale(8, RoundingMode.HALF_UP);
         BigDecimal exitFee = exitQuoteQty.multiply(safe(backtestRun.getFeePct())).setScale(8, RoundingMode.HALF_UP);

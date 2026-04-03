@@ -38,7 +38,11 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         MarketData biasMarketData = null;
         FeatureStore biasFeatureStore = null;
 
-        if (requirements.isRequireBiasTimeframe()
+        boolean isBacktest = baseContext.getExecutionMetadata() != null
+                && "backtest".equals(baseContext.getExecutionMetadata().get("source"));
+
+        if (!isBacktest
+                && requirements.isRequireBiasTimeframe()
                 && requirements.getBiasInterval() != null
                 && !requirements.getBiasInterval().isBlank()) {
             biasFeatureStore = featureStoreRepository
