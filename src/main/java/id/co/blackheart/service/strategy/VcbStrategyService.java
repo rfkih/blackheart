@@ -43,8 +43,12 @@ import java.util.Map;
  * ║                                                                          ║
  * ║  SIGNAL ARCHITECTURE                                                     ║
  * ║  ──────────────────────                                                  ║
- * ║  Layer 1 — 4H Bias (direction gate)                                      ║
- * ║    • EMA50 > EMA200 + close > EMA200  → BULL bias (allows pullbacks)     ║
+ * ║  Layer 1a — 1H Regime-Direction Alignment (hard gate)                     ║
+ * ║    • LONG only in BULL regime (trendRegime = BULL)                       ║
+ * ║    • SHORT only in BEAR regime (trendRegime = BEAR)                      ║
+ * ║    • NEUTRAL regime blocked — 30% WR, net loser across all tests         ║
+ * ║  Layer 1b — 4H Bias (score bonus, not gate)                              ║
+ * ║    • EMA50 > EMA200 + close > EMA200  → BULL bias (+0.15 score)          ║
  * ║    • Signed ER20 (4H) > 0.05 confirms directional efficiency (soft)      ║
  * ║                                                                          ║
  * ║  Layer 2 — 1H Compression Detection (setup gate, on PREVIOUS candle)     ║
@@ -74,12 +78,12 @@ import java.util.Map;
  * ║           + 0.30 ATR buffer. Hard structural stop.                       ║
  * ║  TP1:     1.8R — close 40% of position. Justified: at 1.8R you've       ║
  * ║           covered your risk 1.8x. Locks profit while runner lives.       ║
- * ║  Runner:  60% of position. Three-phase ATR trail:                        ║
- * ║           Phase 0 (0–1R):   No trail. Hold stop at entry stop.           ║
- * ║           Phase 1 (1–2R):   Move stop to break-even. Lock 0R.            ║
- * ║           Phase 2 (2–3R):   Trail at 1.5 ATR. Lock 0.8R profit.         ║
+ * ║  Runner:  60% of position. Four-phase ATR trail:                         ║
+ * ║           Phase 0.5 (0.5R): Lift stop to -0.5R (halve max loss).        ║
+ * ║           Phase 1 (0.75R):  Move stop to break-even. Lock 0R.            ║
+ * ║           Phase 2 (2–3R):   Trail at 1.2 ATR. Lock 0.8R profit.         ║
  * ║           Phase 3 (3R+):    Trail at 0.8 ATR. Lock 2.0R profit.          ║
- * ║           Rationale: give the trade room early, tighten as it extends.   ║
+ * ║           Rationale: limit loss early, protect gains as they extend.     ║
  * ║                                                                          ║
  * ║  RISK PARAMETERS                                                          ║
  * ║  ────────────────                                                         ║
@@ -188,6 +192,19 @@ public class VcbStrategyService implements StrategyExecutor {
     private static final BigDecimal TP1_R                   = new BigDecimal("1.80");
 
     // ── Runner trail phases ───────────────────────────────────────────────────
+    /**
+     * Phase 0.5 (0.5R): lift stop from initial to -0.5R (halve max loss).
+     * Rationale: if price commits 0.5R in our direction, the trade has shown
+     * some validity. We reduce max loss from -1R to -0.5R on a reversal.
+     */
+    private static final BigDecimal RUNNER_HALF_R           = new BigDecimal("0.50");    // Loss-limit trigger at 0.5R
+
+    /**
+     * Phase 1 (1.0R): move stop to break-even.
+     * BTC 1H breakouts frequently pull back to the entry level before continuing.
+     * Moving BE too early (e.g. 0.75R) forces the runner to exit on normal noise.
+     * 1.0R gives the trade room to complete the throwback.
+     */
     private static final BigDecimal RUNNER_BREAK_EVEN_R     = ONE;                       // Move BE at 1R
     private static final BigDecimal RUNNER_PHASE_2_R        = new BigDecimal("2.00");    // Trail at 1.5 ATR
     private static final BigDecimal RUNNER_PHASE_3_R        = new BigDecimal("3.00");    // Trail at 0.8 ATR
@@ -296,6 +313,16 @@ public class VcbStrategyService implements StrategyExecutor {
         // during corrections and range markets, neither long nor short bias ever fired.
         // The Donchian breakout + compression are the actual entry signal.
         // 4H alignment is tracked in the score (+0.15 if aligned) but does not veto entries.
+
+        // Layer 1a: Regime-direction alignment — only take longs in BULL regime.
+        // NEUTRAL regime has 30% WR (vs 40%+ in BULL/BEAR) and is a net loser.
+        // A breakout in a non-trending market is mostly noise, not a new impulse.
+        // Null-pass: if regime unavailable, allow entry (don't break live trading).
+        String trendRegime = feature.getTrendRegime();
+        if (trendRegime != null && !"BULL".equalsIgnoreCase(trendRegime)) {
+            log.info("VCB LONG gate1a FAIL [regime not BULL] time={} regime={}", marketData.getEndTime(), trendRegime);
+            return null;
+        }
 
         // Layer 1b: ADX cap — reject if market is already in a strong trend (not compression).
         // ADX >= 35 means momentum is fully extended; the breakout is chasing, not leading.
@@ -432,6 +459,15 @@ public class VcbStrategyService implements StrategyExecutor {
             FeatureStore feature
     ) {
         // Layer 1: 4H bias is a SCORE BONUS, not a hard gate. Same rationale as long entry.
+
+        // Layer 1a: Regime-direction alignment — only take shorts in BEAR regime.
+        // NEUTRAL regime has 30% WR and is a net loser. BULL regime shorts are counter-trend.
+        // Null-pass: if regime unavailable, allow entry.
+        String trendRegime = feature.getTrendRegime();
+        if (trendRegime != null && !"BEAR".equalsIgnoreCase(trendRegime)) {
+            log.info("VCB SHORT gate1a FAIL [regime not BEAR] time={} regime={}", marketData.getEndTime(), trendRegime);
+            return null;
+        }
 
         // Layer 1b: ADX cap — same rationale as long entry.
         if (feature.getAdx() != null && feature.getAdx().compareTo(new BigDecimal("35")) >= 0) {
@@ -692,10 +728,21 @@ public class VcbStrategyService implements StrategyExecutor {
             setup     = SETUP_LONG_RUNNER;
 
         } else if (rMultiple.compareTo(RUNNER_BREAK_EVEN_R) >= 0) {
-            // Phase 1: move to break-even
+            // Phase 1: move to break-even at 0.75R
             candidate = entry;
-            reason    = "VCB runner phase 1: move to break-even at 1R";
+            reason    = "VCB runner phase 1: move to break-even at 0.75R";
             setup     = SETUP_LONG_BE;
+
+        } else if (rMultiple.compareTo(RUNNER_HALF_R) >= 0) {
+            // Phase 0.5: lift stop halfway — from initial stop to -0.5R.
+            // Price has moved 0.5R in our direction, confirming some validity.
+            // On a reversal from here we lose -0.5R instead of -1R.
+            BigDecimal halfLossStop = entry.subtract(initRisk.multiply(RUNNER_HALF_R));
+            if (halfLossStop.compareTo(curStop) > 0) {
+                candidate = halfLossStop;
+                reason    = "VCB runner phase 0.5: lift stop to -0.5R (loss limiter)";
+                setup     = SETUP_LONG_BE;
+            }
         }
 
         if (candidate == null) return hold(context, "Runner not ready");
@@ -768,8 +815,17 @@ public class VcbStrategyService implements StrategyExecutor {
 
         } else if (rMultiple.compareTo(RUNNER_BREAK_EVEN_R) >= 0) {
             candidate = entry;
-            reason    = "VCB short runner phase 1: move to break-even at 1R";
+            reason    = "VCB short runner phase 1: move to break-even at 0.75R";
             setup     = SETUP_SHORT_BE;
+
+        } else if (rMultiple.compareTo(RUNNER_HALF_R) >= 0) {
+            // Phase 0.5: lift stop halfway — from initial stop to +0.5R above entry.
+            BigDecimal halfLossStop = entry.add(initRisk.multiply(RUNNER_HALF_R));
+            if (halfLossStop.compareTo(curStop) < 0) {
+                candidate = halfLossStop;
+                reason    = "VCB short runner phase 0.5: lift stop to -0.5R (loss limiter)";
+                setup     = SETUP_SHORT_BE;
+            }
         }
 
         if (candidate == null) return hold(context, "Short runner not ready");
