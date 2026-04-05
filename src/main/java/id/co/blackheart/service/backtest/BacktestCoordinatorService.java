@@ -105,6 +105,11 @@ public class BacktestCoordinatorService {
                         (existing, replacement) -> existing
                 ));
 
+        List<FeatureStore> sortedStrategyFeatures = strategyFeatures.stream()
+                .filter(f -> f != null && f.getStartTime() != null)
+                .sorted(Comparator.comparing(FeatureStore::getStartTime))
+                .toList();
+
         BacktestState state = BacktestState.initial(backtestRun);
 
         StrategyExecutor executor = strategyExecutorFactory.get(resolveStrategyLookupCode(backtestRun));
@@ -126,6 +131,7 @@ public class BacktestCoordinatorService {
                         strategyInterval,
                         strategyCandleByEndTime,
                         strategyFeatureByStartTime,
+                        sortedStrategyFeatures,
                         monitorCandle,
                         executor,
                         requirements,
@@ -172,6 +178,7 @@ public class BacktestCoordinatorService {
             }
 
             updatePriceExtremes(position, monitorCandle);
+            updateTrailingStop(position);
 
             PositionSnapshot snapshot = backtestPositionSnapshotMapper.toSnapshot(position);
 
@@ -211,6 +218,7 @@ public class BacktestCoordinatorService {
             String strategyInterval,
             Map<LocalDateTime, MarketData> strategyCandleByEndTime,
             Map<LocalDateTime, FeatureStore> strategyFeatureByStartTime,
+            List<FeatureStore> sortedStrategyFeatures,
             MarketData monitorCandle,
             StrategyExecutor executor,
             StrategyRequirements requirements,
@@ -283,6 +291,12 @@ public class BacktestCoordinatorService {
         enrichedContext.setBiasMarketData(resolvedBiasMarket);
         enrichedContext.setBiasFeatureStore(resolvedBiasFeature);
 
+        if (requirements != null && requirements.isRequirePreviousFeatureStore()) {
+            enrichedContext.setPreviousFeatureStore(
+                    resolvePreviousFeatureStore(sortedStrategyFeatures, strategyCandle.getStartTime())
+            );
+        }
+
         StrategyDecision decision = executor.execute(enrichedContext);
 
         log.debug("Strategy decision reason={}", decision.getReason());
@@ -331,6 +345,24 @@ public class BacktestCoordinatorService {
                 .toList();
 
         return new BiasData(sortedBiasCandles, biasFeatureByStartTime);
+    }
+
+    private FeatureStore resolvePreviousFeatureStore(
+            List<FeatureStore> sortedFeatures,
+            LocalDateTime currentStartTime
+    ) {
+        if (sortedFeatures == null || sortedFeatures.isEmpty() || currentStartTime == null) {
+            return null;
+        }
+        FeatureStore prev = null;
+        for (FeatureStore f : sortedFeatures) {
+            if (f.getStartTime().isBefore(currentStartTime)) {
+                prev = f;
+            } else {
+                break;
+            }
+        }
+        return prev;
     }
 
     private MarketData resolveLatestCompletedBiasCandle(
@@ -484,6 +516,47 @@ public class BacktestCoordinatorService {
 
         if (!backtestRun.getStartTime().isBefore(backtestRun.getEndTime())) {
             throw new IllegalArgumentException("Backtest startTime must be before endTime");
+        }
+    }
+
+    /**
+     * Updates trailingStopPrice to follow price in the favourable direction,
+     * maintaining the fixed offset established between entryPrice and initialTrailingStopPrice.
+     * Must be called after updatePriceExtremes so highestPriceSinceEntry / lowestPriceSinceEntry are current.
+     */
+    private void updateTrailingStop(BacktestTradePosition position) {
+        if (position.getTrailingStopPrice() == null
+                || position.getInitialTrailingStopPrice() == null
+                || position.getEntryPrice() == null) {
+            return;
+        }
+
+        if ("LONG".equalsIgnoreCase(position.getSide())) {
+            BigDecimal highestPrice = position.getHighestPriceSinceEntry();
+            if (highestPrice == null) {
+                return;
+            }
+            BigDecimal offset = position.getEntryPrice().subtract(position.getInitialTrailingStopPrice());
+            if (offset.compareTo(BigDecimal.ZERO) <= 0) {
+                return;
+            }
+            BigDecimal newTrailing = highestPrice.subtract(offset);
+            if (newTrailing.compareTo(position.getTrailingStopPrice()) > 0) {
+                position.setTrailingStopPrice(newTrailing);
+            }
+        } else if ("SHORT".equalsIgnoreCase(position.getSide())) {
+            BigDecimal lowestPrice = position.getLowestPriceSinceEntry();
+            if (lowestPrice == null) {
+                return;
+            }
+            BigDecimal offset = position.getInitialTrailingStopPrice().subtract(position.getEntryPrice());
+            if (offset.compareTo(BigDecimal.ZERO) <= 0) {
+                return;
+            }
+            BigDecimal newTrailing = lowestPrice.add(offset);
+            if (newTrailing.compareTo(position.getTrailingStopPrice()) < 0) {
+                position.setTrailingStopPrice(newTrailing);
+            }
         }
     }
 

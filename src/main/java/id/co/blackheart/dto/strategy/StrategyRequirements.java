@@ -14,4 +14,10 @@ public class StrategyRequirements {
     private boolean requireVolatilitySnapshot;
     private boolean requireRiskSnapshot;
     private boolean requireMarketQualitySnapshot;
+
+    /**
+     * When true, the coordinator will populate previousFeatureStore
+     * (same-timeframe FeatureStore from the candle immediately before the current one).
+     */
+    private boolean requirePreviousFeatureStore;
 }

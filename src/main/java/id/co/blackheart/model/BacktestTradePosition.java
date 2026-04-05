@@ -92,6 +92,13 @@ public class BacktestTradePosition {
     @Column(name = "trailing_stop_price", precision = 24, scale = 8)
     private BigDecimal trailingStopPrice;
 
+    /**
+     * Initial trailing stop price recorded at entry — used to compute the fixed trailing offset
+     * during backtest execution. Not persisted (runtime only).
+     */
+    @Transient
+    private BigDecimal initialTrailingStopPrice;
+
     @Column(name = "take_profit_price", precision = 24, scale = 8)
     private BigDecimal takeProfitPrice;
 

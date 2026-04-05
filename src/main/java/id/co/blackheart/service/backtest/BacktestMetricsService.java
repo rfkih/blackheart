@@ -20,14 +20,15 @@ public class BacktestMetricsService {
 
         int totalTrades = trades.size();
 
+        // Win/loss counts are based on gross price direction, not net P&L after fees.
+        // Fees affect profitability metrics (profit factor, total return) but must not
+        // distort directional accuracy (win rate).
         int winningTrades = (int) trades.stream()
-                .filter(t -> t.getRealizedPnlAmount() != null
-                        && t.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) > 0)
+                .filter(this::isDirectionalWin)
                 .count();
 
         int losingTrades = (int) trades.stream()
-                .filter(t -> t.getRealizedPnlAmount() != null
-                        && t.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) < 0)
+                .filter(this::isDirectionalLoss)
                 .count();
 
         BigDecimal grossProfit = trades.stream()
@@ -63,17 +64,46 @@ public class BacktestMetricsService {
                 .divide(run.getInitialCapital(), 6, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal("100"));
 
+        BigDecimal netProfit = grossProfit.subtract(grossLoss);
+
         return BacktestExecutionSummary.builder()
                 .finalCapital(finalCapital)
                 .totalTrades(totalTrades)
                 .winningTrades(winningTrades)
                 .losingTrades(losingTrades)
                 .winRate(winRate)
+                .grossProfit(grossProfit)
+                .grossLoss(grossLoss)
+                .netProfit(netProfit)
                 .profitFactor(profitFactor)
                 .maxDrawdownPercent(state.getMaxDrawdownPercent())
                 .totalReturnPercent(totalReturnPercent)
                 .sharpeRatio(calculateSharpeRatio(state))
                 .build();
+    }
+
+    /**
+     * A trade is a directional win if price moved in the intended direction,
+     * regardless of whether fees wiped out the profit.
+     */
+    private boolean isDirectionalWin(BacktestTrade trade) {
+        if (trade.getAvgEntryPrice() == null || trade.getAvgExitPrice() == null) {
+            return false;
+        }
+        if ("SHORT".equalsIgnoreCase(trade.getSide())) {
+            return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) < 0;
+        }
+        return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) > 0;
+    }
+
+    private boolean isDirectionalLoss(BacktestTrade trade) {
+        if (trade.getAvgEntryPrice() == null || trade.getAvgExitPrice() == null) {
+            return false;
+        }
+        if ("SHORT".equalsIgnoreCase(trade.getSide())) {
+            return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) > 0;
+        }
+        return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) < 0;
     }
 
     private BigDecimal calculateSharpeRatio(BacktestState state) {

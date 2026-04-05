@@ -55,20 +55,25 @@ public class BacktestPersistenceService {
         }
     }
 
-    private void applySummary(
-            BacktestRun backtestRun,
-            BacktestExecutionSummary summary
-    ) {
+    private void applySummary(BacktestRun backtestRun, BacktestExecutionSummary summary) {
         backtestRun.setStatus("COMPLETED");
 
         if (summary.getFinalCapital() != null) {
             backtestRun.setEndingBalance(summary.getFinalCapital());
+        }
 
-            if (backtestRun.getInitialCapital() != null) {
-                backtestRun.setNetProfit(
-                        summary.getFinalCapital().subtract(backtestRun.getInitialCapital())
-                );
-            }
+        if (summary.getGrossProfit() != null) {
+            backtestRun.setGrossProfit(summary.getGrossProfit());
+        }
+
+        if (summary.getGrossLoss() != null) {
+            backtestRun.setGrossLoss(summary.getGrossLoss());
+        }
+
+        if (summary.getNetProfit() != null) {
+            backtestRun.setNetProfit(summary.getNetProfit());
+        } else if (summary.getFinalCapital() != null && backtestRun.getInitialCapital() != null) {
+            backtestRun.setNetProfit(summary.getFinalCapital().subtract(backtestRun.getInitialCapital()));
         }
 
         if (summary.getTotalTrades() != null) {

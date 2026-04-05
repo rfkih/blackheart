@@ -151,6 +151,30 @@ public class FeatureStore {
     @Column(name = "entry_bias", length = 10)
     private String entryBias;
 
+    @Column(name = "bb_upper_band", precision = 24, scale = 8)
+    private BigDecimal bbUpperBand;
+
+    @Column(name = "bb_lower_band", precision = 24, scale = 8)
+    private BigDecimal bbLowerBand;
+
+    @Column(name = "bb_width", precision = 24, scale = 8)
+    private BigDecimal bbWidth;
+
+    @Column(name = "kc_upper_band", precision = 24, scale = 8)
+    private BigDecimal kcUpperBand;
+
+    @Column(name = "kc_lower_band", precision = 24, scale = 8)
+    private BigDecimal kcLowerBand;
+
+    @Column(name = "kc_width", precision = 24, scale = 8)
+    private BigDecimal kcWidth;
+
+    @Column(name = "atr_ratio", precision = 24, scale = 8)
+    private BigDecimal atrRatio;
+
+    @Column(name = "signed_er_20", precision = 24, scale = 8)
+    private BigDecimal signedEr20;
+
     @Column(name = "created_time", nullable = false, updatable = false)
     @CreationTimestamp
     private Instant createdTime;

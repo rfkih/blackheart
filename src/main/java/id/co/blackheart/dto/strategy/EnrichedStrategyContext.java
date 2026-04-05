@@ -35,6 +35,13 @@ public class EnrichedStrategyContext {
     private FeatureStore biasFeatureStore;
 
     /**
+     * Previous candle's FeatureStore (same timeframe as current).
+     * Used by strategies that need to confirm a state on the prior candle
+     * (e.g., compression was active before the breakout candle fired).
+     */
+    private FeatureStore previousFeatureStore;
+
+    /**
      * Quant snapshots
      */
     private RegimeSnapshot regimeSnapshot;

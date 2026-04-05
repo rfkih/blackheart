@@ -19,29 +19,42 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * ScalpMomV1StrategyExecutor — 5-Minute EMA + RSI + MACD Scalping Strategy
+ * ScalpMomV1StrategyService — v3
  *
- * Philosophy:
- *   - Uses a 1h bias timeframe to confirm macro trend direction
- *   - Enters on 5min momentum alignment: EMA9 > EMA21, MACD positive, RSI in momentum zone
- *   - Tighter stops and faster break-even vs TSMOM (tuned for 5min volatility)
- *   - Runner trail logic preserved for catching extended moves
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │  FIXES FROM v2  (268 trades, 50% WR, -$2.68 net)                       │
+ * ├──────────┬──────────────────────────────────────────────────────────────┤
+ * │ FIX 1   │ TP raised: 0.8 ATR → 1.0 ATR (= 1.25R vs 0.8 ATR stop)      │
+ * │         │ ROOT CAUSE of v2 loss: avg win $0.090 ≈ avg loss $0.096.     │
+ * │         │ After fees ($0.014/trade), RR = 0.878x — losing by design.   │
+ * │         │ Stop=0.8 ATR, TP=1.0 ATR gives true 1.25x RR to overcome     │
+ * │         │ fees and generate positive expectancy.                        │
+ * ├──────────┼──────────────────────────────────────────────────────────────┤
+ * │ FIX 2   │ ADX tightened to 28–38 window                                │
+ * │         │ v2 data: ADX <25 = -$2.59, ADX 30-35 = +$1.62 (62% WR)      │
+ * │         │ ADX >40 also bleeds — overextended moves mean-revert fast.   │
+ * ├──────────┼──────────────────────────────────────────────────────────────┤
+ * │ FIX 3   │ RSI tightened: long 50–62, short 38–50                       │
+ * │         │ RSI 50-55: 84% WR, +$1.03 on 13 v2 trades (best bucket)     │
+ * │         │ RSI <40: -$2.74 net on 108 trades (biggest drain in v2).     │
+ * │         │ Tighter RSI bands eliminate both chasing and counter-trend.  │
+ * ├──────────┼──────────────────────────────────────────────────────────────┤
+ * │ FIX 4   │ Shorts require stricter RSI: 42–50 only (vs 38–50)           │
+ * │         │ v2: LONG 57.7% WR +$0.80 vs SHORT 47.2% WR -$3.48.          │
+ * │         │ Short RSI <42 entries are the main source of losses.         │
+ * │         │ Keeping shorts but requiring RSI closer to 50 (less extreme).│
+ * └──────────┴──────────────────────────────────────────────────────────────┘
  *
- * Entry Conditions (Long):
- *   - 1h bias: price > EMA50 > EMA200, not RANGE
- *   - 5min: EMA9 > EMA21, close > EMA21
- *   - MACD histogram > 0
- *   - RSI >= 50 (momentum zone)
- *   - ADX >= 18 (trending, not choppy)
- *
- * Entry Conditions (Short): mirror of above
- *
- * Risk:
- *   - Stop: 1.0x ATR (tighter than TSMOM's 1.4x)
- *   - TP1: 1.0R, TP2: 1.8R, TP3: 3.0R
- *   - Break-even trigger: 0.80R (faster than TSMOM)
+ * Unchanged from v2:
+ *  - SINGLE exit structure (TP1_RUNNER removed — confirmed right for 5min)
+ *  - Session filter: allowed hours 02,06,10,11,12,13,17,22 UTC
+ *  - Regime alignment: BULL=longs only, BEAR=shorts only
+ *  - Stop: 0.8x ATR
+ *  - Break-even trigger: 0.60R
+ *  - 1h bias timeframe
  */
 @Service
 @Slf4j
@@ -50,59 +63,69 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
 
     private final StrategyHelper strategyHelper;
 
-    // ── Identity ────────────────────────────────────────────────────────────
+    // ── Identity ─────────────────────────────────────────────────────────────
     private static final String STRATEGY_CODE    = "SCALP_MOM_V1";
     private static final String STRATEGY_NAME    = "Scalp Momentum";
-    private static final String STRATEGY_VERSION = "v1";
+    private static final String STRATEGY_VERSION = "v3";
 
-    // ── Sides ────────────────────────────────────────────────────────────────
+    // ── Sides ─────────────────────────────────────────────────────────────────
     private static final String SIDE_LONG  = "LONG";
     private static final String SIDE_SHORT = "SHORT";
 
-    // ── Signal types ─────────────────────────────────────────────────────────
+    // ── Signal types ──────────────────────────────────────────────────────────
     private static final String SIGNAL_TYPE_TREND               = "TREND";
     private static final String SIGNAL_TYPE_POSITION_MANAGEMENT = "POSITION_MANAGEMENT";
 
-    // ── Setup labels ─────────────────────────────────────────────────────────
-    private static final String SETUP_LONG               = "SCALP_LONG_CONTINUATION";
-    private static final String SETUP_SHORT              = "SCALP_SHORT_CONTINUATION";
-    private static final String SETUP_LONG_BREAK_EVEN    = "SCALP_LONG_BREAK_EVEN";
-    private static final String SETUP_SHORT_BREAK_EVEN   = "SCALP_SHORT_BREAK_EVEN";
-    private static final String SETUP_LONG_RUNNER_TRAIL  = "SCALP_LONG_RUNNER_TRAIL";
-    private static final String SETUP_SHORT_RUNNER_TRAIL = "SCALP_SHORT_RUNNER_TRAIL";
+    // ── Setup labels ──────────────────────────────────────────────────────────
+    private static final String SETUP_LONG            = "SCALP_LONG_CONTINUATION";
+    private static final String SETUP_SHORT           = "SCALP_SHORT_CONTINUATION";
+    private static final String SETUP_LONG_BREAK_EVEN  = "SCALP_LONG_BREAK_EVEN";
+    private static final String SETUP_SHORT_BREAK_EVEN = "SCALP_SHORT_BREAK_EVEN";
 
-    // ── Position roles ────────────────────────────────────────────────────────
-    private static final String POSITION_ROLE_RUNNER = "RUNNER";
-    private static final String EXIT_STRUCTURE       = "TP1_RUNNER";
-    private static final String TARGET_ALL           = "ALL";
+    private static final String EXIT_STRUCTURE = "SINGLE";
+    private static final String TARGET_ALL     = "ALL";
 
-    // ── Risk defaults (tighter than TSMOM for 5min) ───────────────────────────
-    private static final BigDecimal DEFAULT_STOP_ATR_MULT     = new BigDecimal("1.00"); // vs 1.40
-    private static final BigDecimal DEFAULT_TP1_R             = new BigDecimal("1.00"); // quick partial
-    private static final BigDecimal DEFAULT_TP2_R             = new BigDecimal("1.80");
-    private static final BigDecimal DEFAULT_TP3_R             = new BigDecimal("3.00");
-    private static final BigDecimal DEFAULT_BREAK_EVEN_R      = new BigDecimal("0.80"); // vs 1.00
+    // ── Risk parameters ───────────────────────────────────────────────────────
+    // Stop: 0.8x ATR (unchanged from v2 — working well, avg loss near 1R)
+    private static final BigDecimal DEFAULT_STOP_ATR_MULT = new BigDecimal("0.80");
 
-    // ── Runner trail thresholds ───────────────────────────────────────────────
-    private static final BigDecimal RUNNER_BREAK_EVEN_R      = new BigDecimal("0.80");
-    private static final BigDecimal RUNNER_TRAIL_PHASE_1_R   = new BigDecimal("1.80");
-    private static final BigDecimal RUNNER_TRAIL_PHASE_2_R   = new BigDecimal("2.80");
-    private static final BigDecimal RUNNER_TRAIL_ATR_PHASE_1 = new BigDecimal("0.90");
-    private static final BigDecimal RUNNER_TRAIL_ATR_PHASE_2 = new BigDecimal("0.60");
-    private static final BigDecimal RUNNER_LOCK_R_PHASE_1    = new BigDecimal("0.40");
-    private static final BigDecimal RUNNER_LOCK_R_PHASE_2    = new BigDecimal("1.20");
+    // FIX 1: TP raised from 0.8 ATR (1.0R) → 1.0 ATR (1.25R)
+    // TP in ATR units, not R — deliberately larger than stop to beat fees
+    private static final BigDecimal DEFAULT_TP_ATR_MULT = new BigDecimal("1.00");
+
+    // Break-even: trigger at 0.60R (unchanged — fast protection on 5min)
+    private static final BigDecimal DEFAULT_BREAK_EVEN_R = new BigDecimal("0.60");
 
     // ── Score thresholds ──────────────────────────────────────────────────────
     private static final BigDecimal DEFAULT_MIN_SIGNAL_SCORE     = new BigDecimal("0.55");
     private static final BigDecimal DEFAULT_MIN_CONFIDENCE_SCORE = new BigDecimal("0.55");
 
-    // ── Indicator thresholds ──────────────────────────────────────────────────
-    private static final BigDecimal RSI_LONG_MIN  = new BigDecimal("50");
-    private static final BigDecimal RSI_SHORT_MAX = new BigDecimal("50");
-    private static final BigDecimal RSI_SCORE_MIN = new BigDecimal("52");
-    private static final BigDecimal RSI_SCORE_MAX = new BigDecimal("48");
-    private static final BigDecimal ADX_MIN       = new BigDecimal("18");
+    // ── FIX 2: ADX window tightened to 28–38 ─────────────────────────────────
+    // v2: ADX 30-35 = WR 62%, +$1.62 | ADX <25 = -$2.59 | ADX >40 = bleeding
+    private static final BigDecimal ADX_MIN = new BigDecimal("28");
+    private static final BigDecimal ADX_MAX = new BigDecimal("38");
+
+    // ── FIX 3 & 4: RSI bounds ────────────────────────────────────────────────
+    // LONG: RSI 50–62  (v2: RSI 50-55 = 84% WR, RSI <40 = -$2.74)
+    // SHORT: RSI 42–50 (FIX 4: stricter lower bound vs v2's 38)
+    private static final BigDecimal RSI_LONG_MIN   = new BigDecimal("50");
+    private static final BigDecimal RSI_LONG_MAX   = new BigDecimal("62");
+    private static final BigDecimal RSI_SHORT_MAX  = new BigDecimal("50");
+    private static final BigDecimal RSI_SHORT_MIN  = new BigDecimal("42"); // FIX 4: was 38
+
+    // Score bonus thresholds (tighter band = higher quality)
+    private static final BigDecimal RSI_LONG_SCORE_MIN  = new BigDecimal("51");
+    private static final BigDecimal RSI_SHORT_SCORE_MAX = new BigDecimal("49");
+
     private static final BigDecimal VOLUME_SCORE_MIN = new BigDecimal("0.75");
+
+    // ── Session filter (unchanged from v2) ───────────────────────────────────
+    // Only allowed UTC hours with positive net PnL in v1+v2 data:
+    //   02h: WR 71% +$0.52  |  06h: WR 58% +$0.57
+    //   10h: marginal        |  11h: marginal
+    //   12h: marginal        |  13h: WR 59% +$0.77
+    //   17h: WR 64% +$1.20  |  22h: marginal
+    private static final Set<Integer> ALLOWED_HOURS_UTC = Set.of(2, 6, 10, 11, 12, 13, 17, 22);
 
     // ── Constants ─────────────────────────────────────────────────────────────
     private static final BigDecimal ZERO = BigDecimal.ZERO;
@@ -116,7 +139,7 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
     public StrategyRequirements getRequirements() {
         return StrategyRequirements.builder()
                 .requireBiasTimeframe(true)
-                .biasInterval("1h")                  // 1h bias for 5min scalping
+                .biasInterval("1h")
                 .requireRegimeSnapshot(true)
                 .requireVolatilitySnapshot(true)
                 .requireRiskSnapshot(true)
@@ -134,8 +157,8 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
             return hold(context, "Invalid context or missing market/feature data");
         }
 
-        MarketData marketData   = context.getMarketData();
-        FeatureStore feature    = context.getFeatureStore();
+        MarketData marketData     = context.getMarketData();
+        FeatureStore feature      = context.getFeatureStore();
         PositionSnapshot snapshot = context.getPositionSnapshot();
 
         BigDecimal closePrice = strategyHelper.safe(marketData.getClosePrice());
@@ -143,17 +166,20 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
             return hold(context, "Close price is invalid");
         }
 
-        // ── Market veto check ────────────────────────────────────────────────
         if (isMarketVetoed(context)) {
             return veto("Market vetoed by quality or jump-risk filter", context);
         }
 
-        // ── Manage open position first ────────────────────────────────────────
+        // Manage open position — session filter does NOT apply to management
         if (context.hasTradablePosition() && snapshot != null) {
             return manageOpenPosition(context, snapshot);
         }
 
-        // ── Try entries ───────────────────────────────────────────────────────
+        // Session filter
+        if (!isAllowedBySessionFilter(marketData)) {
+            return hold(context, "Entry blocked — outside allowed UTC session hours");
+        }
+
         if (context.isLongAllowed()) {
             StrategyDecision longDecision = tryBuildLongEntry(context, marketData, feature);
             if (longDecision != null) return longDecision;
@@ -165,6 +191,34 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
         }
 
         return hold(context, "No qualified SCALP_MOM setup on 5min");
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Session Filter
+    // ════════════════════════════════════════════════════════════════════════
+
+    private boolean isAllowedBySessionFilter(MarketData marketData) {
+        if (marketData.getEndTime() == null) return true;
+        int hour = marketData.getEndTime().getHour();
+        boolean allowed = ALLOWED_HOURS_UTC.contains(hour);
+        if (!allowed) log.debug("ScalpMom session filter blocked entry at UTC hour {}", hour);
+        return allowed;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Regime Alignment
+    // ════════════════════════════════════════════════════════════════════════
+
+    private boolean isRegimeBullish(EnrichedStrategyContext context) {
+        RegimeSnapshot r = context.getRegimeSnapshot();
+        return r != null && r.getRegimeLabel() != null
+                && "BULL".equalsIgnoreCase(r.getRegimeLabel());
+    }
+
+    private boolean isRegimeBearish(EnrichedStrategyContext context) {
+        RegimeSnapshot r = context.getRegimeSnapshot();
+        return r != null && r.getRegimeLabel() != null
+                && "BEAR".equalsIgnoreCase(r.getRegimeLabel());
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -180,20 +234,8 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
             return hold(context, "Open position exists but management inputs are incomplete");
         }
 
-        boolean isRunner = snapshot.getPositionRole() != null
-                && POSITION_ROLE_RUNNER.equalsIgnoreCase(snapshot.getPositionRole());
-
-        if (SIDE_LONG.equalsIgnoreCase(side)) {
-            return isRunner
-                    ? manageLongRunnerPosition(context, context.getMarketData(), context.getFeatureStore(), snapshot)
-                    : manageLongPosition(context, context.getMarketData(), snapshot);
-        }
-
-        if (SIDE_SHORT.equalsIgnoreCase(side)) {
-            return isRunner
-                    ? manageShortRunnerPosition(context, context.getMarketData(), context.getFeatureStore(), snapshot)
-                    : manageShortPosition(context, context.getMarketData(), snapshot);
-        }
+        if (SIDE_LONG.equalsIgnoreCase(side))  return manageLongPosition(context, context.getMarketData(), snapshot);
+        if (SIDE_SHORT.equalsIgnoreCase(side)) return manageShortPosition(context, context.getMarketData(), snapshot);
 
         return hold(context, "Unknown open position side");
     }
@@ -207,68 +249,55 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
             MarketData marketData,
             FeatureStore feature
     ) {
+        // Regime alignment: block longs in BEAR regime
+        if (isRegimeBearish(context)) return null;
+
         if (!isBullishTrend(context, feature, marketData)) return null;
         if (!isBullishEntryConfirmation(feature, marketData)) return null;
 
-        BigDecimal entryPrice   = strategyHelper.safe(marketData.getClosePrice());
-        BigDecimal atr          = resolveAtr(feature);
-        BigDecimal stopLoss     = entryPrice.subtract(atr.multiply(resolveStopAtrMult(context)));
-        BigDecimal riskPerUnit  = entryPrice.subtract(stopLoss);
+        BigDecimal entryPrice  = strategyHelper.safe(marketData.getClosePrice());
+        BigDecimal atr         = resolveAtr(feature);
 
+        // FIX 1: stop = 0.8 ATR, TP = 1.0 ATR → true RR = 1.25x
+        BigDecimal stopLoss    = entryPrice.subtract(atr.multiply(resolveStopAtrMult(context)));
+        BigDecimal takeProfit  = entryPrice.add(atr.multiply(resolveTpAtrMult(context)));
+        BigDecimal riskPerUnit = entryPrice.subtract(stopLoss);
         if (riskPerUnit.compareTo(ZERO) <= 0) return null;
-
-        BigDecimal tp1 = entryPrice.add(riskPerUnit.multiply(resolveTp1R(context)));
-        BigDecimal tp2 = entryPrice.add(riskPerUnit.multiply(resolveTp2R(context)));
-        BigDecimal tp3 = entryPrice.add(riskPerUnit.multiply(resolveTp3R(context)));
 
         BigDecimal signalScore     = calculateLongSignalScore(context, feature, marketData);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore);
 
         if (signalScore.compareTo(resolveMinSignalScore(context)) < 0
-                || confidenceScore.compareTo(DEFAULT_MIN_CONFIDENCE_SCORE) < 0) {
-            return null;
-        }
+                || confidenceScore.compareTo(DEFAULT_MIN_CONFIDENCE_SCORE) < 0) return null;
 
         BigDecimal notionalSize = strategyHelper.calculateEntryNotional(context, SIDE_LONG);
-        if (notionalSize.compareTo(ZERO) <= 0) {
-            return hold(context, "Calculated long notional size is zero");
-        }
+        if (notionalSize.compareTo(ZERO) <= 0) return hold(context, "Calculated long notional is zero");
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_LONG)
-                .strategyCode(STRATEGY_CODE)
-                .strategyName(STRATEGY_NAME)
-                .strategyVersion(STRATEGY_VERSION)
+                .strategyCode(STRATEGY_CODE).strategyName(STRATEGY_NAME).strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
-                .signalType(SIGNAL_TYPE_TREND)
-                .setupType(SETUP_LONG)
-                .side(SIDE_LONG)
+                .signalType(SIGNAL_TYPE_TREND).setupType(SETUP_LONG).side(SIDE_LONG)
                 .regimeLabel(resolveRegimeLabel(context, feature))
-                .reason("Qualified bullish scalp momentum setup on 5min")
-                .signalScore(signalScore)
-                .confidenceScore(confidenceScore)
+                .reason("Bullish 5min scalp — session+regime+ADX28-38+RSI50-62 (v3)")
+                .signalScore(signalScore).confidenceScore(confidenceScore)
                 .regimeScore(resolveRegimeScore(context))
                 .riskMultiplier(resolveRiskMultiplier(context))
                 .jumpRiskScore(resolveJumpRisk(context))
                 .notionalSize(notionalSize)
-                .stopLossPrice(stopLoss)
-                .trailingStopPrice(null)
-                .takeProfitPrice1(tp1)
-                .takeProfitPrice2(tp2)
-                .takeProfitPrice3(tp3)
-                .exitStructure(EXIT_STRUCTURE)
-                .targetPositionRole(TARGET_ALL)
-                .entryAdx(feature.getAdx())
-                .entryAtr(feature.getAtr())
-                .entryRsi(feature.getRsi())
-                .entryTrendRegime(feature.getTrendRegime())
+                .stopLossPrice(stopLoss).trailingStopPrice(null)
+                .takeProfitPrice1(takeProfit).takeProfitPrice2(null).takeProfitPrice3(null)
+                .exitStructure(EXIT_STRUCTURE).targetPositionRole(TARGET_ALL)
+                .entryAdx(feature.getAdx()).entryAtr(feature.getAtr())
+                .entryRsi(feature.getRsi()).entryTrendRegime(feature.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", "SCALP_MOM", "LONG", "5MIN"))
+                .tags(List.of("ENTRY", "SCALP_MOM", "LONG", "5MIN", "SINGLE", "V3"))
                 .diagnostics(Map.of(
-                        "module", "ScalpMomV1StrategyExecutor",
+                        "module", "ScalpMomV1StrategyService",
                         "entryPrice", entryPrice,
                         "stopLoss", stopLoss,
-                        "tp1", tp1, "tp2", tp2, "tp3", tp3,
+                        "takeProfit", takeProfit,
+                        "atr", atr,
                         "signalScore", signalScore,
                         "confidenceScore", confidenceScore
                 ))
@@ -280,68 +309,55 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
             MarketData marketData,
             FeatureStore feature
     ) {
+        // Regime alignment: block shorts in BULL regime
+        if (isRegimeBullish(context)) return null;
+
         if (!isBearishTrend(context, feature, marketData)) return null;
         if (!isBearishEntryConfirmation(feature, marketData)) return null;
 
         BigDecimal entryPrice  = strategyHelper.safe(marketData.getClosePrice());
         BigDecimal atr         = resolveAtr(feature);
+
+        // FIX 1: stop = 0.8 ATR, TP = 1.0 ATR → true RR = 1.25x
         BigDecimal stopLoss    = entryPrice.add(atr.multiply(resolveStopAtrMult(context)));
+        BigDecimal takeProfit  = entryPrice.subtract(atr.multiply(resolveTpAtrMult(context)));
         BigDecimal riskPerUnit = stopLoss.subtract(entryPrice);
-
         if (riskPerUnit.compareTo(ZERO) <= 0) return null;
-
-        BigDecimal tp1 = entryPrice.subtract(riskPerUnit.multiply(resolveTp1R(context)));
-        BigDecimal tp2 = entryPrice.subtract(riskPerUnit.multiply(resolveTp2R(context)));
-        BigDecimal tp3 = entryPrice.subtract(riskPerUnit.multiply(resolveTp3R(context)));
 
         BigDecimal signalScore     = calculateShortSignalScore(context, feature, marketData);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore);
 
         if (signalScore.compareTo(resolveMinSignalScore(context)) < 0
-                || confidenceScore.compareTo(DEFAULT_MIN_CONFIDENCE_SCORE) < 0) {
-            return null;
-        }
+                || confidenceScore.compareTo(DEFAULT_MIN_CONFIDENCE_SCORE) < 0) return null;
 
         BigDecimal notionalSize = strategyHelper.calculateEntryNotional(context, SIDE_SHORT);
-        if (notionalSize.compareTo(ZERO) <= 0) {
-            return hold(context, "Calculated short notional size is zero");
-        }
+        if (notionalSize.compareTo(ZERO) <= 0) return hold(context, "Calculated short notional is zero");
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_SHORT)
-                .strategyCode(STRATEGY_CODE)
-                .strategyName(STRATEGY_NAME)
-                .strategyVersion(STRATEGY_VERSION)
+                .strategyCode(STRATEGY_CODE).strategyName(STRATEGY_NAME).strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
-                .signalType(SIGNAL_TYPE_TREND)
-                .setupType(SETUP_SHORT)
-                .side(SIDE_SHORT)
+                .signalType(SIGNAL_TYPE_TREND).setupType(SETUP_SHORT).side(SIDE_SHORT)
                 .regimeLabel(resolveRegimeLabel(context, feature))
-                .reason("Qualified bearish scalp momentum setup on 5min")
-                .signalScore(signalScore)
-                .confidenceScore(confidenceScore)
+                .reason("Bearish 5min scalp — session+regime+ADX28-38+RSI42-50 (v3)")
+                .signalScore(signalScore).confidenceScore(confidenceScore)
                 .regimeScore(resolveRegimeScore(context))
                 .riskMultiplier(resolveRiskMultiplier(context))
                 .jumpRiskScore(resolveJumpRisk(context))
                 .notionalSize(notionalSize)
-                .stopLossPrice(stopLoss)
-                .trailingStopPrice(null)
-                .takeProfitPrice1(tp1)
-                .takeProfitPrice2(tp2)
-                .takeProfitPrice3(tp3)
-                .exitStructure(EXIT_STRUCTURE)
-                .targetPositionRole(TARGET_ALL)
-                .entryAdx(feature.getAdx())
-                .entryAtr(feature.getAtr())
-                .entryRsi(feature.getRsi())
-                .entryTrendRegime(feature.getTrendRegime())
+                .stopLossPrice(stopLoss).trailingStopPrice(null)
+                .takeProfitPrice1(takeProfit).takeProfitPrice2(null).takeProfitPrice3(null)
+                .exitStructure(EXIT_STRUCTURE).targetPositionRole(TARGET_ALL)
+                .entryAdx(feature.getAdx()).entryAtr(feature.getAtr())
+                .entryRsi(feature.getRsi()).entryTrendRegime(feature.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", "SCALP_MOM", "SHORT", "5MIN"))
+                .tags(List.of("ENTRY", "SCALP_MOM", "SHORT", "5MIN", "SINGLE", "V3"))
                 .diagnostics(Map.of(
-                        "module", "ScalpMomV1StrategyExecutor",
+                        "module", "ScalpMomV1StrategyService",
                         "entryPrice", entryPrice,
                         "stopLoss", stopLoss,
-                        "tp1", tp1, "tp2", tp2, "tp3", tp3,
+                        "takeProfit", takeProfit,
+                        "atr", atr,
                         "signalScore", signalScore,
                         "confidenceScore", confidenceScore
                 ))
@@ -349,7 +365,7 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Position Management — Standard (Break-Even)
+    // Position Management — Break-Even (SINGLE exit, no runner)
     // ════════════════════════════════════════════════════════════════════════
 
     private StrategyDecision manageLongPosition(
@@ -364,26 +380,25 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
 
         if (initialRisk.compareTo(ZERO) <= 0) return hold(context, "Invalid long risk structure");
 
-        BigDecimal move             = closePrice.subtract(entryPrice);
         BigDecimal breakEvenTrigger = initialRisk.multiply(resolveBreakEvenR(context));
-
-        if (move.compareTo(breakEvenTrigger) < 0) return hold(context, "Long not ready for break-even");
-        if (currentStop.compareTo(entryPrice) >= 0) return hold(context, "Long stop already at or above break-even");
+        if (closePrice.subtract(entryPrice).compareTo(breakEvenTrigger) < 0)
+            return hold(context, "Long not ready for break-even update");
+        if (currentStop.compareTo(entryPrice) >= 0)
+            return hold(context, "Long stop already at or above break-even");
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
                 .strategyCode(STRATEGY_CODE).strategyName(STRATEGY_NAME).strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
                 .signalType(SIGNAL_TYPE_POSITION_MANAGEMENT)
-                .setupType(SETUP_LONG_BREAK_EVEN)
-                .side(SIDE_LONG)
-                .reason("Move long stop to break-even on 5min scalp")
-                .stopLossPrice(entryPrice)
-                .trailingStopPrice(null)
+                .setupType(SETUP_LONG_BREAK_EVEN).side(SIDE_LONG)
+                .reason("Move long stop to break-even after 0.60R (v3)")
+                .stopLossPrice(entryPrice).trailingStopPrice(null)
                 .takeProfitPrice1(snapshot.getTakeProfitPrice())
+                .takeProfitPrice2(null).takeProfitPrice3(null)
                 .targetPositionRole(TARGET_ALL)
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("MANAGEMENT", "SCALP_MOM", "LONG", "BREAK_EVEN"))
+                .tags(List.of("MANAGEMENT", "SCALP_MOM", "LONG", "BREAK_EVEN", "V3"))
                 .diagnostics(Map.of(
                         "entryPrice", entryPrice, "currentStop", currentStop,
                         "closePrice", closePrice, "initialRisk", initialRisk
@@ -403,26 +418,25 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
 
         if (initialRisk.compareTo(ZERO) <= 0) return hold(context, "Invalid short risk structure");
 
-        BigDecimal move             = entryPrice.subtract(closePrice);
         BigDecimal breakEvenTrigger = initialRisk.multiply(resolveBreakEvenR(context));
-
-        if (move.compareTo(breakEvenTrigger) < 0) return hold(context, "Short not ready for break-even");
-        if (currentStop.compareTo(entryPrice) <= 0) return hold(context, "Short stop already at or below break-even");
+        if (entryPrice.subtract(closePrice).compareTo(breakEvenTrigger) < 0)
+            return hold(context, "Short not ready for break-even update");
+        if (currentStop.compareTo(entryPrice) <= 0)
+            return hold(context, "Short stop already at or below break-even");
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
                 .strategyCode(STRATEGY_CODE).strategyName(STRATEGY_NAME).strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
                 .signalType(SIGNAL_TYPE_POSITION_MANAGEMENT)
-                .setupType(SETUP_SHORT_BREAK_EVEN)
-                .side(SIDE_SHORT)
-                .reason("Move short stop to break-even on 5min scalp")
-                .stopLossPrice(entryPrice)
-                .trailingStopPrice(null)
+                .setupType(SETUP_SHORT_BREAK_EVEN).side(SIDE_SHORT)
+                .reason("Move short stop to break-even after 0.60R (v3)")
+                .stopLossPrice(entryPrice).trailingStopPrice(null)
                 .takeProfitPrice1(snapshot.getTakeProfitPrice())
+                .takeProfitPrice2(null).takeProfitPrice3(null)
                 .targetPositionRole(TARGET_ALL)
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("MANAGEMENT", "SCALP_MOM", "SHORT", "BREAK_EVEN"))
+                .tags(List.of("MANAGEMENT", "SCALP_MOM", "SHORT", "BREAK_EVEN", "V3"))
                 .diagnostics(Map.of(
                         "entryPrice", entryPrice, "currentStop", currentStop,
                         "closePrice", closePrice, "initialRisk", initialRisk
@@ -431,165 +445,17 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Position Management — Runner Trail
+    // Trend Filters (5min + 1h bias — unchanged)
     // ════════════════════════════════════════════════════════════════════════
 
-    private StrategyDecision manageLongRunnerPosition(
-            EnrichedStrategyContext context,
-            MarketData marketData,
-            FeatureStore feature,
-            PositionSnapshot snapshot
-    ) {
-        BigDecimal entryPrice  = strategyHelper.safe(snapshot.getEntryPrice());
-        BigDecimal currentStop = strategyHelper.safe(snapshot.getCurrentStopLossPrice());
-        BigDecimal closePrice  = strategyHelper.safe(marketData.getClosePrice());
-        BigDecimal atr         = resolveAtr(feature);
-
-        BigDecimal initialStop = snapshot.getInitialStopLossPrice() != null
-                ? snapshot.getInitialStopLossPrice() : currentStop;
-        BigDecimal initialRisk = entryPrice.subtract(initialStop);
-
-        if (initialRisk.compareTo(ZERO) <= 0) return hold(context, "Invalid long runner risk structure");
-
-        BigDecimal move = closePrice.subtract(entryPrice);
-        if (move.compareTo(ZERO) <= 0) return hold(context, "Long runner not yet in profit");
-
-        BigDecimal rMultiple = move.divide(initialRisk, 6, RoundingMode.HALF_UP);
-
-        BigDecimal candidateStop = null;
-        String reason = null;
-        String setupType = null;
-
-        if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_2_R) >= 0) {
-            BigDecimal atrStop         = closePrice.subtract(atr.multiply(RUNNER_TRAIL_ATR_PHASE_2));
-            BigDecimal lockedProfitStop = entryPrice.add(initialRisk.multiply(RUNNER_LOCK_R_PHASE_2));
-            candidateStop = atrStop.max(lockedProfitStop).max(entryPrice);
-            reason    = "Aggressive trail long runner after 2.8R+ (5min)";
-            setupType = SETUP_LONG_RUNNER_TRAIL;
-        } else if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_1_R) >= 0) {
-            BigDecimal atrStop         = closePrice.subtract(atr.multiply(RUNNER_TRAIL_ATR_PHASE_1));
-            BigDecimal lockedProfitStop = entryPrice.add(initialRisk.multiply(RUNNER_LOCK_R_PHASE_1));
-            candidateStop = atrStop.max(lockedProfitStop).max(entryPrice);
-            reason    = "Trail long runner after 1.8R+ (5min)";
-            setupType = SETUP_LONG_RUNNER_TRAIL;
-        } else if (rMultiple.compareTo(RUNNER_BREAK_EVEN_R) >= 0) {
-            candidateStop = entryPrice;
-            reason    = "Move long runner to break-even after 0.8R (5min)";
-            setupType = SETUP_LONG_BREAK_EVEN;
-        }
-
-        if (candidateStop == null) return hold(context, "Long runner not ready for trailing update");
-        if (candidateStop.compareTo(currentStop) <= 0 || candidateStop.compareTo(closePrice) >= 0) {
-            return hold(context, "Long runner stop already optimal");
-        }
-
-        return StrategyDecision.builder()
-                .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
-                .strategyCode(STRATEGY_CODE).strategyName(STRATEGY_NAME).strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(context.getInterval())
-                .signalType(SIGNAL_TYPE_POSITION_MANAGEMENT)
-                .setupType(setupType).side(SIDE_LONG).reason(reason)
-                .stopLossPrice(candidateStop).trailingStopPrice(candidateStop)
-                .takeProfitPrice1(snapshot.getTakeProfitPrice())
-                .targetPositionRole(TARGET_ALL)
-                .decisionTime(LocalDateTime.now())
-                .tags(List.of("MANAGEMENT", "SCALP_MOM", "LONG", "RUNNER_TRAIL"))
-                .diagnostics(Map.of(
-                        "entryPrice", entryPrice, "currentStop", currentStop,
-                        "closePrice", closePrice, "initialRisk", initialRisk,
-                        "rMultiple", rMultiple, "candidateStop", candidateStop
-                ))
-                .build();
-    }
-
-    private StrategyDecision manageShortRunnerPosition(
-            EnrichedStrategyContext context,
-            MarketData marketData,
-            FeatureStore feature,
-            PositionSnapshot snapshot
-    ) {
-        BigDecimal entryPrice  = strategyHelper.safe(snapshot.getEntryPrice());
-        BigDecimal currentStop = strategyHelper.safe(snapshot.getCurrentStopLossPrice());
-        BigDecimal closePrice  = strategyHelper.safe(marketData.getClosePrice());
-        BigDecimal atr         = resolveAtr(feature);
-
-        BigDecimal initialStop = snapshot.getInitialStopLossPrice() != null
-                ? snapshot.getInitialStopLossPrice() : currentStop;
-        BigDecimal initialRisk = initialStop.subtract(entryPrice);
-
-        if (initialRisk.compareTo(ZERO) <= 0) return hold(context, "Invalid short runner risk structure");
-
-        BigDecimal move = entryPrice.subtract(closePrice);
-        if (move.compareTo(ZERO) <= 0) return hold(context, "Short runner not yet in profit");
-
-        BigDecimal rMultiple = move.divide(initialRisk, 6, RoundingMode.HALF_UP);
-
-        BigDecimal candidateStop = null;
-        String reason = null;
-        String setupType = null;
-
-        if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_2_R) >= 0) {
-            BigDecimal atrStop         = closePrice.add(atr.multiply(RUNNER_TRAIL_ATR_PHASE_2));
-            BigDecimal lockedProfitStop = entryPrice.subtract(initialRisk.multiply(RUNNER_LOCK_R_PHASE_2));
-            candidateStop = atrStop.min(lockedProfitStop).min(entryPrice);
-            reason    = "Aggressive trail short runner after 2.8R+ (5min)";
-            setupType = SETUP_SHORT_RUNNER_TRAIL;
-        } else if (rMultiple.compareTo(RUNNER_TRAIL_PHASE_1_R) >= 0) {
-            BigDecimal atrStop         = closePrice.add(atr.multiply(RUNNER_TRAIL_ATR_PHASE_1));
-            BigDecimal lockedProfitStop = entryPrice.subtract(initialRisk.multiply(RUNNER_LOCK_R_PHASE_1));
-            candidateStop = atrStop.min(lockedProfitStop).min(entryPrice);
-            reason    = "Trail short runner after 1.8R+ (5min)";
-            setupType = SETUP_SHORT_RUNNER_TRAIL;
-        } else if (rMultiple.compareTo(RUNNER_BREAK_EVEN_R) >= 0) {
-            candidateStop = entryPrice;
-            reason    = "Move short runner to break-even after 0.8R (5min)";
-            setupType = SETUP_SHORT_BREAK_EVEN;
-        }
-
-        if (candidateStop == null) return hold(context, "Short runner not ready for trailing update");
-        if (candidateStop.compareTo(currentStop) >= 0 || candidateStop.compareTo(closePrice) <= 0) {
-            return hold(context, "Short runner stop already optimal");
-        }
-
-        return StrategyDecision.builder()
-                .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
-                .strategyCode(STRATEGY_CODE).strategyName(STRATEGY_NAME).strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(context.getInterval())
-                .signalType(SIGNAL_TYPE_POSITION_MANAGEMENT)
-                .setupType(setupType).side(SIDE_SHORT).reason(reason)
-                .stopLossPrice(candidateStop).trailingStopPrice(candidateStop)
-                .takeProfitPrice1(snapshot.getTakeProfitPrice())
-                .targetPositionRole(TARGET_ALL)
-                .decisionTime(LocalDateTime.now())
-                .tags(List.of("MANAGEMENT", "SCALP_MOM", "SHORT", "RUNNER_TRAIL"))
-                .diagnostics(Map.of(
-                        "entryPrice", entryPrice, "currentStop", currentStop,
-                        "closePrice", closePrice, "initialRisk", initialRisk,
-                        "rMultiple", rMultiple, "candidateStop", candidateStop
-                ))
-                .build();
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // Trend Filters (5min + 1h bias)
-    // ════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Bullish trend on 5min: EMA9 > EMA21, EMA21 > EMA50, EMA50 > EMA200, slope positive
-     * 1h bias: price > EMA50 > EMA200, not RANGE
-     *
-     * Note: EMA9 and EMA21 should be added to FeatureStore for 5min.
-     * Falls back to EMA50/EMA200 if EMA9/EMA21 not available.
-     */
     private boolean isBullishTrend(
             EnrichedStrategyContext context,
             FeatureStore feature,
             MarketData marketData
     ) {
         FeatureStore biasFeature = context.getBiasFeatureStore();
-        MarketData biasMarket   = context.getBiasMarketData();
+        MarketData biasMarket    = context.getBiasMarketData();
 
-        // 5min trend: price > EMA50 > EMA200, slope positive, not RANGE
         boolean currentTrend = strategyHelper.hasValue(marketData.getClosePrice())
                 && strategyHelper.hasValue(feature.getEma50())
                 && strategyHelper.hasValue(feature.getEma200())
@@ -599,7 +465,6 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
                 && feature.getEma50Slope().compareTo(ZERO) > 0
                 && !"RANGE".equalsIgnoreCase(feature.getTrendRegime());
 
-        // 1h bias: price > EMA50 > EMA200, not RANGE
         boolean biasTrend = biasFeature == null || biasMarket == null || (
                 strategyHelper.hasValue(biasMarket.getClosePrice())
                         && strategyHelper.hasValue(biasFeature.getEma50())
@@ -618,7 +483,7 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
             MarketData marketData
     ) {
         FeatureStore biasFeature = context.getBiasFeatureStore();
-        MarketData biasMarket   = context.getBiasMarketData();
+        MarketData biasMarket    = context.getBiasMarketData();
 
         boolean currentTrend = strategyHelper.hasValue(marketData.getClosePrice())
                 && strategyHelper.hasValue(feature.getEma50())
@@ -642,37 +507,49 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Entry Confirmation (5min micro-structure)
+    // Entry Confirmation
+    // FIX 2: ADX window 28–38 (not just a minimum)
+    // FIX 3: RSI long 50–62
+    // FIX 4: RSI short 42–50 (stricter lower bound)
     // ════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Long confirmation:
-     *   - MACD histogram > 0 (momentum turning up)
-     *   - RSI >= 50 (bullish momentum zone)
-     *   - ADX >= 18 (directional strength, not flat)
-     *   - Price > EMA50 (above fast MA)
-     */
     private boolean isBullishEntryConfirmation(FeatureStore feature, MarketData marketData) {
-        return strategyHelper.hasValue(feature.getMacdHistogram())
-                && strategyHelper.hasValue(feature.getRsi())
-                && strategyHelper.hasValue(feature.getAdx())
-                && strategyHelper.hasValue(marketData.getClosePrice())
-                && strategyHelper.hasValue(feature.getEma50())
-                && feature.getMacdHistogram().compareTo(ZERO) > 0
-                && feature.getRsi().compareTo(RSI_LONG_MIN) >= 0
-                && feature.getAdx().compareTo(ADX_MIN) >= 0
+        if (!strategyHelper.hasValue(feature.getMacdHistogram())
+                || !strategyHelper.hasValue(feature.getRsi())
+                || !strategyHelper.hasValue(feature.getAdx())
+                || !strategyHelper.hasValue(marketData.getClosePrice())
+                || !strategyHelper.hasValue(feature.getEma50())) return false;
+
+        BigDecimal adx = feature.getAdx();
+        BigDecimal rsi = feature.getRsi();
+
+        // FIX 2: ADX window 28–38
+        if (adx.compareTo(ADX_MIN) < 0 || adx.compareTo(ADX_MAX) > 0) return false;
+
+        // FIX 3: RSI 50–62 for longs
+        if (rsi.compareTo(RSI_LONG_MIN) < 0 || rsi.compareTo(RSI_LONG_MAX) >= 0) return false;
+
+        return feature.getMacdHistogram().compareTo(ZERO) > 0
                 && marketData.getClosePrice().compareTo(feature.getEma50()) > 0;
     }
 
     private boolean isBearishEntryConfirmation(FeatureStore feature, MarketData marketData) {
-        return strategyHelper.hasValue(feature.getMacdHistogram())
-                && strategyHelper.hasValue(feature.getRsi())
-                && strategyHelper.hasValue(feature.getAdx())
-                && strategyHelper.hasValue(marketData.getClosePrice())
-                && strategyHelper.hasValue(feature.getEma50())
-                && feature.getMacdHistogram().compareTo(ZERO) < 0
-                && feature.getRsi().compareTo(RSI_SHORT_MAX) <= 0
-                && feature.getAdx().compareTo(ADX_MIN) >= 0
+        if (!strategyHelper.hasValue(feature.getMacdHistogram())
+                || !strategyHelper.hasValue(feature.getRsi())
+                || !strategyHelper.hasValue(feature.getAdx())
+                || !strategyHelper.hasValue(marketData.getClosePrice())
+                || !strategyHelper.hasValue(feature.getEma50())) return false;
+
+        BigDecimal adx = feature.getAdx();
+        BigDecimal rsi = feature.getRsi();
+
+        // FIX 2: ADX window 28–38
+        if (adx.compareTo(ADX_MIN) < 0 || adx.compareTo(ADX_MAX) > 0) return false;
+
+        // FIX 4: RSI 42–50 for shorts (stricter than v2's 38–50)
+        if (rsi.compareTo(RSI_SHORT_MAX) > 0 || rsi.compareTo(RSI_SHORT_MIN) <= 0) return false;
+
+        return feature.getMacdHistogram().compareTo(ZERO) < 0
                 && marketData.getClosePrice().compareTo(feature.getEma50()) < 0;
     }
 
@@ -685,14 +562,20 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
             FeatureStore feature,
             MarketData marketData
     ) {
-        BigDecimal score = new BigDecimal("0.35"); // base
+        BigDecimal score = new BigDecimal("0.35");
 
-        if (strategyHelper.hasValue(feature.getAdx())
-                && feature.getAdx().compareTo(ADX_MIN) >= 0)
-            score = score.add(new BigDecimal("0.10"));
+        // ADX in sweet zone 30–38 gets full bonus; 28–30 gets partial
+        if (strategyHelper.hasValue(feature.getAdx())) {
+            BigDecimal adx = feature.getAdx();
+            if (adx.compareTo(new BigDecimal("30")) >= 0 && adx.compareTo(ADX_MAX) <= 0)
+                score = score.add(new BigDecimal("0.10"));
+            else if (adx.compareTo(ADX_MIN) >= 0)
+                score = score.add(new BigDecimal("0.05"));
+        }
 
         if (strategyHelper.hasValue(feature.getRsi())
-                && feature.getRsi().compareTo(RSI_SCORE_MIN) >= 0)
+                && feature.getRsi().compareTo(RSI_LONG_SCORE_MIN) >= 0
+                && feature.getRsi().compareTo(RSI_LONG_MAX) < 0)
             score = score.add(new BigDecimal("0.10"));
 
         if (strategyHelper.hasValue(feature.getMacdHistogram())
@@ -713,7 +596,6 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
                 && context.getRegimeSnapshot().getTrendScore().compareTo(ZERO) > 0)
             score = score.add(new BigDecimal("0.10"));
 
-        // Volume confirmation — slightly lower threshold for 5min (0.75 vs 0.80)
         if (context.getMarketQualitySnapshot() != null
                 && context.getMarketQualitySnapshot().getVolumeScore() != null
                 && context.getMarketQualitySnapshot().getVolumeScore().compareTo(VOLUME_SCORE_MIN) >= 0)
@@ -729,12 +611,17 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
     ) {
         BigDecimal score = new BigDecimal("0.35");
 
-        if (strategyHelper.hasValue(feature.getAdx())
-                && feature.getAdx().compareTo(ADX_MIN) >= 0)
-            score = score.add(new BigDecimal("0.10"));
+        if (strategyHelper.hasValue(feature.getAdx())) {
+            BigDecimal adx = feature.getAdx();
+            if (adx.compareTo(new BigDecimal("30")) >= 0 && adx.compareTo(ADX_MAX) <= 0)
+                score = score.add(new BigDecimal("0.10"));
+            else if (adx.compareTo(ADX_MIN) >= 0)
+                score = score.add(new BigDecimal("0.05"));
+        }
 
         if (strategyHelper.hasValue(feature.getRsi())
-                && feature.getRsi().compareTo(RSI_SCORE_MAX) <= 0)
+                && feature.getRsi().compareTo(RSI_SHORT_SCORE_MAX) <= 0
+                && feature.getRsi().compareTo(RSI_SHORT_MIN) > 0)
             score = score.add(new BigDecimal("0.10"));
 
         if (strategyHelper.hasValue(feature.getMacdHistogram())
@@ -770,7 +657,6 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
                 .add(resolveRegimeScore(context).multiply(new BigDecimal("0.20")))
                 .add(resolveRiskMultiplier(context).multiply(new BigDecimal("0.10")));
 
-        // Penalise high jump-risk harder on 5min (gaps hit faster)
         if (resolveJumpRisk(context).compareTo(new BigDecimal("0.40")) > 0) {
             confidence = confidence.subtract(new BigDecimal("0.20"));
         }
@@ -784,9 +670,7 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
 
     private boolean isMarketVetoed(EnrichedStrategyContext context) {
         if (context.getMarketQualitySnapshot() != null
-                && Boolean.FALSE.equals(context.getMarketQualitySnapshot().getTradable())) {
-            return true;
-        }
+                && Boolean.FALSE.equals(context.getMarketQualitySnapshot().getTradable())) return true;
         VolatilitySnapshot vol = context.getVolatilitySnapshot();
         return vol != null
                 && vol.getJumpRiskScore() != null
@@ -810,22 +694,14 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
         return (v != null && v.compareTo(ZERO) > 0) ? v : DEFAULT_STOP_ATR_MULT;
     }
 
-    private BigDecimal resolveTp1R(EnrichedStrategyContext context) {
+    /**
+     * FIX 1: TP is now expressed in ATR units (not R units) so it's always
+     * larger than the stop in absolute price terms: stop=0.8 ATR, TP=1.0 ATR → RR=1.25x
+     */
+    private BigDecimal resolveTpAtrMult(EnrichedStrategyContext context) {
         BigDecimal v = context.getRuntimeConfig() != null
-                ? context.getRuntimeConfig().getBigDecimal("tp1R") : null;
-        return (v != null && v.compareTo(ZERO) > 0) ? v : DEFAULT_TP1_R;
-    }
-
-    private BigDecimal resolveTp2R(EnrichedStrategyContext context) {
-        BigDecimal v = context.getRuntimeConfig() != null
-                ? context.getRuntimeConfig().getBigDecimal("tp2R") : null;
-        return (v != null && v.compareTo(ZERO) > 0) ? v : DEFAULT_TP2_R;
-    }
-
-    private BigDecimal resolveTp3R(EnrichedStrategyContext context) {
-        BigDecimal v = context.getRuntimeConfig() != null
-                ? context.getRuntimeConfig().getBigDecimal("tp3R") : null;
-        return (v != null && v.compareTo(ZERO) > 0) ? v : DEFAULT_TP3_R;
+                ? context.getRuntimeConfig().getBigDecimal("tpAtrMult") : null;
+        return (v != null && v.compareTo(ZERO) > 0) ? v : DEFAULT_TP_ATR_MULT;
     }
 
     private BigDecimal resolveBreakEvenR(EnrichedStrategyContext context) {
@@ -856,14 +732,13 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
     }
 
     private String resolveRegimeLabel(EnrichedStrategyContext context, FeatureStore feature) {
-        if (context.getRegimeSnapshot() != null && context.getRegimeSnapshot().getRegimeLabel() != null) {
+        if (context.getRegimeSnapshot() != null && context.getRegimeSnapshot().getRegimeLabel() != null)
             return context.getRegimeSnapshot().getRegimeLabel();
-        }
         return feature != null ? feature.getTrendRegime() : null;
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Hold / Veto helpers
+    // Hold / Veto
     // ════════════════════════════════════════════════════════════════════════
 
     private StrategyDecision hold(EnrichedStrategyContext context, String reason) {
@@ -871,8 +746,7 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
                 .decisionType(DecisionType.HOLD)
                 .strategyCode(STRATEGY_CODE).strategyName(STRATEGY_NAME).strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context != null ? context.getInterval() : null)
-                .signalType("SCALP_MOM")
-                .reason(reason)
+                .signalType("SCALP_MOM").reason(reason)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("HOLD", "SCALP_MOM"))
                 .build();
@@ -885,8 +759,7 @@ public class ScalpMomV1StrategyService implements StrategyExecutor {
                 .strategyInterval(context != null ? context.getInterval() : null)
                 .regimeLabel(context != null && context.getRegimeSnapshot() != null
                         ? context.getRegimeSnapshot().getRegimeLabel() : null)
-                .vetoed(Boolean.TRUE)
-                .vetoReason(vetoReason)
+                .vetoed(Boolean.TRUE).vetoReason(vetoReason)
                 .reason("Decision vetoed by risk layer")
                 .jumpRiskScore(resolveJumpRisk(context))
                 .decisionTime(LocalDateTime.now())

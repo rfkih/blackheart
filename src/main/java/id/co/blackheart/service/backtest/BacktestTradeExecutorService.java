@@ -102,6 +102,19 @@ public class BacktestTradeExecutorService {
             return;
         }
 
+        // Cancel fill if the open price has gapped through the stop loss
+        BigDecimal slPrice = pending.decision().getStopLossPrice();
+        if (slPrice != null && slPrice.compareTo(BigDecimal.ZERO) > 0) {
+            boolean gappedThroughSl = "LONG".equalsIgnoreCase(pending.side())
+                    ? openPrice.compareTo(slPrice) <= 0
+                    : openPrice.compareTo(slPrice) >= 0;
+            if (gappedThroughSl) {
+                log.warn("Pending entry cancelled | asset={} side={} reason=Gap through SL openPrice={} slPrice={}",
+                        backtestRun.getAsset(), pending.side(), openPrice, slPrice);
+                return;
+            }
+        }
+
         openTrade(backtestRun, state, pending.decision(), pending.side(), pending.featureStore(), openPrice, entryTime);
     }
 
@@ -201,6 +214,7 @@ public class BacktestTradeExecutorService {
                             .initialStopLossPrice(decision.getStopLossPrice())
                             .currentStopLossPrice(decision.getStopLossPrice())
                             .trailingStopPrice(decision.getTrailingStopPrice())
+                            .initialTrailingStopPrice(decision.getTrailingStopPrice())
                             .takeProfitPrice(planned.takeProfitPrice())
                             .highestPriceSinceEntry("LONG".equalsIgnoreCase(tradeType) ? entryPrice : null)
                             .lowestPriceSinceEntry("SHORT".equalsIgnoreCase(tradeType) ? entryPrice : null)
@@ -260,11 +274,10 @@ public class BacktestTradeExecutorService {
                 position.getSide()
         ).subtract(safe(position.getEntryFee())).subtract(exitFee);
 
-        BigDecimal pnlPercent = calculatePLPercent(
-                entryPrice,
-                cleanExitPrice,
-                position.getSide()
-        );
+        BigDecimal pnlPercent = safe(position.getEntryQuoteQty()).compareTo(BigDecimal.ZERO) > 0
+                ? pnlAmount.divide(position.getEntryQuoteQty(), 8, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"))
+                : BigDecimal.ZERO;
 
         position.setExitPrice(cleanExitPrice);
         position.setExitExecutedQty(remainingQty);

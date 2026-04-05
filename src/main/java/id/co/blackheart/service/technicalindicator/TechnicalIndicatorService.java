@@ -14,6 +14,7 @@ import org.ta4j.core.indicators.adx.ADXIndicator;
 import org.ta4j.core.indicators.adx.MinusDIIndicator;
 import org.ta4j.core.indicators.adx.PlusDIIndicator;
 import org.ta4j.core.indicators.helpers.*;
+import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
 import org.ta4j.core.num.Num;
 
 import java.math.RoundingMode;
@@ -189,6 +190,47 @@ public class TechnicalIndicatorService {
         featureData.setIsBullishPullback(isBullishPullback(featureData, price));
         featureData.setIsBearishPullback(isBearishPullback(featureData, price));
         featureData.setEntryBias(resolveEntryBias(featureData));
+
+        // ── VCB indicators ────────────────────────────────────────────────────
+
+        StandardDeviationIndicator stdDev20 = new StandardDeviationIndicator(closePrice, 20);
+        Num bbUpperValue = ema20.getValue(endIndex).plus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
+        Num bbLowerValue = ema20.getValue(endIndex).minus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
+
+        BigDecimal bbUpper = toBigDecimal(bbUpperValue);
+        BigDecimal bbLower = toBigDecimal(bbLowerValue);
+        BigDecimal ema20Value = toBigDecimal(ema20.getValue(endIndex));
+
+        featureData.setBbUpperBand(bbUpper);
+        featureData.setBbLowerBand(bbLower);
+        featureData.setBbWidth(
+                ema20Value.compareTo(BigDecimal.ZERO) == 0
+                        ? BigDecimal.ZERO
+                        : bbUpper.subtract(bbLower).divide(ema20Value, 8, RoundingMode.HALF_UP)
+        );
+
+        // 2. Keltner Channels (1.5 ATR multiplier — for squeeze detection)
+
+        BigDecimal kcMultiplier = new BigDecimal("1.5");
+        BigDecimal kcUpper = ema20Value.add(atrValue.multiply(kcMultiplier));
+        BigDecimal kcLower = ema20Value.subtract(atrValue.multiply(kcMultiplier));
+
+        featureData.setKcUpperBand(kcUpper);
+        featureData.setKcLowerBand(kcLower);
+        featureData.setKcWidth(
+                ema20Value.compareTo(BigDecimal.ZERO) == 0
+                        ? BigDecimal.ZERO
+                        : kcUpper.subtract(kcLower).divide(ema20Value, 8, RoundingMode.HALF_UP)
+        );
+
+        // 3. ATR Ratio = current ATR / median ATR over last 20 periods
+        featureData.setAtrRatio(calculateAtrRatio(historicalData, 14, 20));
+
+        // 4. Signed ER20
+
+        featureData.setSignedEr20(calculateSignedEfficiencyRatio(historicalData, 20));
+
+
         return  featureStoreRepository.save(featureData);
     }
 
@@ -470,6 +512,222 @@ public class TechnicalIndicatorService {
         }
 
         return series;
+    }
+
+    /**
+     * ATR Ratio = current ATR(period) / median of last medianPeriod ATR values.
+     *
+     * We compute ATR for each of the last `medianPeriod` candles by using
+     * a sliding window, then take the median. This is more robust than the
+     * mean because it's not skewed by spike candles.
+     *
+     * < 0.90: volatility is compressed below its median → compression
+     * > 1.50: volatility is expanding → breakout in progress
+     *
+     * @param data         full historical data list (sorted ascending)
+     * @param atrPeriod    ATR calculation period (typically 14)
+     * @param medianPeriod number of recent ATR samples for median (typically 20)
+     */
+    private BigDecimal calculateAtrRatio(List<MarketData> data, int atrPeriod, int medianPeriod) {
+        if (data.size() < atrPeriod + medianPeriod) {
+            return BigDecimal.ONE; // neutral default — not enough data
+        }
+
+        int end = data.size() - 1;
+
+        // Calculate current ATR (last atrPeriod candles)
+        BigDecimal currentAtr = calculateAtrSimple(data, end, atrPeriod);
+        if (currentAtr.compareTo(BigDecimal.ZERO) == 0) return BigDecimal.ONE;
+
+        // Calculate ATR values for the last medianPeriod windows
+        List<BigDecimal> atrHistory = new java.util.ArrayList<>();
+        for (int i = end - medianPeriod + 1; i <= end; i++) {
+            if (i >= atrPeriod) {
+                BigDecimal historicalAtr = calculateAtrSimple(data, i, atrPeriod);
+                if (historicalAtr.compareTo(BigDecimal.ZERO) > 0) {
+                    atrHistory.add(historicalAtr);
+                }
+            }
+        }
+
+        if (atrHistory.isEmpty()) return BigDecimal.ONE;
+
+        // Median of ATR history
+        java.util.Collections.sort(atrHistory);
+        BigDecimal medianAtr;
+        int size = atrHistory.size();
+        if (size % 2 == 0) {
+            medianAtr = atrHistory.get(size / 2 - 1)
+                    .add(atrHistory.get(size / 2))
+                    .divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
+        } else {
+            medianAtr = atrHistory.get(size / 2);
+        }
+
+        if (medianAtr.compareTo(BigDecimal.ZERO) == 0) return BigDecimal.ONE;
+
+        return currentAtr.divide(medianAtr, 8, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Simple ATR calculation for a single index point (not Ta4j dependent).
+     * True Range = max(high-low, |high-prevClose|, |low-prevClose|)
+     * ATR = average of TR over period candles ending at endIndex.
+     */
+    private BigDecimal calculateAtrSimple(List<MarketData> data, int endIndex, int period) {
+        if (endIndex < 1 || endIndex - period + 1 < 1) return BigDecimal.ZERO;
+
+        BigDecimal totalTr = BigDecimal.ZERO;
+        int count = 0;
+
+        for (int i = Math.max(1, endIndex - period + 1); i <= endIndex; i++) {
+            MarketData curr = data.get(i);
+            MarketData prev = data.get(i - 1);
+
+            BigDecimal hl  = curr.getHighPrice().subtract(curr.getLowPrice()).abs();
+            BigDecimal hpc = curr.getHighPrice().subtract(prev.getClosePrice()).abs();
+            BigDecimal lpc = curr.getLowPrice().subtract(prev.getClosePrice()).abs();
+
+            BigDecimal tr  = hl.max(hpc).max(lpc);
+            totalTr = totalTr.add(tr);
+            count++;
+        }
+
+        if (count == 0) return BigDecimal.ZERO;
+        return totalTr.divide(BigDecimal.valueOf(count), 8, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Backfills VCB indicator fields (bbWidth, kcWidth, atrRatio, signedEr20 and
+     * their band values) for existing FeatureStore records that were saved before
+     * these columns were added to the computation pipeline.
+     *
+     * Safe to call repeatedly — skips records where bb_width is already populated.
+     *
+     * @param symbol   e.g. "BTCUSDT"
+     * @param interval e.g. "1h"
+     * @param from     inclusive start of backfill window
+     * @param to       inclusive end of backfill window
+     * @return number of records updated
+     */
+    public int backfillVcbIndicators(String symbol, String interval,
+                                     LocalDateTime from, LocalDateTime to) {
+        List<FeatureStore> missing = featureStoreRepository
+                .findMissingVcbIndicatorsInRange(symbol, interval, from, to);
+
+        if (missing == null || missing.isEmpty()) {
+            log.info("VCB backfill: no records need updating for {}/{} [{} → {}]",
+                    symbol, interval, from, to);
+            return 0;
+        }
+
+        log.info("VCB backfill: {} records to patch for {}/{}", missing.size(), symbol, interval);
+        int updated = 0;
+
+        for (FeatureStore fs : missing) {
+            try {
+                List<MarketData> historical = marketDataRepository
+                        .findLast300BySymbolAndIntervalAndTime(symbol, interval, fs.getStartTime());
+
+                if (historical == null || historical.size() < 50) {
+                    log.warn("VCB backfill: not enough history for {} {} startTime={}",
+                            symbol, interval, fs.getStartTime());
+                    continue;
+                }
+
+                historical.sort(Comparator.comparing(MarketData::getStartTime));
+                MarketData latest = historical.getLast();
+
+                BarSeries series = convertToBarSeries(historical, interval);
+                int endIndex = series.getEndIndex();
+
+                ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+                EMAIndicator ema20 = new EMAIndicator(closePrice, 20);
+                ATRIndicator atr = new ATRIndicator(series, 14);
+
+                Num ema20Val = ema20.getValue(endIndex);
+                Num atrVal   = atr.getValue(endIndex);
+
+                StandardDeviationIndicator stdDev20 = new StandardDeviationIndicator(closePrice, 20);
+                Num bbUpperVal = ema20Val.plus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
+                Num bbLowerVal = ema20Val.minus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
+
+                BigDecimal bbUpper   = toBigDecimal(bbUpperVal);
+                BigDecimal bbLower   = toBigDecimal(bbLowerVal);
+                BigDecimal ema20Bd   = toBigDecimal(ema20Val);
+                BigDecimal atrBd     = toBigDecimal(atrVal);
+
+                fs.setBbUpperBand(bbUpper);
+                fs.setBbLowerBand(bbLower);
+                fs.setBbWidth(ema20Bd.compareTo(BigDecimal.ZERO) == 0
+                        ? BigDecimal.ZERO
+                        : bbUpper.subtract(bbLower).divide(ema20Bd, 8, RoundingMode.HALF_UP));
+
+                BigDecimal kcMultiplier = new BigDecimal("1.5");
+                BigDecimal kcUpper = ema20Bd.add(atrBd.multiply(kcMultiplier));
+                BigDecimal kcLower = ema20Bd.subtract(atrBd.multiply(kcMultiplier));
+
+                fs.setKcUpperBand(kcUpper);
+                fs.setKcLowerBand(kcLower);
+                fs.setKcWidth(ema20Bd.compareTo(BigDecimal.ZERO) == 0
+                        ? BigDecimal.ZERO
+                        : kcUpper.subtract(kcLower).divide(ema20Bd, 8, RoundingMode.HALF_UP));
+
+                fs.setAtrRatio(calculateAtrRatio(historical, 14, 20));
+                fs.setSignedEr20(calculateSignedEfficiencyRatio(historical, 20));
+
+                featureStoreRepository.save(fs);
+                updated++;
+
+            } catch (Exception e) {
+                log.error("VCB backfill failed for {} {} startTime={}: {}",
+                        symbol, interval, fs.getStartTime(), e.getMessage());
+            }
+        }
+
+        log.info("VCB backfill complete: {}/{} records updated for {}/{}",
+                updated, missing.size(), symbol, interval);
+        return updated;
+    }
+
+    /**
+     * Signed Efficiency Ratio over N periods.
+     *
+     * Formula: (close[end] - close[end-N]) / sum(|close[i] - close[i-1]|) for i in [end-N+1, end]
+     *
+     * Range: -1.0 to +1.0
+     * Positive = net upward directional efficiency
+     * Negative = net downward directional efficiency
+     * Near 0 = choppy / ranging
+     *
+     * This differs from the existing efficiencyRatio20 which takes abs() of
+     * the numerator, losing the direction signal entirely.
+     */
+    private BigDecimal calculateSignedEfficiencyRatio(List<MarketData> data, int period) {
+        if (data.size() < period + 1) return BigDecimal.ZERO;
+
+        int end   = data.size() - 1;
+        int start = end - period;
+
+        // Net directional change (signed)
+        BigDecimal direction = data.get(end).getClosePrice()
+                .subtract(data.get(start).getClosePrice()); // NOT .abs()
+
+        // Sum of absolute bar-to-bar changes (noise)
+        BigDecimal noise = BigDecimal.ZERO;
+        for (int i = start + 1; i <= end; i++) {
+            noise = noise.add(
+                    data.get(i).getClosePrice()
+                            .subtract(data.get(i - 1).getClosePrice())
+                            .abs()
+            );
+        }
+
+        if (noise.compareTo(BigDecimal.ZERO) == 0) return BigDecimal.ZERO;
+
+        // Clamp to [-1, 1] in case of floating point edge cases
+        BigDecimal result = direction.divide(noise, 8, RoundingMode.HALF_UP);
+        return result.max(new BigDecimal("-1")).min(BigDecimal.ONE);
     }
 }
 
