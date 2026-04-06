@@ -282,14 +282,14 @@ public class BinanceWebSocketClient {
 
             for (AccountStrategy accountStrategy : activeStrategies) {
                 try {
-                    Account user = accountRepository.findByAccountId(accountStrategy.getAccountId()).orElse(null);
+                    Account account = accountRepository.findByAccountId(accountStrategy.getAccountId()).orElse(null);
 
-                    if (user == null || !"1".equals(user.getIsActive())) {
+                    if (account == null || !"1".equals(account.getIsActive())) {
                         continue;
                     }
 
                     liveTradingCoordinatorService.process(
-                            user,
+                            account,
                             accountStrategy,
                             SYMBOL,
                             interval,

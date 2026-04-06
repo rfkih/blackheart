@@ -131,8 +131,7 @@ public class LiveTradingCoordinatorService {
                 .marketData(marketData)
                 .featureStore(featureStore)
                 .positionSnapshot(liveState.positionSnapshot())
-                .hasOpenPosition(liveState.positionSnapshot() != null
-                        && Boolean.TRUE.equals(liveState.positionSnapshot().isHasOpenPosition()))
+                .hasOpenPosition(liveState.positionSnapshot() != null && liveState.positionSnapshot().isHasOpenPosition())
                 .openPositionCount(liveState.openPositionCount())
                 .executionMetadata(buildExecutionMetadata(liveState))
                 .cashBalance(liveState.cashBalance())

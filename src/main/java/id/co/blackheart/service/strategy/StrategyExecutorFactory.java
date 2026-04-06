@@ -14,6 +14,7 @@ public class StrategyExecutorFactory {
     private final TsMomV1StrategyService tsMomV1StrategyService;
     private final ScalpMomV1StrategyService scalpMomV1StrategyService;
     private final VcbStrategyService vcbStrategyService;
+    private final PullbackRejectionScalpStrategyService pullbackRejectionScalpStrategyService;
 
     public StrategyExecutor get(String strategyName) {
         log.info("Getting strategy executor for strategy: {}", strategyName);
@@ -21,7 +22,7 @@ public class StrategyExecutorFactory {
             case "TREND_PULLBACK_SINGLE_EXIT" -> trendPullbackSingleExitStrategyService;
             case "TEST" -> executionTestService;
             case "VCB" -> vcbStrategyService;
-            case "TSMOM_V1" -> tsMomV1StrategyService;
+            case "PULLBACK_REJECTION_SCALP" -> pullbackRejectionScalpStrategyService;
             case "SCALP_MOM_V1" -> scalpMomV1StrategyService;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyName);
         };
