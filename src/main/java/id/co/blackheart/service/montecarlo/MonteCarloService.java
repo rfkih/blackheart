@@ -79,7 +79,8 @@ public class MonteCarloService {
 
         MonteCarloResponse response = monteCarloEngine.run(
                 samples, request, initialCapital, effectiveSeed, monteCarloRunId,
-                backtestRun.getBacktestRunId()
+                backtestRun.getBacktestRunId(),
+                backtestRun.getInitialCapital()
         );
 
         persistRun(response, request, backtestRun, effectiveSeed, monteCarloRunId);
