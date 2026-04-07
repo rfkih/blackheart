@@ -12,5 +12,5 @@ import java.util.UUID;
 
 @Repository
 public interface BacktestTradeRepository extends JpaRepository<BacktestTrade, UUID> {
-
+    List<BacktestTrade> findByBacktestRunIdAndStatus(UUID backtestRunId, String status);
 }
