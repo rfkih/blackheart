@@ -124,7 +124,10 @@ public class BacktestCoordinatorService {
 
             boolean anyPositionClosed = handleListenerStep(backtestRun, state, monitorCandle);
 
-            if (!anyPositionClosed) {
+            // Run strategy even when a position was closed if there are still open positions
+            // (e.g. TP1 fired on TP1_RUNNER — runner needs UPDATE_POSITION_MANAGEMENT on same bar).
+            // When all positions closed via listener, skip strategy to avoid same-bar re-entry.
+            if (!anyPositionClosed || hasOpenTrade(state)) {
                 handleStrategyStep(
                         backtestRun,
                         state,
@@ -187,6 +190,7 @@ public class BacktestCoordinatorService {
                     .interval(MONITOR_INTERVAL)
                     .positionSnapshot(snapshot)
                     .latestPrice(monitorCandle.getClosePrice())
+                    .candleOpen(monitorCandle.getOpenPrice())
                     .candleHigh(monitorCandle.getHighPrice())
                     .candleLow(monitorCandle.getLowPrice())
                     .build();
@@ -561,17 +565,28 @@ public class BacktestCoordinatorService {
     }
 
     private void updatePriceExtremes(BacktestTradePosition position, MarketData candle) {
-        if ("LONG".equalsIgnoreCase(position.getSide()) && candle.getHighPrice() != null) {
-            BigDecimal high = candle.getHighPrice();
-            if (position.getHighestPriceSinceEntry() == null
-                    || high.compareTo(position.getHighestPriceSinceEntry()) > 0) {
-                position.setHighestPriceSinceEntry(high);
+        if ("LONG".equalsIgnoreCase(position.getSide())) {
+            // Track both best (for trailing/BE) and worst (for MAE) intrabar prices
+            if (candle.getHighPrice() != null
+                    && (position.getHighestPriceSinceEntry() == null
+                    || candle.getHighPrice().compareTo(position.getHighestPriceSinceEntry()) > 0)) {
+                position.setHighestPriceSinceEntry(candle.getHighPrice());
             }
-        } else if ("SHORT".equalsIgnoreCase(position.getSide()) && candle.getLowPrice() != null) {
-            BigDecimal low = candle.getLowPrice();
-            if (position.getLowestPriceSinceEntry() == null
-                    || low.compareTo(position.getLowestPriceSinceEntry()) < 0) {
-                position.setLowestPriceSinceEntry(low);
+            if (candle.getLowPrice() != null
+                    && (position.getLowestPriceSinceEntry() == null
+                    || candle.getLowPrice().compareTo(position.getLowestPriceSinceEntry()) < 0)) {
+                position.setLowestPriceSinceEntry(candle.getLowPrice());
+            }
+        } else if ("SHORT".equalsIgnoreCase(position.getSide())) {
+            if (candle.getLowPrice() != null
+                    && (position.getLowestPriceSinceEntry() == null
+                    || candle.getLowPrice().compareTo(position.getLowestPriceSinceEntry()) < 0)) {
+                position.setLowestPriceSinceEntry(candle.getLowPrice());
+            }
+            if (candle.getHighPrice() != null
+                    && (position.getHighestPriceSinceEntry() == null
+                    || candle.getHighPrice().compareTo(position.getHighestPriceSinceEntry()) > 0)) {
+                position.setHighestPriceSinceEntry(candle.getHighPrice());
             }
         }
     }

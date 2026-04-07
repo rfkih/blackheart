@@ -43,6 +43,16 @@ public class BacktestEquityPointRecorder {
         BigDecimal assetValue = totalEquity.subtract(cashBalance).max(BigDecimal.ZERO);
         int openPositions = countOpenPositions(state);
 
+        // Current drawdown from peak (not running max) for meaningful per-day drawdown visualization
+        BigDecimal currentDrawdown = BigDecimal.ZERO;
+        if (state.getPeakEquity() != null && state.getPeakEquity().compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal dd = state.getPeakEquity()
+                    .subtract(totalEquity)
+                    .divide(state.getPeakEquity(), 8, RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100));
+            currentDrawdown = dd.max(BigDecimal.ZERO);
+        }
+
         LocalDate previousDate = state.getEquityPointIndex().lowerKey(equityDate);
         BacktestEquityPoint previousDayPoint = previousDate != null
                 ? state.getEquityPointIndex().get(previousDate)
@@ -61,7 +71,7 @@ public class BacktestEquityPointRecorder {
                 .cashBalance(cashBalance)
                 .assetValue(assetValue)
                 .totalEquity(totalEquity)
-                .drawdownPercent(safe(state.getMaxDrawdownPercent()))
+                .drawdownPercent(currentDrawdown)
                 .dailyReturnPct(dailyReturnPct)
                 .openPositions(openPositions)
                 .createdAt(createdAt)

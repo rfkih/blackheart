@@ -260,9 +260,13 @@ public class BacktestTradeExecutorService {
             return;
         }
 
-        cleanExitPrice = backtestPricingService.applyExitSlippage(
-                cleanExitPrice, backtestRun.getSlippagePct(), position.getSide()
-        );
+        // TP exits are limit orders — no slippage. SL/trailing stops are market orders — slippage applies.
+        boolean isTakeProfit = "TAKE_PROFIT".equalsIgnoreCase(exitReason);
+        if (!isTakeProfit) {
+            cleanExitPrice = backtestPricingService.applyExitSlippage(
+                    cleanExitPrice, backtestRun.getSlippagePct(), position.getSide()
+            );
+        }
 
         BigDecimal exitQuoteQty = remainingQty.multiply(cleanExitPrice).setScale(8, RoundingMode.HALF_UP);
         BigDecimal exitFee = exitQuoteQty.multiply(safe(backtestRun.getFeePct())).setScale(8, RoundingMode.HALF_UP);
@@ -362,7 +366,9 @@ public class BacktestTradeExecutorService {
                     position.setTakeProfitPrice(decision.getTakeProfitPrice2());
                 }
             } else if ("RUNNER".equals(role)) {
-                if (decision.getTakeProfitPrice1() == null
+                if (decision.getTakeProfitPrice3() != null) {
+                    position.setTakeProfitPrice(decision.getTakeProfitPrice3());
+                } else if (decision.getTakeProfitPrice1() == null
                         && decision.getTakeProfitPrice2() == null
                         && decision.getTakeProfitPrice3() == null) {
                     position.setTakeProfitPrice(null);
@@ -554,23 +560,6 @@ public class BacktestTradeExecutorService {
             return entryPrice.subtract(exitPrice).multiply(qty);
         }
         return exitPrice.subtract(entryPrice).multiply(qty);
-    }
-
-    private BigDecimal calculatePLPercent(
-            BigDecimal entryPrice,
-            BigDecimal exitPrice,
-            String side
-    ) {
-        if (entryPrice == null || exitPrice == null || entryPrice.compareTo(BigDecimal.ZERO) <= 0) {
-            return BigDecimal.ZERO;
-        }
-
-        BigDecimal move = "SHORT".equalsIgnoreCase(side)
-                ? entryPrice.subtract(exitPrice)
-                : exitPrice.subtract(entryPrice);
-
-        return move.divide(entryPrice, 8, RoundingMode.HALF_UP)
-                .multiply(new BigDecimal("100"));
     }
 
     private BigDecimal safe(BigDecimal value) {

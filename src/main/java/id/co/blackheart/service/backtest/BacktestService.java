@@ -68,19 +68,9 @@ public class BacktestService {
             backtestRun.setTotalLosses(summary.getLosingTrades());
             backtestRun.setWinRate(summary.getWinRate());
             backtestRun.setMaxDrawdownPct(summary.getMaxDrawdownPercent());
-
-            BigDecimal netProfit = summary.getFinalCapital().subtract(backtestRun.getInitialCapital());
-            backtestRun.setNetProfit(netProfit);
-
-            // best-effort mapping from summary
-            // if you later add grossProfit/grossLoss to BacktestExecutionSummary, set them directly
-            if (netProfit.compareTo(BigDecimal.ZERO) >= 0) {
-                backtestRun.setGrossProfit(netProfit);
-                backtestRun.setGrossLoss(BigDecimal.ZERO);
-            } else {
-                backtestRun.setGrossProfit(BigDecimal.ZERO);
-                backtestRun.setGrossLoss(netProfit.abs());
-            }
+            backtestRun.setGrossProfit(summary.getGrossProfit());
+            backtestRun.setGrossLoss(summary.getGrossLoss());
+            backtestRun.setNetProfit(summary.getNetProfit());
 
             backtestRun = backtestRunRepository.save(backtestRun);
 

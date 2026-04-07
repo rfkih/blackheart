@@ -7,7 +7,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 
 @Slf4j
 @Service
@@ -32,17 +31,17 @@ public class TradeListenerService {
         }
 
         if (SIDE_LONG.equalsIgnoreCase(position.getSide())) {
-            return evaluateLong(position, context.getLatestPrice(), context.getCandleHigh(), context.getCandleLow());
+            return evaluateLong(position, context.getLatestPrice(), context.getCandleOpen(), context.getCandleHigh(), context.getCandleLow());
         }
 
         if (SIDE_SHORT.equalsIgnoreCase(position.getSide())) {
-            return evaluateShort(position, context.getLatestPrice(), context.getCandleHigh(), context.getCandleLow());
+            return evaluateShort(position, context.getLatestPrice(), context.getCandleOpen(), context.getCandleHigh(), context.getCandleLow());
         }
 
         return ListenerDecision.none();
     }
 
-    private ListenerDecision evaluateLong(PositionSnapshot position, BigDecimal latestPrice, BigDecimal candleHigh, BigDecimal candleLow) {
+    private ListenerDecision evaluateLong(PositionSnapshot position, BigDecimal latestPrice, BigDecimal candleOpen, BigDecimal candleHigh, BigDecimal candleLow) {
         BigDecimal stopLoss = position.getCurrentStopLossPrice();
         BigDecimal trailingStop = position.getTrailingStopPrice();
         BigDecimal takeProfit = position.getTakeProfitPrice();
@@ -55,12 +54,29 @@ public class TradeListenerService {
         boolean trailingHit = trailingStop != null && stopCheckPrice.compareTo(trailingStop) <= 0;
         boolean takeProfitHit = takeProfit != null && tpCheckPrice.compareTo(takeProfit) >= 0;
 
+        // Trailing stop takes priority over fixed SL (trailing is always >= SL after BE applied)
+        boolean adverseHit = trailingHit || stopHit;
+
+        // Same-bar conflict: both adverse stop and TP were touched on the same candle.
+        // Use bar direction to infer which was hit first.
+        // Bullish bar (close > open) → price moved up first → TP hit first for LONG.
+        // Bearish bar or unknown direction → SL/trailing hit first (conservative).
+        if (adverseHit && takeProfitHit && candleOpen != null) {
+            boolean bullishBar = latestPrice.compareTo(candleOpen) > 0;
+            if (bullishBar) {
+                return ListenerDecision.builder()
+                        .triggered(true)
+                        .exitReason(EXIT_TAKE_PROFIT)
+                        .exitPrice(takeProfit)
+                        .build();
+            }
+        }
+
         if (trailingHit) {
             return ListenerDecision.builder()
                     .triggered(true)
                     .exitReason(EXIT_TRAILING_STOP)
                     .exitPrice(trailingStop)
-                    .exitTime(LocalDateTime.now())
                     .build();
         }
 
@@ -69,7 +85,6 @@ public class TradeListenerService {
                     .triggered(true)
                     .exitReason(EXIT_STOP_LOSS)
                     .exitPrice(stopLoss)
-                    .exitTime(LocalDateTime.now())
                     .build();
         }
 
@@ -78,14 +93,13 @@ public class TradeListenerService {
                     .triggered(true)
                     .exitReason(EXIT_TAKE_PROFIT)
                     .exitPrice(takeProfit)
-                    .exitTime(LocalDateTime.now())
                     .build();
         }
 
         return ListenerDecision.none();
     }
 
-    private ListenerDecision evaluateShort(PositionSnapshot position, BigDecimal latestPrice, BigDecimal candleHigh, BigDecimal candleLow) {
+    private ListenerDecision evaluateShort(PositionSnapshot position, BigDecimal latestPrice, BigDecimal candleOpen, BigDecimal candleHigh, BigDecimal candleLow) {
         BigDecimal stopLoss = position.getCurrentStopLossPrice();
         BigDecimal trailingStop = position.getTrailingStopPrice();
         BigDecimal takeProfit = position.getTakeProfitPrice();
@@ -98,12 +112,26 @@ public class TradeListenerService {
         boolean trailingHit = trailingStop != null && stopCheckPrice.compareTo(trailingStop) >= 0;
         boolean takeProfitHit = takeProfit != null && tpCheckPrice.compareTo(takeProfit) <= 0;
 
+        boolean adverseHit = trailingHit || stopHit;
+
+        // Same-bar conflict: bearish bar (close < open) → price moved down first → TP hit first for SHORT.
+        // Bullish bar or unknown direction → SL/trailing hit first (conservative).
+        if (adverseHit && takeProfitHit && candleOpen != null) {
+            boolean bearishBar = latestPrice.compareTo(candleOpen) < 0;
+            if (bearishBar) {
+                return ListenerDecision.builder()
+                        .triggered(true)
+                        .exitReason(EXIT_TAKE_PROFIT)
+                        .exitPrice(takeProfit)
+                        .build();
+            }
+        }
+
         if (trailingHit) {
             return ListenerDecision.builder()
                     .triggered(true)
                     .exitReason(EXIT_TRAILING_STOP)
                     .exitPrice(trailingStop)
-                    .exitTime(LocalDateTime.now())
                     .build();
         }
 
@@ -112,7 +140,6 @@ public class TradeListenerService {
                     .triggered(true)
                     .exitReason(EXIT_STOP_LOSS)
                     .exitPrice(stopLoss)
-                    .exitTime(LocalDateTime.now())
                     .build();
         }
 
@@ -121,7 +148,6 @@ public class TradeListenerService {
                     .triggered(true)
                     .exitReason(EXIT_TAKE_PROFIT)
                     .exitPrice(takeProfit)
-                    .exitTime(LocalDateTime.now())
                     .build();
         }
 

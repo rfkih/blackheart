@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class BinanceWebSocketClient {
 
     private static final String SYMBOL = "BTCUSDT";
-    private static final String WS_BASE = "wss://stream.binance.com:9443";
+    private static final String WS_BASE = "wss://data-stream.binance.vision";
     private static final String STREAMS = "btcusdt@kline_5m/btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h";
     private static final String BINANCE_WS_URL = WS_BASE + "/stream?streams=" + STREAMS;
 

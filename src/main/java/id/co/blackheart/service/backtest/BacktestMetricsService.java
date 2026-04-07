@@ -20,27 +20,30 @@ public class BacktestMetricsService {
 
         int totalTrades = trades.size();
 
-        // Win/loss counts are based on gross price direction, not net P&L after fees.
-        // Fees affect profitability metrics (profit factor, total return) but must not
-        // distort directional accuracy (win rate).
+        // Win = trade closed with positive net P&L (fee-adjusted); consistent with grossProfit basis.
         int winningTrades = (int) trades.stream()
-                .filter(this::isDirectionalWin)
+                .filter(this::isWin)
                 .count();
 
         int losingTrades = (int) trades.stream()
-                .filter(this::isDirectionalLoss)
+                .filter(this::isLoss)
                 .count();
 
+        // Gross profit = total accumulated profit across all winning trades (net of fees)
         BigDecimal grossProfit = trades.stream()
                 .map(BacktestTrade::getRealizedPnlAmount)
                 .filter(v -> v != null && v.compareTo(BigDecimal.ZERO) > 0)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // Gross loss = total accumulated loss across all losing trades (net of fees, absolute value)
         BigDecimal grossLoss = trades.stream()
                 .map(BacktestTrade::getRealizedPnlAmount)
                 .filter(v -> v != null && v.compareTo(BigDecimal.ZERO) < 0)
                 .map(BigDecimal::abs)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // Net profit = gross profit - gross loss
+        BigDecimal netProfit = grossProfit.subtract(grossLoss);
 
         BigDecimal winRate = totalTrades == 0
                 ? BigDecimal.ZERO
@@ -64,8 +67,6 @@ public class BacktestMetricsService {
                 .divide(run.getInitialCapital(), 6, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal("100"));
 
-        BigDecimal netProfit = grossProfit.subtract(grossLoss);
-
         return BacktestExecutionSummary.builder()
                 .finalCapital(finalCapital)
                 .totalTrades(totalTrades)
@@ -83,27 +84,18 @@ public class BacktestMetricsService {
     }
 
     /**
-     * A trade is a directional win if price moved in the intended direction,
-     * regardless of whether fees wiped out the profit.
+     * A trade is a win if it closed with positive net P&L (after both entry and exit fees).
+     * This is consistent with how grossProfit is accumulated and aligns with
+     * real-world definition: a TP exit that is eaten by fees is not a win.
      */
-    private boolean isDirectionalWin(BacktestTrade trade) {
-        if (trade.getAvgEntryPrice() == null || trade.getAvgExitPrice() == null) {
-            return false;
-        }
-        if ("SHORT".equalsIgnoreCase(trade.getSide())) {
-            return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) < 0;
-        }
-        return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) > 0;
+    private boolean isWin(BacktestTrade trade) {
+        return trade.getRealizedPnlAmount() != null
+                && trade.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) > 0;
     }
 
-    private boolean isDirectionalLoss(BacktestTrade trade) {
-        if (trade.getAvgEntryPrice() == null || trade.getAvgExitPrice() == null) {
-            return false;
-        }
-        if ("SHORT".equalsIgnoreCase(trade.getSide())) {
-            return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) > 0;
-        }
-        return trade.getAvgExitPrice().compareTo(trade.getAvgEntryPrice()) < 0;
+    private boolean isLoss(BacktestTrade trade) {
+        return trade.getRealizedPnlAmount() != null
+                && trade.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) < 0;
     }
 
     private BigDecimal calculateSharpeRatio(BacktestState state) {
