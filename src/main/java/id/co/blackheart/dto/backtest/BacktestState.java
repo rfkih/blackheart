@@ -63,7 +63,7 @@ public class BacktestState {
      */
     private PendingEntry pendingEntry;
 
-    public record PendingEntry(StrategyDecision decision, String side, FeatureStore featureStore) {}
+    public record PendingEntry(StrategyDecision decision, String side, FeatureStore featureStore, FeatureStore biasFeatureStore) {}
 
     public static BacktestState initial(BacktestRun run) {
         return BacktestState.builder()

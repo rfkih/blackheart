@@ -14,8 +14,10 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -80,7 +82,7 @@ public class BacktestTradeExecutorService {
         if (state.getActiveTrade() != null || state.getPendingEntry() != null) {
             return;
         }
-        state.setPendingEntry(new BacktestState.PendingEntry(decision, side, context.getFeatureStore()));
+        state.setPendingEntry(new BacktestState.PendingEntry(decision, side, context.getFeatureStore(), context.getBiasFeatureStore()));
         log.debug("Backtest pending entry stored | side={} strategy={}", side, decision.getStrategyCode());
     }
 
@@ -115,7 +117,7 @@ public class BacktestTradeExecutorService {
             }
         }
 
-        openTrade(backtestRun, state, pending.decision(), pending.side(), pending.featureStore(), openPrice, entryTime);
+        openTrade(backtestRun, state, pending.decision(), pending.side(), pending.featureStore(), pending.biasFeatureStore(), openPrice, entryTime);
     }
 
     private void openTrade(
@@ -124,6 +126,7 @@ public class BacktestTradeExecutorService {
             StrategyDecision decision,
             String tradeType,
             FeatureStore featureStore,
+            FeatureStore biasFeatureStore,
             BigDecimal rawEntryPrice,
             LocalDateTime entryTime
     ) {
@@ -138,6 +141,14 @@ public class BacktestTradeExecutorService {
         BigDecimal entryPrice = backtestPricingService.applyEntrySlippage(
                 rawEntryPrice, backtestRun.getSlippagePct(), tradeType
         );
+
+        // Slippage delta: positive = worse fill than raw price (always adverse).
+        // LONG: entryPrice > rawEntryPrice → slippage = entryPrice - rawEntryPrice
+        // SHORT: entryPrice < rawEntryPrice → slippage = rawEntryPrice - entryPrice
+        BigDecimal slippagePerUnit = "LONG".equalsIgnoreCase(tradeType)
+                ? entryPrice.subtract(rawEntryPrice)
+                : rawEntryPrice.subtract(entryPrice);
+        slippagePerUnit = slippagePerUnit.max(BigDecimal.ZERO);
 
         BigDecimal feePct = safe(backtestRun.getFeePct());
         BigDecimal entryFee = requestedQuoteAmount.multiply(feePct).setScale(8, RoundingMode.HALF_UP);
@@ -157,28 +168,95 @@ public class BacktestTradeExecutorService {
             return;
         }
 
+        // ── Initial risk computation ──────────────────────────────────────────
+        BigDecimal slPrice = decision.getStopLossPrice();
+        BigDecimal initialRiskPerUnit = BigDecimal.ZERO;
+        if (slPrice != null && slPrice.compareTo(BigDecimal.ZERO) > 0) {
+            initialRiskPerUnit = "LONG".equalsIgnoreCase(tradeType)
+                    ? entryPrice.subtract(slPrice)
+                    : slPrice.subtract(entryPrice);
+            if (initialRiskPerUnit.compareTo(BigDecimal.ZERO) < 0) {
+                initialRiskPerUnit = BigDecimal.ZERO;
+            }
+        }
+        BigDecimal initialRiskAmount = initialRiskPerUnit.multiply(totalQty).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal initialRiskPercent = requestedQuoteAmount.compareTo(BigDecimal.ZERO) > 0
+                ? initialRiskAmount.divide(requestedQuoteAmount, 8, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"))
+                : BigDecimal.ZERO;
+
         BacktestTrade trade = BacktestTrade.builder()
                 .backtestTradeId(UUID.randomUUID())
                 .backtestRunId(backtestRun.getBacktestRunId())
                 .accountStrategyId(backtestRun.getAccountStrategyId())
+                .strategyCode(resolveStrategyName(backtestRun, decision))
                 .strategyName(resolveStrategyName(backtestRun, decision))
+                .strategyVersion(decision.getStrategyVersion())
                 .asset(backtestRun.getAsset())
                 .interval(backtestRun.getInterval())
+                .exchange("BINANCE")
                 .side(tradeType)
                 .status(STATUS_OPEN)
                 .tradeMode(resolveTradeMode(decision))
+                .signalType(decision.getSignalType())
+                .setupType(decision.getSetupType())
+                .entryReason(decision.getReason())
+                .notionalSize(requestedQuoteAmount)
                 .avgEntryPrice(entryPrice)
                 .avgExitPrice(null)
                 .totalEntryQty(totalQty)
                 .totalEntryQuoteQty(requestedQuoteAmount)
                 .totalRemainingQty(totalQty)
+                .initialStopLossPrice(slPrice)
+                .initialTrailingStopPrice(decision.getTrailingStopPrice())
+                .initialRiskPerUnit(initialRiskPerUnit)
+                .initialRiskAmount(initialRiskAmount)
+                .initialRiskPercent(initialRiskPercent)
+                .grossPnlAmount(BigDecimal.ZERO)
                 .realizedPnlAmount(BigDecimal.ZERO)
                 .realizedPnlPercent(BigDecimal.ZERO)
                 .totalFeeAmount(entryFee)
+                .totalFeeCurrency("USDT")
+                .slippageAmount(slippagePerUnit.multiply(totalQty).setScale(8, RoundingMode.HALF_UP))
+                .slippagePercent(requestedQuoteAmount.compareTo(BigDecimal.ZERO) > 0
+                        ? slippagePerUnit.multiply(totalQty)
+                                .divide(requestedQuoteAmount, 8, RoundingMode.HALF_UP)
+                                .multiply(new BigDecimal("100"))
+                        : BigDecimal.ZERO)
+                .highestPriceDuringTrade(entryPrice)
+                .lowestPriceDuringTrade(entryPrice)
+                // ── Entry featureStore snapshot ────────────────────────────────
+                .entrySignalScore(decision.getSignalScore())
+                .entryConfidenceScore(decision.getConfidenceScore())
                 .entryTrendRegime(featureStore != null ? featureStore.getTrendRegime() : null)
                 .entryAdx(featureStore != null ? featureStore.getAdx() : null)
                 .entryAtr(featureStore != null ? featureStore.getAtr() : null)
                 .entryRsi(featureStore != null ? featureStore.getRsi() : null)
+                .entryMacdHistogram(featureStore != null ? featureStore.getMacdHistogram() : null)
+                .entrySignedEr20(featureStore != null ? featureStore.getSignedEr20() : null)
+                .entryRelativeVolume20(featureStore != null ? featureStore.getRelativeVolume20() : null)
+                .entryPlusDi(featureStore != null ? featureStore.getPlusDI() : null)
+                .entryMinusDi(featureStore != null ? featureStore.getMinusDI() : null)
+                .entryEma20(featureStore != null ? featureStore.getEma20() : null)
+                .entryEma50(featureStore != null ? featureStore.getEma50() : null)
+                .entryEma200(featureStore != null ? featureStore.getEma200() : null)
+                .entryEma50Slope(featureStore != null ? featureStore.getEma50Slope() : null)
+                .entryEma200Slope(featureStore != null ? featureStore.getEma200Slope() : null)
+                .entryCloseLocationValue(featureStore != null ? featureStore.getCloseLocationValue() : null)
+                .entryIsBullishBreakout(featureStore != null ? featureStore.getIsBullishBreakout() : null)
+                .entryIsBearishBreakout(featureStore != null ? featureStore.getIsBearishBreakout() : null)
+                // ── Bias featureStore snapshot ─────────────────────────────────
+                .biasTrendRegime(biasFeatureStore != null ? biasFeatureStore.getTrendRegime() : null)
+                .biasAdx(biasFeatureStore != null ? biasFeatureStore.getAdx() : null)
+                .biasAtr(biasFeatureStore != null ? biasFeatureStore.getAtr() : null)
+                .biasRsi(biasFeatureStore != null ? biasFeatureStore.getRsi() : null)
+                .biasMacdHistogram(biasFeatureStore != null ? biasFeatureStore.getMacdHistogram() : null)
+                .biasSignedEr20(biasFeatureStore != null ? biasFeatureStore.getSignedEr20() : null)
+                .biasPlusDi(biasFeatureStore != null ? biasFeatureStore.getPlusDI() : null)
+                .biasMinusDi(biasFeatureStore != null ? biasFeatureStore.getMinusDI() : null)
+                .biasEma50(biasFeatureStore != null ? biasFeatureStore.getEma50() : null)
+                .biasEma200(biasFeatureStore != null ? biasFeatureStore.getEma200() : null)
+                .biasEma200Slope(biasFeatureStore != null ? biasFeatureStore.getEma200Slope() : null)
                 .exitReason(null)
                 .entryTime(entryTime)
                 .exitTime(null)
@@ -417,10 +495,31 @@ public class BacktestTradeExecutorService {
                 .filter(p -> STATUS_OPEN.equalsIgnoreCase(p.getStatus()))
                 .count();
 
+        // ── Aggregate position-level price extremes to parent ─────────────────
+        BigDecimal highestPrice = allPositions.stream()
+                .map(BacktestTradePosition::getHighestPriceSinceEntry)
+                .filter(p -> p != null && p.compareTo(BigDecimal.ZERO) > 0)
+                .max(BigDecimal::compareTo)
+                .orElse(safe(trade.getAvgEntryPrice()));
+
+        BigDecimal lowestPrice = allPositions.stream()
+                .map(BacktestTradePosition::getLowestPriceSinceEntry)
+                .filter(p -> p != null && p.compareTo(BigDecimal.ZERO) > 0)
+                .min(BigDecimal::compareTo)
+                .orElse(safe(trade.getAvgEntryPrice()));
+
+        // ── Gross PnL (before fees) ────────────────────────────────────────────
+        BigDecimal grossPnlAmount = realizedPnlAmount.add(totalFeeAmount);
+
         trade.setTotalRemainingQty(totalRemainingQty);
+        trade.setTotalExitQty(totalClosedQty);
+        trade.setTotalExitQuoteQty(totalClosedQuote);
         trade.setRealizedPnlAmount(realizedPnlAmount);
+        trade.setGrossPnlAmount(grossPnlAmount);
         trade.setTotalFeeAmount(totalFeeAmount);
         trade.setAvgExitPrice(avgExitPrice);
+        trade.setHighestPriceDuringTrade(highestPrice);
+        trade.setLowestPriceDuringTrade(lowestPrice);
 
         if (safe(trade.getTotalEntryQuoteQty()).compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal pnlPercent = realizedPnlAmount
@@ -432,6 +531,53 @@ public class BacktestTradeExecutorService {
         if (openCount == 0) {
             trade.setStatus(STATUS_CLOSED);
             trade.setExitTime(exitTime);
+
+            // ── Close-time analytics (computed once at full close) ─────────────
+            BigDecimal avgEntry = safe(trade.getAvgEntryPrice());
+            BigDecimal totalQty = safe(trade.getTotalEntryQty());
+            boolean isLong = "LONG".equalsIgnoreCase(trade.getSide());
+
+            BigDecimal mfeAmount = isLong
+                    ? highestPrice.subtract(avgEntry).multiply(totalQty).setScale(8, RoundingMode.HALF_UP)
+                    : avgEntry.subtract(lowestPrice).multiply(totalQty).setScale(8, RoundingMode.HALF_UP);
+            BigDecimal maeAmount = isLong
+                    ? avgEntry.subtract(lowestPrice).multiply(totalQty).setScale(8, RoundingMode.HALF_UP)
+                    : highestPrice.subtract(avgEntry).multiply(totalQty).setScale(8, RoundingMode.HALF_UP);
+
+            BigDecimal mfeClamped = mfeAmount.max(BigDecimal.ZERO);
+            BigDecimal maeClamped = maeAmount.max(BigDecimal.ZERO);
+            trade.setMaxFavorableExcursionAmount(mfeClamped);
+            trade.setMaxAdverseExcursionAmount(maeClamped);
+
+            BigDecimal initialRisk = safe(trade.getInitialRiskAmount());
+            if (initialRisk.compareTo(BigDecimal.ZERO) > 0) {
+                trade.setMaxFavorableExcursionR(
+                        mfeClamped.divide(initialRisk, 8, RoundingMode.HALF_UP));
+                trade.setMaxAdverseExcursionR(
+                        maeClamped.divide(initialRisk, 8, RoundingMode.HALF_UP));
+                trade.setRealizedRMultiple(
+                        realizedPnlAmount.divide(initialRisk, 8, RoundingMode.HALF_UP));
+            }
+
+            // ── Exit reason / final stop — from last position to close ────────
+            allPositions.stream()
+                    .filter(p -> p.getExitTime() != null)
+                    .max(Comparator.comparing(BacktestTradePosition::getExitTime))
+                    .ifPresent(p -> {
+                        trade.setExitReason(p.getExitReason());
+                        trade.setFinalStopLossPrice(p.getCurrentStopLossPrice());
+                        trade.setLastTrailingStopPrice(p.getTrailingStopPrice());
+                    });
+
+            // ── Holding duration ──────────────────────────────────────────────
+            if (trade.getEntryTime() != null) {
+                long minutes = Duration.between(trade.getEntryTime(), exitTime).toMinutes();
+                trade.setHoldingMinutes(minutes);
+                int intervalMins = intervalToMinutes(trade.getInterval());
+                if (intervalMins > 0) {
+                    trade.setBarsHeld((int) (minutes / intervalMins));
+                }
+            }
 
             state.getCompletedTrades().add(trade);
             state.getCompletedTradePositions().addAll(new ArrayList<>(allPositions));
@@ -564,6 +710,31 @@ public class BacktestTradeExecutorService {
 
     private BigDecimal safe(BigDecimal value) {
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * Returns the number of minutes in a candle interval string (e.g. "4h" → 240).
+     * Returns 0 for unknown intervals (barsHeld will be left null).
+     */
+    private int intervalToMinutes(String interval) {
+        if (interval == null) return 0;
+        return switch (interval.toLowerCase()) {
+            case "1m"  -> 1;
+            case "3m"  -> 3;
+            case "5m"  -> 5;
+            case "15m" -> 15;
+            case "30m" -> 30;
+            case "1h"  -> 60;
+            case "2h"  -> 120;
+            case "4h"  -> 240;
+            case "6h"  -> 360;
+            case "8h"  -> 480;
+            case "12h" -> 720;
+            case "1d"  -> 1440;
+            case "3d"  -> 4320;
+            case "1w"  -> 10080;
+            default    -> 0;
+        };
     }
 
     private record PlannedPosition(
