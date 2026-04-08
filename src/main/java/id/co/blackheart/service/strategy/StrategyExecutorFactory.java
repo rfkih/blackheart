@@ -15,6 +15,7 @@ public class StrategyExecutorFactory {
     private final VcbStrategyService vcbStrategyService;
     private final PullbackRejectionScalpStrategyService pullbackRejectionScalpStrategyService;
     private final LsrStrategyService lsrStrategyService;
+    private final CtrStrategyService ctrStrategyService;
 
     public StrategyExecutor get(String strategyName) {
         log.info("Getting strategy executor for strategy: {}", strategyName);
@@ -25,6 +26,7 @@ public class StrategyExecutorFactory {
             case "PULLBACK_REJECTION_SCALP" -> pullbackRejectionScalpStrategyService;
             case "SCALP_MOM_V1" -> scalpMomV1StrategyService;
             case "LSR" -> lsrStrategyService;
+            case "CTR_4H" -> ctrStrategyService;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyName);
         };
     }
