@@ -4,6 +4,8 @@ import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.model.BacktestRun;
 import org.springframework.stereotype.Service;
 
+import java.math.RoundingMode;
+
 @Service
 public class BacktestResponseMapper {
 
@@ -29,9 +31,9 @@ public class BacktestResponseMapper {
                 .totalWins(run.getTotalWins())
                 .totalLosses(run.getTotalLosses())
                 .winRate(run.getWinRate())
-                .grossProfit(run.getGrossProfit())
-                .grossLoss(run.getGrossLoss())
-                .netProfit(run.getNetProfit())
+                .grossProfit(run.getGrossProfit().setScale(3, RoundingMode.HALF_UP))
+                .grossLoss(run.getGrossLoss().setScale(3, RoundingMode.HALF_UP))
+                .netProfit(run.getNetProfit().setScale(3, RoundingMode.HALF_UP))
                 .maxDrawdownPct(run.getMaxDrawdownPct())
                 .createdTime(run.getCreatedTime())
                 .updatedTime(run.getUpdatedTime())
