@@ -112,8 +112,12 @@ public class BacktestCoordinatorService {
 
         BacktestState state = BacktestState.initial(backtestRun);
 
-        StrategyExecutor executor = strategyExecutorFactory.get(resolveStrategyLookupCode(backtestRun));
-        StrategyRequirements requirements = executor.getRequirements();
+        List<StrategyExecutorEntry> executors = resolveStrategyExecutors(backtestRun);
+        StrategyRequirements requirements = executors.size() == 1
+                ? executors.getFirst().executor().getRequirements()
+                : mergeRequirements(executors.stream()
+                        .map(e -> e.executor().getRequirements())
+                        .toList());
 
         BiasData biasData = preloadBiasData(backtestRun, requirements);
 
@@ -136,7 +140,7 @@ public class BacktestCoordinatorService {
                         strategyFeatureByStartTime,
                         sortedStrategyFeatures,
                         monitorCandle,
-                        executor,
+                        executors,
                         requirements,
                         biasData
                 );
@@ -224,7 +228,7 @@ public class BacktestCoordinatorService {
             Map<LocalDateTime, FeatureStore> strategyFeatureByStartTime,
             List<FeatureStore> sortedStrategyFeatures,
             MarketData monitorCandle,
-            StrategyExecutor executor,
+            List<StrategyExecutorEntry> executors,
             StrategyRequirements requirements,
             BiasData biasData
     ) {
@@ -248,16 +252,97 @@ public class BacktestCoordinatorService {
         int openPositionCount = countOpenPositions(state);
         boolean hasOpenTrade = hasOpenTrade(state);
 
-        AccountStrategy syntheticAccountStrategy = buildSyntheticAccountStrategy(backtestRun);
-
         Map<String, Object> executionMetadata = new HashMap<>();
         executionMetadata.put("source", EXECUTION_SOURCE);
         executionMetadata.put("backtestRunId", backtestRun.getBacktestRunId());
         executionMetadata.put("hasOpenTrade", hasOpenTrade);
 
+        if (executors.size() == 1) {
+            // ── Single-strategy path (unchanged behaviour) ────────────────────
+            AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, executors.getFirst().code());
+            EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
+                    backtestRun, state, strategyInterval, strategyCandle, strategyFeature,
+                    positionSnapshot, openPositionCount, hasOpenTrade, executionMetadata,
+                    syntheticAs, requirements, biasData, sortedStrategyFeatures, monitorCandle);
+
+            StrategyDecision decision = executors.getFirst().executor().execute(enrichedContext);
+            log.debug("Strategy decision reason={}", decision.getReason());
+            backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+
+        } else {
+            // ── Multi-strategy orchestrator path ──────────────────────────────
+            if (hasOpenTrade) {
+                // Delegate only to the strategy that opened the current trade.
+                String ownerCode = state.getActiveTrade() != null
+                        ? state.getActiveTrade().getStrategyName()
+                        : null;
+
+                StrategyExecutorEntry ownerEntry = findExecutorByCode(executors, ownerCode);
+                if (ownerEntry == null) {
+                    log.warn("Orchestrator: owner strategy code={} not found in executor list, holding", ownerCode);
+                    return;
+                }
+
+                AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, ownerEntry.code());
+                StrategyRequirements ownerRequirements = ownerEntry.executor().getRequirements();
+                EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
+                        backtestRun, state, strategyInterval, strategyCandle, strategyFeature,
+                        positionSnapshot, openPositionCount, hasOpenTrade, executionMetadata,
+                        syntheticAs, ownerRequirements, biasData, sortedStrategyFeatures, monitorCandle);
+
+                StrategyDecision decision = ownerEntry.executor().execute(enrichedContext);
+                log.debug("Orchestrator active-trade | owner={} reason={}", ownerEntry.code(), decision.getReason());
+                backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+
+            } else {
+                // Fan-out: try each strategy in declared order; first entry signal wins.
+                for (StrategyExecutorEntry entry : executors) {
+                    AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, entry.code());
+                    StrategyRequirements entryRequirements = entry.executor().getRequirements();
+                    EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
+                            backtestRun, state, strategyInterval, strategyCandle, strategyFeature,
+                            positionSnapshot, openPositionCount, hasOpenTrade, executionMetadata,
+                            syntheticAs, entryRequirements, biasData, sortedStrategyFeatures, monitorCandle);
+
+                    StrategyDecision decision = entry.executor().execute(enrichedContext);
+
+                    if (isEntryDecision(decision)) {
+                        // Stamp the winning strategy's code on the decision so the trade records it.
+                        if (decision.getStrategyCode() == null || decision.getStrategyCode().isBlank()) {
+                            decision.setStrategyCode(entry.code());
+                        }
+                        log.debug("Orchestrator entry | winner={} side={}", entry.code(), decision.getSide());
+                        backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+                        break; // first signal wins — stop evaluating remaining strategies
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Builds a BaseStrategyContext, enriches it, and applies bias + previousFeatureStore.
+     * Extracted to avoid duplicating this block across single/multi-strategy paths.
+     */
+    private EnrichedStrategyContext buildAndEnrichContext(
+            BacktestRun backtestRun,
+            BacktestState state,
+            String strategyInterval,
+            MarketData strategyCandle,
+            FeatureStore strategyFeature,
+            PositionSnapshot positionSnapshot,
+            int openPositionCount,
+            boolean hasOpenTrade,
+            Map<String, Object> executionMetadata,
+            AccountStrategy syntheticAs,
+            StrategyRequirements requirements,
+            BiasData biasData,
+            List<FeatureStore> sortedStrategyFeatures,
+            MarketData monitorCandle
+    ) {
         BaseStrategyContext baseContext = BaseStrategyContext.builder()
                 .account(null)
-                .accountStrategy(syntheticAccountStrategy)
+                .accountStrategy(syntheticAs)
                 .asset(backtestRun.getAsset())
                 .interval(strategyInterval)
                 .marketData(strategyCandle)
@@ -278,35 +363,28 @@ public class BacktestCoordinatorService {
         EnrichedStrategyContext enrichedContext =
                 strategyContextEnrichmentService.enrich(baseContext, requirements);
 
-        MarketData resolvedBiasMarket = null;
-        FeatureStore resolvedBiasFeature = null;
-
         if (requirements != null && requirements.isRequireBiasTimeframe()) {
-            resolvedBiasMarket = resolveLatestCompletedBiasCandle(
-                    biasData.biasCandles(),
-                    monitorCandle.getEndTime()
-            );
-
+            MarketData resolvedBiasMarket = resolveLatestCompletedBiasCandle(
+                    biasData.biasCandles(), monitorCandle.getEndTime());
+            enrichedContext.setBiasMarketData(resolvedBiasMarket);
             if (resolvedBiasMarket != null) {
-                resolvedBiasFeature = biasData.biasFeatureByStartTime().get(resolvedBiasMarket.getStartTime());
+                enrichedContext.setBiasFeatureStore(
+                        biasData.biasFeatureByStartTime().get(resolvedBiasMarket.getStartTime()));
             }
         }
 
-        enrichedContext.setBiasMarketData(resolvedBiasMarket);
-        enrichedContext.setBiasFeatureStore(resolvedBiasFeature);
-
         if (requirements != null && requirements.isRequirePreviousFeatureStore()) {
             enrichedContext.setPreviousFeatureStore(
-                    resolvePreviousFeatureStore(sortedStrategyFeatures, strategyCandle.getStartTime())
-            );
+                    resolvePreviousFeatureStore(sortedStrategyFeatures, strategyCandle.getStartTime()));
         }
 
-        StrategyDecision decision = executor.execute(enrichedContext);
+        return enrichedContext;
+    }
 
-        log.debug("Strategy decision reason={}", decision.getReason());
-        log.debug("Strategy decision side={}", decision.getSide());
-
-        backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+    private boolean isEntryDecision(StrategyDecision decision) {
+        if (decision == null || decision.getDecisionType() == null) return false;
+        return decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
     }
 
     private BiasData preloadBiasData(BacktestRun backtestRun, StrategyRequirements requirements) {
@@ -429,6 +507,79 @@ public class BacktestCoordinatorService {
         return backtestRun.getStrategyName();
     }
 
+    /**
+     * Parses the (possibly comma-separated) strategyCode field into an ordered list.
+     * "LSR_V2,VCB" → ["LSR_V2", "VCB"]
+     * "LSR_V2"     → ["LSR_V2"]
+     */
+    private List<String> resolveStrategyCodeList(BacktestRun backtestRun) {
+        String raw = resolveStrategyLookupCode(backtestRun);
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalArgumentException("No strategy code could be resolved from BacktestRun");
+        }
+        return Arrays.stream(raw.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .toList();
+    }
+
+    /**
+     * Resolves a {@link StrategyExecutorEntry} for every strategy code in the run,
+     * preserving the declared order (= priority order for orchestrator fan-out).
+     */
+    private List<StrategyExecutorEntry> resolveStrategyExecutors(BacktestRun backtestRun) {
+        return resolveStrategyCodeList(backtestRun).stream()
+                .map(code -> new StrategyExecutorEntry(code, strategyExecutorFactory.get(code)))
+                .toList();
+    }
+
+    /**
+     * Merges multiple {@link StrategyRequirements} using OR-logic for boolean flags.
+     * The first non-null bias interval is used.
+     */
+    private StrategyRequirements mergeRequirements(List<StrategyRequirements> list) {
+        if (list == null || list.isEmpty()) {
+            return StrategyRequirements.builder().build();
+        }
+        if (list.size() == 1) {
+            return list.getFirst();
+        }
+
+        boolean biasTimeframe          = list.stream().anyMatch(r -> r != null && r.isRequireBiasTimeframe());
+        boolean regimeSnapshot         = list.stream().anyMatch(r -> r != null && r.isRequireRegimeSnapshot());
+        boolean volatilitySnapshot     = list.stream().anyMatch(r -> r != null && r.isRequireVolatilitySnapshot());
+        boolean riskSnapshot           = list.stream().anyMatch(r -> r != null && r.isRequireRiskSnapshot());
+        boolean marketQualitySnapshot  = list.stream().anyMatch(r -> r != null && r.isRequireMarketQualitySnapshot());
+        boolean previousFeatureStore   = list.stream().anyMatch(r -> r != null && r.isRequirePreviousFeatureStore());
+
+        String biasInterval = list.stream()
+                .filter(r -> r != null && r.getBiasInterval() != null && !r.getBiasInterval().isBlank())
+                .map(StrategyRequirements::getBiasInterval)
+                .findFirst()
+                .orElse(null);
+
+        return StrategyRequirements.builder()
+                .requireBiasTimeframe(biasTimeframe)
+                .biasInterval(biasInterval)
+                .requireRegimeSnapshot(regimeSnapshot)
+                .requireVolatilitySnapshot(volatilitySnapshot)
+                .requireRiskSnapshot(riskSnapshot)
+                .requireMarketQualitySnapshot(marketQualitySnapshot)
+                .requirePreviousFeatureStore(previousFeatureStore)
+                .build();
+    }
+
+    private StrategyExecutorEntry findExecutorByCode(List<StrategyExecutorEntry> executors, String code) {
+        if (code == null || executors == null) return null;
+        return executors.stream()
+                .filter(e -> code.equalsIgnoreCase(e.code()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** Pairs a strategy code with its resolved executor. */
+    private record StrategyExecutorEntry(String code, StrategyExecutor executor) {}
+
     private Boolean resolveAllowLong(BacktestRun backtestRun) {
         return backtestRun.getAllowLong() == null ? Boolean.TRUE : backtestRun.getAllowLong();
     }
@@ -441,10 +592,10 @@ public class BacktestCoordinatorService {
         return backtestRun.getMaxOpenPositions() == null ? 1 : backtestRun.getMaxOpenPositions();
     }
 
-    private AccountStrategy buildSyntheticAccountStrategy(BacktestRun backtestRun) {
+    private AccountStrategy buildSyntheticAccountStrategy(BacktestRun backtestRun, String strategyCode) {
         return AccountStrategy.builder()
                 .accountStrategyId(backtestRun.getAccountStrategyId())
-                .strategyCode(resolveStrategyLookupCode(backtestRun))
+                .strategyCode(strategyCode)
                 .intervalName(backtestRun.getInterval())
                 .allowLong(resolveAllowLong(backtestRun))
                 .allowShort(resolveAllowShort(backtestRun))

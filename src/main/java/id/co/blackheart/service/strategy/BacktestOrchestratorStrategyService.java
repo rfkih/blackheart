@@ -23,7 +23,7 @@ public class BacktestOrchestratorStrategyService implements StrategyExecutor {
     private static final String LSR_CODE = "LSR_ADAPTIVE_V5";
     private static final String VCB_CODE = "VCB";
 
-    private final LsrV2StrategyService lsrV2StrategyService;
+    private final LsrStrategyService lsrStrategyService;
     private final VcbStrategyService vcbStrategyService;
 
     @Override
@@ -108,7 +108,7 @@ public class BacktestOrchestratorStrategyService implements StrategyExecutor {
 
     private StrategyDecision safeExecuteLsr(EnrichedStrategyContext context, String phase) {
         try {
-            StrategyDecision decision = lsrV2StrategyService.execute(context);
+            StrategyDecision decision = lsrStrategyService.execute(context);
             if (decision == null) {
                 return hold("LSR returned null during " + phase, context);
             }

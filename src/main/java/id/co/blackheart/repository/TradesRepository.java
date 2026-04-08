@@ -36,5 +36,25 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
             @Param("statuses") List<String> statuses
     );
 
+    /**
+     * Finds active trades across a group of account strategies (for multi-strategy orchestrator routing).
+     */
+    @Query(value = """
+            SELECT *
+            FROM trades t
+            WHERE t.account_id = :accountId
+              AND t.account_strategy_id IN (:accountStrategyIds)
+              AND t.asset = :asset
+              AND t.interval = :interval
+              AND t.status IN (:statuses)
+            ORDER BY t.entry_time DESC
+            """, nativeQuery = true)
+    List<Trades> findAllActiveTradesForStrategies(
+            @Param("accountId") UUID accountId,
+            @Param("accountStrategyIds") List<UUID> accountStrategyIds,
+            @Param("asset") String asset,
+            @Param("interval") String interval,
+            @Param("statuses") List<String> statuses
+    );
 
 }

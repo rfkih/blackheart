@@ -24,15 +24,15 @@ import java.util.Map;
 @Service
 @Slf4j
 @RequiredArgsConstructor
-public class LsrV2StrategyService implements StrategyExecutor {
+public class LsrStrategyService implements StrategyExecutor {
 
     private final StrategyHelper strategyHelper;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Identity
     // ─────────────────────────────────────────────────────────────────────────
-    private static final String STRATEGY_CODE = "LSR_ADAPTIVE_V5";
-    private static final String STRATEGY_NAME = "Liquidity Sweep Reversal Adaptive V5";
+    private static final String STRATEGY_CODE = "LSR";
+    private static final String STRATEGY_NAME = "Liquidity Sweep Reversal Adaptive";
     private static final String STRATEGY_VERSION = "v5";
 
     private static final String SIDE_LONG = "LONG";

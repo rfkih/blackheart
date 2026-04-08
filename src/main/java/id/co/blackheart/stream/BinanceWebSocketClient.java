@@ -5,6 +5,7 @@ import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.repository.AccountStrategyRepository;
 import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.service.cache.CacheService;
+import id.co.blackheart.service.live.LiveOrchestratorCoordinatorService;
 import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
 import id.co.blackheart.service.marketdata.MarketDataService;
@@ -30,7 +31,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
@@ -54,6 +57,7 @@ public class BinanceWebSocketClient {
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
+    private final LiveOrchestratorCoordinatorService liveOrchestratorCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
     private final AccountStrategyRepository accountStrategyRepository;
     private final CacheService cacheService;
@@ -280,30 +284,36 @@ public class BinanceWebSocketClient {
             List<AccountStrategy> activeStrategies = accountStrategyRepository
                     .findByEnabledTrueAndIntervalName(interval);
 
-            for (AccountStrategy accountStrategy : activeStrategies) {
-                try {
-                    Account account = accountRepository.findByAccountId(accountStrategy.getAccountId()).orElse(null);
+            // Group strategies by accountId. Accounts with 2+ strategies on the same
+            // interval are routed through the orchestrator so only the first entry signal
+            // fires; active trades are then managed exclusively by the owning strategy.
+            Map<UUID, List<AccountStrategy>> byAccount = activeStrategies.stream()
+                    .collect(Collectors.groupingBy(AccountStrategy::getAccountId));
 
+            for (Map.Entry<UUID, List<AccountStrategy>> entry : byAccount.entrySet()) {
+                UUID accountId = entry.getKey();
+                List<AccountStrategy> strategies = entry.getValue();
+
+                try {
+                    Account account = accountRepository.findByAccountId(accountId).orElse(null);
                     if (account == null || !"1".equals(account.getIsActive())) {
                         continue;
                     }
 
-                    liveTradingCoordinatorService.process(
-                            account,
-                            accountStrategy,
-                            SYMBOL,
-                            interval,
-                            marketData,
-                            featureStore
-                    );
+                    if (strategies.size() == 1) {
+                        // Single strategy — existing behaviour, no orchestration needed.
+                        liveTradingCoordinatorService.process(
+                                account, strategies.getFirst(), SYMBOL, interval, marketData, featureStore);
+                    } else {
+                        // Multiple strategies on the same interval — orchestrator decides who acts.
+                        liveOrchestratorCoordinatorService.process(
+                                account, strategies, SYMBOL, interval, marketData, featureStore);
+                    }
 
                 } catch (Exception e) {
                     log.error(
-                            "Live strategy execution failed | accountStrategyId={} symbol={} interval={}",
-                            accountStrategy.getAccountStrategyId(),
-                            SYMBOL,
-                            interval,
-                            e
+                            "Live strategy execution failed | accountId={} symbol={} interval={}",
+                            accountId, SYMBOL, interval, e
                     );
                 }
             }

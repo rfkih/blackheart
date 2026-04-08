@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -27,12 +28,13 @@ public class BacktestService {
     public BacktestRunResponse runBacktest(BacktestRunRequest request) {
         validateRequest(request);
 
+        String resolvedStrategyCode = resolveStrategyCode(request);
+        String resolvedStrategyName = request.getStrategyName() != null ? request.getStrategyName() : resolvedStrategyCode;
+
         BacktestRun backtestRun = BacktestRun.builder()
                 .accountStrategyId(request.getAccountStrategyId())
-                .strategyName(request.getStrategyName())
-                .strategyCode(request.getStrategyCode() != null && !request.getStrategyCode().isBlank()
-                        ? request.getStrategyCode()
-                        : request.getStrategyName())
+                .strategyName(resolvedStrategyName)
+                .strategyCode(resolvedStrategyCode)
                 .asset(request.getAsset())
                 .interval(request.getInterval())
                 .status(STATUS_RUNNING)
@@ -45,6 +47,9 @@ public class BacktestService {
                 .minNotional(request.getMinNotional())
                 .minQty(request.getMinQty())
                 .qtyStep(request.getQtyStep())
+                .allowLong(request.getAllowLong())
+                .allowShort(request.getAllowShort())
+                .maxOpenPositions(request.getMaxOpenPositions())
                 .totalTrades(0)
                 .totalWins(0)
                 .totalLosses(0)
@@ -86,6 +91,27 @@ public class BacktestService {
         }
     }
 
+    /**
+     * Resolves the strategy code(s) to store on BacktestRun.
+     * Multi-strategy: codes joined as comma-separated string, e.g. "LSR_V2,VCB".
+     * Single-strategy: the single code, falling back to strategyName.
+     */
+    private String resolveStrategyCode(BacktestRunRequest request) {
+        List<String> codes = request.getStrategyCodes();
+        if (codes != null && !codes.isEmpty()) {
+            List<String> valid = codes.stream()
+                    .filter(c -> c != null && !c.isBlank())
+                    .toList();
+            if (!valid.isEmpty()) {
+                return String.join(",", valid);
+            }
+        }
+        if (request.getStrategyCode() != null && !request.getStrategyCode().isBlank()) {
+            return request.getStrategyCode();
+        }
+        return request.getStrategyName();
+    }
+
     private void validateRequest(BacktestRunRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("BacktestRunRequest cannot be null");
@@ -93,8 +119,14 @@ public class BacktestService {
         if (request.getAccountStrategyId() == null) {
             throw new IllegalArgumentException("accountStrategyId cannot be null");
         }
-        if (request.getStrategyName() == null || request.getStrategyName().isBlank()) {
-            throw new IllegalArgumentException("strategyName cannot be blank");
+
+        boolean hasStrategyCodes = request.getStrategyCodes() != null
+                && request.getStrategyCodes().stream().anyMatch(c -> c != null && !c.isBlank());
+        boolean hasStrategyCode = request.getStrategyCode() != null && !request.getStrategyCode().isBlank();
+        boolean hasStrategyName = request.getStrategyName() != null && !request.getStrategyName().isBlank();
+
+        if (!hasStrategyCodes && !hasStrategyCode && !hasStrategyName) {
+            throw new IllegalArgumentException("At least one of strategyCodes, strategyCode, or strategyName must be provided");
         }
         if (request.getAsset() == null || request.getAsset().isBlank()) {
             throw new IllegalArgumentException("asset cannot be blank");
