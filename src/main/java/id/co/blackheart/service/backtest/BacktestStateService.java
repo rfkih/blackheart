@@ -72,16 +72,45 @@ public class BacktestStateService {
                 /**
                  * Synthetic short model:
                  * equity contribution = reserved quote notional + unrealized pnl
+                 * Clamped at zero — max loss is the collateral put up at entry;
+                 * markToMarketValue cannot go negative (position liquidated at that point).
                  */
                 BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
                 unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
-                markToMarketValue = reservedNotional.add(unrealizedPnl);
+                markToMarketValue = reservedNotional.add(unrealizedPnl).max(ZERO);
             }
 
             equity = equity.add(markToMarketValue);
         }
 
         return equity;
+    }
+
+    /**
+     * Checks worst-case intra-bar drawdown using the given price (e.g. candle LOW for LONG,
+     * candle HIGH for SHORT) without updating currentEquity or peakEquity.
+     */
+    public void checkIntraBarDrawdown(BacktestState state, BigDecimal worstCasePrice) {
+        if (state == null || worstCasePrice == null || worstCasePrice.compareTo(ZERO) <= 0) {
+            return;
+        }
+
+        if (state.getPeakEquity() == null || state.getPeakEquity().compareTo(ZERO) <= 0) {
+            return;
+        }
+
+        BigDecimal worstEquity = calculateCurrentEquity(state, worstCasePrice);
+
+        BigDecimal drawdownPct = state.getPeakEquity()
+                .subtract(worstEquity)
+                .divide(state.getPeakEquity(), 8, RoundingMode.HALF_UP)
+                .multiply(HUNDRED);
+
+        if (drawdownPct.compareTo(ZERO) > 0
+                && (state.getMaxDrawdownPercent() == null
+                || drawdownPct.compareTo(state.getMaxDrawdownPercent()) > 0)) {
+            state.setMaxDrawdownPercent(drawdownPct);
+        }
     }
 
     private BigDecimal safe(BigDecimal value) {

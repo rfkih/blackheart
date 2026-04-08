@@ -23,14 +23,14 @@ public class BacktestTradePosition {
     @Column(name = "trade_position_id", nullable = false, updatable = false)
     private UUID tradePositionId;
 
-    @Column(name = "trade_id", nullable = false)
-    private UUID tradeId;
+    @Column(name = "backtest_trade_id", nullable = false)
+    private UUID backtestTradeId;
 
     @Column(name = "backtest_run_id", nullable = false)
     private UUID backtestRunId;
 
-    @Column(name = "user_strategy_id")
-    private UUID userStrategyId;
+    @Column(name = "account_strategy_id")
+    private UUID accountStrategyId;
 
     @Column(name = "asset", length = 30, nullable = false)
     private String asset;
@@ -91,6 +91,13 @@ public class BacktestTradePosition {
 
     @Column(name = "trailing_stop_price", precision = 24, scale = 8)
     private BigDecimal trailingStopPrice;
+
+    /**
+     * Initial trailing stop price recorded at entry — used to compute the fixed trailing offset
+     * during backtest execution. Not persisted (runtime only).
+     */
+    @Transient
+    private BigDecimal initialTrailingStopPrice;
 
     @Column(name = "take_profit_price", precision = 24, scale = 8)
     private BigDecimal takeProfitPrice;

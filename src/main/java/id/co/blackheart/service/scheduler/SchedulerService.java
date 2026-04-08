@@ -4,6 +4,7 @@ import id.co.blackheart.model.SchedulerJob;
 import id.co.blackheart.repository.SchedulerJobRepository;
 import id.co.blackheart.service.DeepLearningService;
 import id.co.blackheart.service.portfolio.PortfolioService;
+import id.co.blackheart.service.tradequery.StrategyDailyRealizedCurveService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.AllArgsConstructor;
@@ -15,7 +16,8 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
 
 @Service
 @Slf4j
@@ -26,6 +28,7 @@ public class SchedulerService {
     private final Map<String, ScheduledFuture<?>> schedulerMap = new ConcurrentHashMap<>();
     private final PortfolioService portfolioService;
     private final DeepLearningService deepLearningService;
+    private final StrategyDailyRealizedCurveService strategyDailyRealizedCurveService;
     private final SchedulerJobRepository schedulerJobRepository;
 
     @PostConstruct
@@ -40,7 +43,8 @@ public class SchedulerService {
         stopScheduler(job.getJobName());
 
         CronTrigger cronTrigger = new CronTrigger(job.getCronExpression());
-        ScheduledFuture<?> task = taskScheduler.schedule(() -> routeJob(job.getJobType()), cronTrigger);
+        ScheduledFuture<?> task = taskScheduler.schedule(() -> routeJob(job), cronTrigger);
+
         schedulerMap.put(job.getJobName(), task);
         log.info("[{}] Scheduled with cron expression: {}", job.getJobName(), job.getCronExpression());
     }
@@ -54,18 +58,32 @@ public class SchedulerService {
         }
     }
 
-    private void routeJob(String jobType) {
-        switch (jobType) {
-            case "TRAIN_MODEL":
-                deepLearningService.executeTraining();
-                log.info("[TRAIN_MODEL] Triggered at {}", LocalDateTime.now());
-                break;
-            case "UPDATE_BALANCE":
-                portfolioService.reloadAsset();
-                log.info("[UPDATE_BALANCE] Triggered at {}", LocalDateTime.now());
-                break;
-            default:
-                log.info("Unknown job type: {}", jobType);
+    private void routeJob(SchedulerJob job) {
+        String jobType = job.getJobType();
+        String jobName = job.getJobName();
+
+        try {
+            switch (jobType) {
+                case "TRAIN_MODEL":
+                    deepLearningService.executeTraining();
+                    log.info("[{}][TRAIN_MODEL] Triggered at {}", jobName, LocalDateTime.now());
+                    break;
+
+                case "UPDATE_BALANCE":
+                    portfolioService.reloadAsset();
+                    log.info("[{}][UPDATE_BALANCE] Triggered at {}", jobName, LocalDateTime.now());
+                    break;
+
+                case "GENERATE_DAILY_REALIZED_CURVE":
+                    strategyDailyRealizedCurveService.generateForYesterday();
+                    log.info("[{}][GENERATE_DAILY_REALIZED_CURVE] Triggered at {}", jobName, LocalDateTime.now());
+                    break;
+
+                default:
+                    log.warn("[{}] Unknown job type: {}", jobName, jobType);
+            }
+        } catch (Exception e) {
+            log.error("[{}][{}] Scheduler execution failed", jobName, jobType, e);
         }
     }
 

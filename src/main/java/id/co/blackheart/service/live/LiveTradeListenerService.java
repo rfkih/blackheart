@@ -4,9 +4,9 @@ import id.co.blackheart.dto.strategy.PositionSnapshot;
 import id.co.blackheart.dto.tradelistener.ListenerContext;
 import id.co.blackheart.dto.tradelistener.ListenerDecision;
 import id.co.blackheart.model.TradePosition;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.TradePositionRepository;
-import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.service.tradelistener.TradeListenerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +27,7 @@ public class LiveTradeListenerService {
     private static final String STATUS_OPEN = "OPEN";
 
     private final TradePositionRepository tradePositionRepository;
-    private final UsersRepository usersRepository;
+    private final AccountRepository accountRepository;
     private final LivePositionSnapshotMapper livePositionSnapshotMapper;
     private final TradeListenerService tradeListenerService;
     private final LiveTradingDecisionExecutorService liveTradingDecisionExecutorService;
@@ -84,12 +84,12 @@ public class LiveTradeListenerService {
                 continue;
             }
 
-            TradePosition firstPosition = groupedPositions.get(0);
-            Users user = usersRepository.findByUserId(firstPosition.getUserId());
+            TradePosition firstPosition = groupedPositions.getFirst();
+            Account user = accountRepository.findByAccountId(firstPosition.getAccountId()).orElse(null);
 
             if (user == null) {
-                log.warn("Listener close skipped because user not found | tradeId={} userId={} groupSize={}",
-                        firstPosition.getTradeId(), firstPosition.getUserId(), groupedPositions.size());
+                log.warn("Listener close skipped because user not found | tradeId={} accountId={} groupSize={}",
+                        firstPosition.getTradeId(), firstPosition.getAccountId(), groupedPositions.size());
                 continue;
             }
 
@@ -127,7 +127,7 @@ public class LiveTradeListenerService {
 
     private String buildGroupKey(TradePosition position, ListenerDecision listenerDecision) {
         return new StringBuilder()
-                .append(nullSafeUuid(position.getUserId())).append('|')
+                .append(nullSafeUuid(position.getAccountId())).append('|')
                 .append(nullSafeUuid(position.getTradeId())).append('|')
                 .append(nullSafe(position.getSide())).append('|')
                 .append(nullSafe(position.getAsset())).append('|')

@@ -14,14 +14,14 @@ import java.util.UUID;
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
-@Table(name = "users")
-public class Users {
+@Table(name = "accounts")
+public class Account {
 
     @Id
     @GeneratedValue
     @UuidGenerator
-    @Column(name = "user_id", nullable = false, updatable = false)
-    private UUID userId;
+    @Column(name = "account_id", nullable = false, updatable = false)
+    private UUID accountId;
 
     @Column(name = "username", nullable = false, unique = true, length = 50)
     private String username;

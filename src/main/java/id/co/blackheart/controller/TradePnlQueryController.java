@@ -18,11 +18,11 @@ public class TradePnlQueryController {
 
     private final TradePnlQueryService tradePnlQueryService;
 
-    @GetMapping("/users/{userId}/active-pnl")
-    public ResponseEntity<ResponseDto> getCurrentActiveTradePnl(@PathVariable UUID userId) {
+    @GetMapping("/account/{accountId}/active-pnl")
+    public ResponseEntity<ResponseDto> getCurrentActiveTradePnl(@PathVariable UUID accountId) {
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(tradePnlQueryService.getCurrentActiveTradePnl(userId))
+                .data(tradePnlQueryService.getCurrentActiveTradePnl(accountId))
                 .build());
     }
 }

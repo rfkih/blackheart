@@ -6,7 +6,7 @@ import id.co.blackheart.dto.response.BinanceOrderResponse;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.TradePositionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +30,7 @@ public class TradeCloseService {
     private final TradeStateSyncService tradeStateSyncService;
 
     public void closeSinglePosition(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset,
             TradeType tradeType
@@ -62,7 +62,7 @@ public class TradeCloseService {
     }
 
     public void closeGroupedPositions(
-            Users user,
+            Account user,
             List<TradePosition> tradePositions,
             String asset,
             TradeType tradeType
@@ -159,7 +159,7 @@ public class TradeCloseService {
             String asset,
             String side,
             BigDecimal amount,
-            Users user
+            Account user
     ) {
         return BinanceOrderRequest.builder()
                 .symbol(asset)
@@ -275,7 +275,7 @@ public class TradeCloseService {
     }
 
     private TradePosition validateClosePositionInputs(
-            Users user,
+            Account user,
             TradePosition tradePosition,
             String asset,
             TradeType tradeType

@@ -15,21 +15,21 @@ public interface PortfolioRepository extends JpaRepository<Portfolio, Long> {
     @Query(value = """
     SELECT *
     FROM portfolio
-    WHERE user_id = :userId
+    WHERE account_id = :accountId
       AND asset = :asset
     LIMIT 1
     """, nativeQuery = true)
-    Optional<Portfolio> findByUserIdAndAsset(
-            @Param("userId") UUID userId,
+    Optional<Portfolio> findByAccountIdAndAsset(
+            @Param("accountId") UUID accountId,
             @Param("asset") String asset
     );
 
     @Query(value = """
     SELECT *
     FROM portfolio p
-    WHERE p.user_id = :userId
+    WHERE p.account_id = :accountId
       AND p.asset IN (:assets)
-      AND p.is_active = 'Y'
+      AND p.is_active = '1'
     """, nativeQuery = true)
-    List<Portfolio> findAllByUserIdAndAssetIn(UUID userId, List<String> assets);
+    List<Portfolio> findAllByAccountIdAndAssetIn(UUID accountId, List<String> assets);
 }

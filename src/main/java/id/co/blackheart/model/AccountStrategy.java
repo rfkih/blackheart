@@ -20,15 +20,15 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "user_strategy")
-public class UserStrategy {
+@Table(name = "account_strategy")
+public class AccountStrategy {
 
     @Id
-    @Column(name = "user_strategy_id", nullable = false, updatable = false)
-    private UUID userStrategyId;
+    @Column(name = "account_strategy_id", nullable = false, updatable = false)
+    private UUID accountStrategyId;
 
-    @Column(name = "user_id", nullable = false)
-    private UUID userId;
+    @Column(name = "account_id", nullable = false)
+    private UUID accountId;
 
     @Column(name = "strategy_definition_id", nullable = false)
     private UUID strategyDefinitionId;

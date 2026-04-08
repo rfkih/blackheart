@@ -74,7 +74,7 @@ public class BacktestPositionSnapshotMapper {
         }
 
         return PositionSnapshot.builder()
-                .tradeId(position.getTradeId())
+                .tradeId(position.getBacktestTradeId())
                 .tradePositionId(position.getTradePositionId())
                 .hasOpenPosition(true)
                 .side(position.getSide())

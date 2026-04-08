@@ -16,10 +16,10 @@ public class TradeQueryService {
 
     private final CacheService cacheService;
 
-    public List<ActiveTradeResponse> getActiveTradesByUserId(UUID userId) {
+    public List<ActiveTradeResponse> getActiveTradesByAccountId(UUID accountId) {
         List<ActiveTradeResponse> results = new ArrayList<>();
 
-        for (UUID tradeId : cacheService.getUserActiveTradeIds(userId)) {
+        for (UUID tradeId : cacheService.getAccountActiveTradeIds(accountId)) {
             try {
                 Trades trade = cacheService.getTrade(tradeId);
 
@@ -34,7 +34,7 @@ public class TradeQueryService {
                                 .build()
                 );
             } catch (Exception e) {
-                log.error("Failed to get active trade for userId={} tradeId={}", userId, tradeId, e);
+                log.error("Failed to get active trade for accountId={} tradeId={}", accountId, tradeId, e);
             }
         }
 

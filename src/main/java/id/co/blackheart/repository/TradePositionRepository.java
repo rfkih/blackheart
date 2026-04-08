@@ -1,10 +1,12 @@
 package id.co.blackheart.repository;
 
 import id.co.blackheart.model.TradePosition;
+import id.co.blackheart.projection.TradePositionDailyAggregateProjection;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -51,27 +53,23 @@ public interface TradePositionRepository extends JpaRepository<TradePosition, UU
     );
 
     @Query(value = """
-            SELECT *
-            FROM trade_positions tp
-            WHERE tp.user_id = :userId
-              AND tp.user_strategy_id = :userStrategyId
-              AND tp.status = :status
-            ORDER BY tp.entry_time ASC
+            SELECT
+                tp.account_id AS accountId,
+                tp.account_strategy_id AS accountStrategyId,
+                COALESCE(SUM(tp.realized_pnl_amount), 0) AS dailyRealizedPnlAmount,
+                COALESCE(SUM(tp.entry_quote_qty), 0) AS dailyClosedNotional,
+                COUNT(*) AS closedPositionCount,
+                COALESCE(SUM(CASE WHEN tp.realized_pnl_amount > 0 THEN 1 ELSE 0 END), 0) AS winPositionCount,
+                COALESCE(SUM(CASE WHEN tp.realized_pnl_amount < 0 THEN 1 ELSE 0 END), 0) AS lossPositionCount
+            FROM trade_position tp
+            WHERE tp.status = 'CLOSED'
+              AND tp.exit_time >= :startDateTime
+              AND tp.exit_time < :endDateTime
+            GROUP BY tp.account_id, tp.account_strategy_id
             """, nativeQuery = true)
-    List<TradePosition> findAllByUserStrategyAndStatus(
-            @Param("userId") UUID userId,
-            @Param("userStrategyId") UUID userStrategyId,
-            @Param("status") String status
+    List<TradePositionDailyAggregateProjection> findDailyClosedPositionAggregates(
+            @Param("startDateTime") LocalDateTime startDateTime,
+            @Param("endDateTime") LocalDateTime endDateTime
     );
 
-    @Query(value = """
-            SELECT COUNT(1)
-            FROM trade_positions tp
-            WHERE tp.trade_id = :tradeId
-              AND tp.status = :status
-            """, nativeQuery = true)
-    long countByTradeIdAndStatus(
-            @Param("tradeId") UUID tradeId,
-            @Param("status") String status
-    );
 }

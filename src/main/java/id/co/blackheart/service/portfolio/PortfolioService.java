@@ -10,9 +10,9 @@ import id.co.blackheart.dto.response.BinanceAssetDto;
 import id.co.blackheart.dto.response.BinanceAssetResponse;
 import id.co.blackheart.dto.response.TokocryptoResponse;
 import id.co.blackheart.model.Portfolio;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.PortfolioRepository;
-import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.repository.AccountRepository;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -29,7 +29,7 @@ public class PortfolioService {
 
     private final TokocryptoClientService tokocryptoClientService;
     private final BinanceClientService binanceClientService;
-    private final UsersRepository usersRepository;
+    private final AccountRepository accountRepository;
     private final PortfolioRepository portfolioRepository;
     private final ObjectMapper objectMapper;
 
@@ -38,20 +38,21 @@ public class PortfolioService {
     @Async
     public void reloadAsset() {
         log.info("Starting portfolio reload...");
-        List<Users> userList = usersRepository.findByIsActive("1");
-
-        userList.parallelStream().forEach(user -> {
+        List<Account> accountList = accountRepository.findByIsActive("1");
+        log.info("account {}", accountList);
+        accountList.parallelStream().forEach(account -> {
             try {
-                updateAndGetBinanceAssetBalance(user);
+                log.info("account {}", account);
+                updateAndGetBinanceAssetBalance(account);
             } catch (Exception e) {
-                log.error("Error processing User: {} in reloadAsset()", user.getUsername(), e);
+                log.error("Error processing User: {} in reloadAsset()", account.getUsername(), e);
             }
         });
 
         log.info("✅ Portfolio Update Completed!");
     }
 
-    public Portfolio updateAndGetTokocryptoAssetBalance(String asset, Users user) throws JsonProcessingException {
+    public Portfolio updateAndGetTokocryptoAssetBalance(String asset, Account user) throws JsonProcessingException {
         log.info("update Data for User: {} and Asset: {}", user.getUsername(), asset);
 
         TokocryptoResponse response = tokocryptoClientService.getAssetDetails(
@@ -66,20 +67,20 @@ public class PortfolioService {
         return savePortfolio(user, asset, assetData.getFree(), assetData.getLocked());
     }
 
-    public void updateAndGetBinanceAssetBalance(Users user) {
+    public void updateAndGetBinanceAssetBalance(Account account) {
         BinanceAssetRequest binanceAssetRequest = new BinanceAssetRequest();
-        binanceAssetRequest.setApiKey(user.getApiKey());
-        binanceAssetRequest.setApiSecret(user.getApiSecret());
+        binanceAssetRequest.setApiKey(account.getApiKey());
+        binanceAssetRequest.setApiSecret(account.getApiSecret());
         binanceAssetRequest.setRecvWindow(RECV_WINDOW);
 
         BinanceAssetResponse binanceAssetResponse = binanceClientService.getBinanceAssetDetails(binanceAssetRequest);
 
 
-        saveAllBinanceAssets(user, binanceAssetResponse.getAssets());
+        saveAllBinanceAssets(account, binanceAssetResponse.getAssets());
 
     }
 
-    public Portfolio updateAndGetAssetBalance(String asset, Users user) throws JsonProcessingException {
+    public Portfolio updateAndGetAssetBalance(String asset, Account user) throws JsonProcessingException {
         log.info("Updating data for User: {} and Asset: {}", user.getUsername(), asset);
 
         BinanceAssetRequest request = new BinanceAssetRequest();
@@ -99,11 +100,11 @@ public class PortfolioService {
 
     }
 
-    private Portfolio savePortfolio(Users user, String asset, String free, String locked) {
-        Portfolio portfolio = portfolioRepository.findByUserIdAndAsset(user.getUserId(), asset)
+    private Portfolio savePortfolio(Account user, String asset, String free, String locked) {
+        Portfolio portfolio = portfolioRepository.findByAccountIdAndAsset(user.getAccountId(), asset)
                 .orElse(new Portfolio());
 
-        portfolio.setUserId(user.getUserId());
+        portfolio.setAccountId(user.getAccountId());
         portfolio.setAsset(asset);
         portfolio.setIsActive("1");
         portfolio.setBalance(new BigDecimal(free));
@@ -114,7 +115,7 @@ public class PortfolioService {
         return portfolio;
     }
 
-    protected void saveAllBinanceAssets(Users user, List<BinanceAssetDto> assetList) {
+    protected void saveAllBinanceAssets(Account user, List<BinanceAssetDto> assetList) {
         assetList.forEach(dto -> savePortfolio(user, dto.getAsset(), dto.getFree(), dto.getLocked()));
     }
 }

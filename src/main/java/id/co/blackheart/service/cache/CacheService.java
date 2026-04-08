@@ -2,6 +2,7 @@ package id.co.blackheart.service.cache;
 
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -14,11 +15,12 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class CacheService {
 
     private static final String TRADE_KEY_PREFIX = "trade:";
     private static final String TRADE_POSITIONS_KEY_PREFIX = "tradePositions:";
-    private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "userActiveTrades:";
+    private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "accountActiveTrades:";
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final ZoneId DEFAULT_ZONE_ID = ZoneId.systemDefault();
@@ -30,19 +32,26 @@ public class CacheService {
     }
 
     public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
-        if (symbol == null || price == null) {
+        if (symbol == null || symbol.isBlank() || price == null) {
             return;
         }
 
         String key = "latestPrice:" + symbol;
 
-        Map<String, Object> value = new HashMap<>();
+        Map<String, String> value = new HashMap<>();
         value.put("symbol", symbol);
         value.put("price", price.toPlainString());
-        value.put("updatedAt", updatedAt == null ? null : updatedAt.toString());
 
-        redisTemplate.delete(key);
-        redisTemplate.opsForHash().putAll(key, value);
+        if (updatedAt != null) {
+            value.put("updatedAt", updatedAt.toString());
+        }
+
+        try {
+            redisTemplate.opsForHash().putAll(key, value);
+        } catch (Exception e) {
+            log.error("Failed to save latest price to Redis | symbol={} price={} updatedAt={}",
+                    symbol, price, updatedAt, e);
+        }
     }
 
     public BigDecimal getLatestPrice(String symbol) {
@@ -84,8 +93,8 @@ public class CacheService {
 
         Map<String, Object> tradeMap = new HashMap<>();
         tradeMap.put("tradeId", toStringValue(trade.getTradeId()));
-        tradeMap.put("userId", toStringValue(trade.getUserId()));
-        tradeMap.put("userStrategyId", toStringValue(trade.getUserStrategyId()));
+        tradeMap.put("accountId", toStringValue(trade.getAccountId()));
+        tradeMap.put("accountStrategyId", toStringValue(trade.getAccountStrategyId()));
 
         tradeMap.put("status", trade.getStatus());
         tradeMap.put("asset", trade.getAsset());
@@ -131,8 +140,8 @@ public class CacheService {
 
         Trades trade = new Trades();
         trade.setTradeId(asUuid(tradeData.get("tradeId"), tradeId));
-        trade.setUserId(asUuid(tradeData.get("userId"), null));
-        trade.setUserStrategyId(asUuid(tradeData.get("userStrategyId"), null));
+        trade.setAccountId(asUuid(tradeData.get("accountId"), null));
+        trade.setAccountStrategyId(asUuid(tradeData.get("accountStrategyId"), null));
 
         trade.setStatus(asString(tradeData.get("status")));
         trade.setAsset(asString(tradeData.get("asset")));
@@ -170,19 +179,19 @@ public class CacheService {
                 .collect(Collectors.toList());
     }
 
-    public void addUserActiveTrade(UUID userId, UUID tradeId) {
-        String userActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + userId;
-        redisTemplate.opsForSet().add(userActiveTradesKey, tradeId.toString());
+    public void addAccountActiveTrade(UUID accountId, UUID tradeId) {
+        String accountActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
+        redisTemplate.opsForSet().add(accountActiveTradesKey, tradeId.toString());
     }
 
-    public void removeUserActiveTrade(UUID userId, UUID tradeId) {
-        String userActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + userId;
+    public void removeAccountActiveTrade(UUID accountId, UUID tradeId) {
+        String userActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
         redisTemplate.opsForSet().remove(userActiveTradesKey, tradeId.toString());
     }
 
-    public Set<UUID> getUserActiveTradeIds(UUID userId) {
-        String userActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + userId;
-        Set<Object> members = redisTemplate.opsForSet().members(userActiveTradesKey);
+    public Set<UUID> getAccountActiveTradeIds(UUID accountId) {
+        String accountActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
+        Set<Object> members = redisTemplate.opsForSet().members(accountActiveTradesKey);
 
         if (members == null || members.isEmpty()) {
             return Set.of();
@@ -196,8 +205,8 @@ public class CacheService {
                 .collect(Collectors.toSet());
     }
 
-    public List<Trades> getUserActiveTrades(UUID userId) {
-        Set<UUID> tradeIds = getUserActiveTradeIds(userId);
+    public List<Trades> getUserActiveTrades(UUID accountId) {
+        Set<UUID> tradeIds = getAccountActiveTradeIds(accountId);
 
         if (tradeIds.isEmpty()) {
             return List.of();
@@ -209,10 +218,10 @@ public class CacheService {
                 .collect(Collectors.toList());
     }
 
-    public void cacheUserActiveTrade(UUID userId, UUID tradeId, Trades trade, List<TradePosition> tradePositions) {
+    public void cacheUserActiveTrade(UUID accountId, UUID tradeId, Trades trade, List<TradePosition> tradePositions) {
         cacheActiveTrade(tradeId, trade);
         cacheTradePositions(tradeId, tradePositions);
-        addUserActiveTrade(userId, tradeId);
+        addAccountActiveTrade(accountId, tradeId);
     }
 
     public void removeClosedTrade(UUID tradeId) {
@@ -221,15 +230,15 @@ public class CacheService {
         redisTemplate.delete(TRADE_KEY_PREFIX + tradeId);
         redisTemplate.delete(TRADE_POSITIONS_KEY_PREFIX + tradeId);
 
-        if (cachedTrade != null && cachedTrade.getUserId() != null) {
-            removeUserActiveTrade(cachedTrade.getUserId(), tradeId);
+        if (cachedTrade != null && cachedTrade.getAccountId() != null) {
+            removeAccountActiveTrade(cachedTrade.getAccountId(), tradeId);
         }
     }
 
-    public void removeClosedTrade(UUID userId, UUID tradeId) {
+    public void removeClosedTrade(UUID accountId, UUID tradeId) {
         redisTemplate.delete(TRADE_KEY_PREFIX + tradeId);
         redisTemplate.delete(TRADE_POSITIONS_KEY_PREFIX + tradeId);
-        removeUserActiveTrade(userId, tradeId);
+        removeAccountActiveTrade(accountId, tradeId);
     }
 
     private String asString(Object value) {

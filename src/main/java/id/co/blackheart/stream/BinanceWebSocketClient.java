@@ -1,15 +1,14 @@
 package id.co.blackheart.stream;
 
 import id.co.blackheart.model.*;
-import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
-import id.co.blackheart.repository.UserStrategyRepository;
-import id.co.blackheart.repository.UsersRepository;
+import id.co.blackheart.repository.AccountStrategyRepository;
+import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.service.cache.CacheService;
+import id.co.blackheart.service.live.LiveOrchestratorCoordinatorService;
 import id.co.blackheart.service.live.LiveTradeListenerService;
 import id.co.blackheart.service.live.LiveTradingCoordinatorService;
 import id.co.blackheart.service.marketdata.MarketDataService;
-import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -32,7 +31,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
@@ -41,23 +42,24 @@ import java.util.concurrent.atomic.AtomicReference;
 public class BinanceWebSocketClient {
 
     private static final String SYMBOL = "BTCUSDT";
-    private static final String WS_BASE = "wss://stream.binance.com:9443";
-    private static final String STREAMS = "btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h";
+    private static final String WS_BASE = "wss://data-stream.binance.vision";
+    private static final String STREAMS = "btcusdt@kline_5m/btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h";
     private static final String BINANCE_WS_URL = WS_BASE + "/stream?streams=" + STREAMS;
 
-    private static final Set<String> ACCEPTED_INTERVALS = Set.of("15m", "1h", "4h");
+    private static final Set<String> ACCEPTED_INTERVALS = Set.of("5m", "15m", "1h", "4h");
 
     private static final Duration STALE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration RECONNECT_DELAY = Duration.ofSeconds(5);
     private static final ZoneId UTC = ZoneId.of("UTC");
 
     private final MarketDataRepository marketDataRepository;
-    private final UsersRepository usersRepository;
+    private final AccountRepository accountRepository;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final LiveTradingCoordinatorService liveTradingCoordinatorService;
+    private final LiveOrchestratorCoordinatorService liveOrchestratorCoordinatorService;
     private final LiveTradeListenerService liveTradeListenerService;
-    private final UserStrategyRepository userStrategyRepository;
+    private final AccountStrategyRepository accountStrategyRepository;
     private final CacheService cacheService;
 
     private final ReactorNettyWebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
@@ -68,8 +70,6 @@ public class BinanceWebSocketClient {
                 thread.setDaemon(true);
                 return thread;
             });
-
-    private final Map<String, LocalDateTime> lastSavedEndTimeByInterval = new ConcurrentHashMap<>();
 
     private volatile boolean running = false;
     private volatile Instant lastMessageTime = Instant.now();
@@ -165,7 +165,7 @@ public class BinanceWebSocketClient {
 
             BigDecimal latestPrice =  new BigDecimal(kline.getString("c"));
 
-            if ("15m".equals(interval)) {
+            if ("5m".equals(interval)) {
                 cacheService.saveLatestPrice(SYMBOL, latestPrice, LocalDateTime.now());
                 liveTradeListenerService.process(SYMBOL, latestPrice);
             }
@@ -269,7 +269,6 @@ public class BinanceWebSocketClient {
 
     private void persistMarketData(String interval, MarketData marketData) {
         marketDataRepository.save(marketData);
-        lastSavedEndTimeByInterval.put(interval, marketData.getEndTime());
 
         log.info("Inserted candle | symbol={} interval={} endTime={} close={}",SYMBOL,interval,marketData.getEndTime(),marketData.getClosePrice());
     }
@@ -282,33 +281,39 @@ public class BinanceWebSocketClient {
         }
 
         if (featureStore != null) {
-            List<UserStrategy> activeStrategies = userStrategyRepository
+            List<AccountStrategy> activeStrategies = accountStrategyRepository
                     .findByEnabledTrueAndIntervalName(interval);
 
-            for (UserStrategy userStrategy : activeStrategies) {
-                try {
-                    Users user = usersRepository.findByUserId(userStrategy.getUserId());
+            // Group strategies by accountId. Accounts with 2+ strategies on the same
+            // interval are routed through the orchestrator so only the first entry signal
+            // fires; active trades are then managed exclusively by the owning strategy.
+            Map<UUID, List<AccountStrategy>> byAccount = activeStrategies.stream()
+                    .collect(Collectors.groupingBy(AccountStrategy::getAccountId));
 
-                    if (user == null || !"1".equals(user.getIsActive())) {
+            for (Map.Entry<UUID, List<AccountStrategy>> entry : byAccount.entrySet()) {
+                UUID accountId = entry.getKey();
+                List<AccountStrategy> strategies = entry.getValue();
+
+                try {
+                    Account account = accountRepository.findByAccountId(accountId).orElse(null);
+                    if (account == null || !"1".equals(account.getIsActive())) {
                         continue;
                     }
 
-                    liveTradingCoordinatorService.process(
-                            user,
-                            userStrategy,
-                            SYMBOL,
-                            interval,
-                            marketData,
-                            featureStore
-                    );
+                    if (strategies.size() == 1) {
+                        // Single strategy — existing behaviour, no orchestration needed.
+                        liveTradingCoordinatorService.process(
+                                account, strategies.getFirst(), SYMBOL, interval, marketData, featureStore);
+                    } else {
+                        // Multiple strategies on the same interval — orchestrator decides who acts.
+                        liveOrchestratorCoordinatorService.process(
+                                account, strategies, SYMBOL, interval, marketData, featureStore);
+                    }
 
                 } catch (Exception e) {
                     log.error(
-                            "Live strategy execution failed | userStrategyId={} symbol={} interval={}",
-                            userStrategy.getUserStrategyId(),
-                            SYMBOL,
-                            interval,
-                            e
+                            "Live strategy execution failed | accountId={} symbol={} interval={}",
+                            accountId, SYMBOL, interval, e
                     );
                 }
             }
@@ -318,7 +323,7 @@ public class BinanceWebSocketClient {
     }
 
     private boolean requiresFeatureComputation(String interval) {
-        return "1h".equals(interval) || "4h".equals(interval) || "15m".equals(interval);
+        return "5m".equals(interval) || "15m".equals(interval) || "1h".equals(interval) || "4h".equals(interval);
     }
 
     private void startWatchdog() {

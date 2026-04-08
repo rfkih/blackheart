@@ -4,7 +4,7 @@ import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.Users;
+import id.co.blackheart.model.Account;
 import lombok.Builder;
 import lombok.Data;
 
@@ -16,11 +16,11 @@ import java.util.UUID;
 @Builder
 public class StrategyContext {
 
-    private Users user;
+    private Account account;
     private String asset;
     private String interval;
 
-    private UUID userStrategyId;
+    private UUID accountStrategyId;
     private String strategyCode;
 
     private boolean allowLong;

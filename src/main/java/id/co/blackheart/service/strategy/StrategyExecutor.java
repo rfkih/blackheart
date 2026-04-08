@@ -1,8 +1,12 @@
 package id.co.blackheart.service.strategy;
 
-import id.co.blackheart.dto.strategy.StrategyContext;
+import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
+import id.co.blackheart.dto.strategy.StrategyRequirements;
 
 public interface StrategyExecutor {
-    StrategyDecision execute(StrategyContext context);
+
+    StrategyRequirements getRequirements();
+
+    StrategyDecision execute(EnrichedStrategyContext context);
 }

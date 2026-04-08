@@ -1,17 +1,18 @@
 package id.co.blackheart.service.trade;
 
-import id.co.blackheart.dto.strategy.StrategyContext;
+import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.StrategyDecision;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
-import id.co.blackheart.model.Users;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
-import static id.co.blackheart.util.TradeConstant.*;
+
+import static id.co.blackheart.util.TradeConstant.TradeType;
 
 @Service
 @RequiredArgsConstructor
@@ -22,7 +23,7 @@ public class TradeService {
 
     @Transactional
     public void binanceOpenLongMarketOrder(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             StrategyDecision decision,
             BigDecimal tradeAmount
     ) {
@@ -37,7 +38,7 @@ public class TradeService {
 
     @Transactional
     public void binanceOpenShortMarketOrder(
-            StrategyContext context,
+            EnrichedStrategyContext context,
             StrategyDecision decision,
             BigDecimal tradeAmount,
             String asset
@@ -53,38 +54,54 @@ public class TradeService {
 
     @Transactional
     public void binanceCloseLongPositionsMarketOrder(
-            Users user,
+            Account account,
             List<TradePosition> tradePositions,
             String asset
     ) {
-        tradeCloseService.closeGroupedPositions(user, tradePositions, asset, TradeType.LONG);
+        if (account == null || tradePositions == null || tradePositions.isEmpty()) {
+            return;
+        }
+
+        tradeCloseService.closeGroupedPositions(account, tradePositions, asset, TradeType.LONG);
     }
 
     @Transactional
     public void binanceCloseShortPositionsMarketOrder(
-            Users user,
+            Account account,
             List<TradePosition> tradePositions,
             String asset
     ) {
-        tradeCloseService.closeGroupedPositions(user, tradePositions, asset, TradeType.SHORT);
+        if (account == null || tradePositions == null || tradePositions.isEmpty()) {
+            return;
+        }
+
+        tradeCloseService.closeGroupedPositions(account, tradePositions, asset, TradeType.SHORT);
     }
 
     @Transactional
     public void binanceCloseLongPositionMarketOrder(
-            Users user,
+            Account account,
             TradePosition tradePosition,
             String asset
     ) {
-        tradeCloseService.closeSinglePosition(user, tradePosition, asset, TradeType.LONG);
+        if (account == null || tradePosition == null) {
+            return;
+        }
+
+        tradeCloseService.closeSinglePosition(account, tradePosition, asset, TradeType.LONG);
     }
 
     @Transactional
     public void binanceCloseShortPositionMarketOrder(
-            Users user,
+            Account account,
             TradePosition tradePosition,
             String asset
     ) {
-        tradeCloseService.closeSinglePosition(user, tradePosition, asset, TradeType.SHORT);
+        if (account == null || tradePosition == null) {
+            return;
+        }
+
+        tradeCloseService.closeSinglePosition(account, tradePosition, asset, TradeType.SHORT);
     }
 
     @Transactional
@@ -92,6 +109,10 @@ public class TradeService {
             Trades activeTrade,
             StrategyDecision decision
     ) {
+        if (activeTrade == null || decision == null) {
+            return;
+        }
+
         tradeCloseService.updateOpenTradePositions(activeTrade, decision);
     }
 }

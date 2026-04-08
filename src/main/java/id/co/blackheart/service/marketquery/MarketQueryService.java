@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+import static id.co.blackheart.util.DateTimeUtil.toEpochSeconds;
+
 @Service
 @RequiredArgsConstructor
 public class MarketQueryService {
@@ -22,7 +24,7 @@ public class MarketQueryService {
         return LatestPriceResponse.builder()
                 .symbol(symbol)
                 .price(price)
-                .updatedAt(updatedAt)
+                .updatedAt(toEpochSeconds(updatedAt))
                 .build();
     }
 }

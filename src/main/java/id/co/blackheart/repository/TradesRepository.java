@@ -21,47 +21,40 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
     @Query(value = """
             SELECT *
             FROM trades t
-            WHERE t.user_id = :userId
-              AND t.user_strategy_id = :userStrategyId
+            WHERE t.account_id = :accountId
+              AND t.account_strategy_id = :accountStrategyId
               AND t.asset = :asset
               AND t.interval = :interval
               AND t.status IN (:statuses)
             ORDER BY t.entry_time DESC
             """, nativeQuery = true)
     List<Trades> findAllActiveTrades(
-            @Param("userId") UUID userId,
-            @Param("userStrategyId") UUID userStrategyId,
+            @Param("accountId") UUID accountId,
+            @Param("accountStrategyId") UUID accountStrategyId,
             @Param("asset") String asset,
             @Param("interval") String interval,
             @Param("statuses") List<String> statuses
     );
 
-    @Query(value = """
-            SELECT COUNT(1)
-            FROM trades t
-            WHERE t.user_id = :userId
-              AND t.user_strategy_id = :userStrategyId
-              AND t.asset = :asset
-              AND t.interval = :interval
-              AND t.status IN (:statuses)
-            """, nativeQuery = true)
-    long countActiveTrades(
-            @Param("userId") UUID userId,
-            @Param("userStrategyId") UUID userStrategyId,
-            @Param("asset") String asset,
-            @Param("interval") String interval,
-            @Param("statuses") List<String> statuses
-    );
-
+    /**
+     * Finds active trades across a group of account strategies (for multi-strategy orchestrator routing).
+     */
     @Query(value = """
             SELECT *
             FROM trades t
-            WHERE t.asset = :asset
+            WHERE t.account_id = :accountId
+              AND t.account_strategy_id IN (:accountStrategyIds)
+              AND t.asset = :asset
+              AND t.interval = :interval
               AND t.status IN (:statuses)
             ORDER BY t.entry_time DESC
             """, nativeQuery = true)
-    List<Trades> findAllByAssetAndStatuses(
+    List<Trades> findAllActiveTradesForStrategies(
+            @Param("accountId") UUID accountId,
+            @Param("accountStrategyIds") List<UUID> accountStrategyIds,
             @Param("asset") String asset,
+            @Param("interval") String interval,
             @Param("statuses") List<String> statuses
     );
+
 }

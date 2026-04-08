@@ -9,17 +9,17 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class LivePnlSubscriptionRegistry {
 
-    private final Set<UUID> subscribedUserIds = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> subscribedAcccountId = ConcurrentHashMap.newKeySet();
 
-    public void addUser(UUID userId) {
-        subscribedUserIds.add(userId);
+    public void addAccount(UUID accountId) {
+        subscribedAcccountId.add(accountId);
     }
 
-    public void removeUser(UUID userId) {
-        subscribedUserIds.remove(userId);
+    public void removeAccount(UUID accountId) {
+        subscribedAcccountId.remove(accountId);
     }
 
-    public Set<UUID> getSubscribedUserIds() {
-        return subscribedUserIds;
+    public Set<UUID> getSubscribedAcccountId() {
+        return subscribedAcccountId;
     }
 }

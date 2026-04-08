@@ -105,6 +105,25 @@ public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long
             @Param("startTime") LocalDateTime startTime
     );
 
-
+    /**
+     * Returns records that are missing VCB indicator fields (bb_width IS NULL).
+     * Used by the backfill job to patch legacy FeatureStore rows that were
+     * computed before VCB indicators were added to TechnicalIndicatorService.
+     */
+    @Query(value = """
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND start_time BETWEEN :startTime AND :endTime
+      AND bb_width IS NULL
+    ORDER BY start_time ASC
+    """, nativeQuery = true)
+    List<FeatureStore> findMissingVcbIndicatorsInRange(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
 
 }
