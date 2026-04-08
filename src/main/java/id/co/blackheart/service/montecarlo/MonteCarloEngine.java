@@ -37,7 +37,6 @@ public class MonteCarloEngine {
             new BigDecimal("0.95")
     );
 
-    // ── Public types ──────────────────────────────────────────────────────────
 
     /**
      * Normalised per-trade return: realizedPnlAmount / backtestInitialCapital.
@@ -50,7 +49,6 @@ public class MonteCarloEngine {
      */
     public record TradeReturnSample(BigDecimal normalizedReturn, boolean win) {}
 
-    // ── Private simulation record ─────────────────────────────────────────────
 
     private record PathResult(
             int index,
@@ -93,7 +91,6 @@ public class MonteCarloEngine {
                 .toList();
     }
 
-    // ── Main simulation entry point ────────────────────────────────────────────
 
     /**
      * @param backtestInitialCapital The original backtest capital — used solely for scaling
@@ -120,16 +117,12 @@ public class MonteCarloEngine {
                 .multiply(ONE.subtract(request.getRuinThresholdPct().divide(HUNDRED, 12, RoundingMode.HALF_UP)))
                 .setScale(SCALE, RoundingMode.HALF_UP);
 
-        // Generate deterministic per-path seeds from the effective seed using SplittableRandom.
-        // SplittableRandom has better statistical independence between streams than java.util.Random
-        // (which uses a 48-bit LCG prone to correlation between differently-seeded instances).
         SplittableRandom seeder = new SplittableRandom(effectiveSeed);
         long[] pathSeeds = new long[n];
         for (int i = 0; i < n; i++) {
             pathSeeds[i] = seeder.nextLong();
         }
 
-        // ── First pass: all paths, no equity curve storage ────────────────────
         List<PathResult> results = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
             SplittableRandom rng = new SplittableRandom(pathSeeds[i]);
@@ -138,22 +131,18 @@ public class MonteCarloEngine {
                     request.getMaxAcceptableDrawdownPct(), false));
         }
 
-        // ── Identify representative paths ─────────────────────────────────────
         List<PathResult> byEquity = results.stream()
                 .sorted(Comparator.comparing(PathResult::finalEquity))
                 .toList();
 
         PathResult worstResult  = byEquity.getFirst();
-        // For even n, n/2 selects the upper of the two middle elements (slightly above median).
         PathResult medianResult = byEquity.get(n / 2);
         PathResult bestResult   = byEquity.get(n - 1);
 
-        // ── Second pass: replay 3 selected paths with full equity curve ────────
         MonteCarloPathSummary worstPath  = replayWithCurve("WORST",  worstResult,  samples, request, initialCapital, ruinFloor);
         MonteCarloPathSummary medianPath = replayWithCurve("MEDIAN", medianResult, samples, request, initialCapital, ruinFloor);
         MonteCarloPathSummary bestPath   = replayWithCurve("BEST",   bestResult,   samples, request, initialCapital, ruinFloor);
 
-        // ── Distribution statistics ───────────────────────────────────────────
         List<BigDecimal> sortedEquities = byEquity.stream().map(PathResult::finalEquity).toList();
 
         List<BigDecimal> sortedReturns = results.stream()
@@ -174,9 +163,6 @@ public class MonteCarloEngine {
 
         BigDecimal nd = BigDecimal.valueOf(n);
 
-        // ── Source trade statistics (always in original backtest capital units) ──
-        // Uses backtestInitialCapital, not MC initialCapital, so stats reflect
-        // the actual historical trade sizes regardless of any MC capital override.
         List<BigDecimal> absReturns = samples.stream()
                 .map(s -> s.normalizedReturn().multiply(backtestInitialCapital).setScale(SCALE, RoundingMode.HALF_UP))
                 .sorted()
@@ -232,7 +218,6 @@ public class MonteCarloEngine {
                 .build();
     }
 
-    // ── Path sample construction ──────────────────────────────────────────────
 
     private List<TradeReturnSample> buildPathSample(
             List<TradeReturnSample> source,
@@ -245,13 +230,11 @@ public class MonteCarloEngine {
             List<TradeReturnSample> shuffled = new ArrayList<>(source);
             shuffleInPlace(shuffled, rng);
             if (horizon != null && horizon < shuffled.size()) {
-                // Return a copy, not a subList view, to avoid accidental mutation of shuffled.
                 return new ArrayList<>(shuffled.subList(0, horizon));
             }
             return shuffled;
         }
 
-        // BOOTSTRAP_RETURNS: sample with replacement
         int n = horizon != null ? horizon : source.size();
         List<TradeReturnSample> sample = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
@@ -273,7 +256,6 @@ public class MonteCarloEngine {
         }
     }
 
-    // ── Core path simulation ──────────────────────────────────────────────────
 
     private PathResult simulatePath(
             int index,
@@ -294,16 +276,11 @@ public class MonteCarloEngine {
         if (captureEquityCurve) curve.add(equity);
 
         for (TradeReturnSample trade : trades) {
-            // Compounding: equity scales by (1 + normalizedReturn).
-            // Floored at zero — a real account cannot go negative.
             equity = equity
                     .multiply(ONE.add(trade.normalizedReturn()))
                     .max(ZERO)
                     .setScale(SCALE, RoundingMode.HALF_UP);
 
-            // Early termination: once equity is exactly zero, all subsequent trades
-            // produce 0 * (1+r) = 0 forever ("zombie path"). Stop here — the account
-            // is blown out and there is nothing left to simulate.
             if (equity.compareTo(ZERO) == 0) {
                 ruinBreached = true;
                 maxDrawdownPct = HUNDRED;
@@ -345,7 +322,6 @@ public class MonteCarloEngine {
                 ruinBreached, drawdownBreached, curve);
     }
 
-    // ── Replay selected path with curve capture ────────────────────────────────
 
     private MonteCarloPathSummary replayWithCurve(
             String label,
@@ -355,7 +331,6 @@ public class MonteCarloEngine {
             BigDecimal initialCapital,
             BigDecimal ruinFloor
     ) {
-        // Reproduce the exact same path by replaying with the same per-path seed.
         SplittableRandom rng = new SplittableRandom(result.seed());
         List<TradeReturnSample> sample = buildPathSample(samples, request, rng);
         PathResult withCurve = simulatePath(result.index(), result.seed(), sample,
@@ -373,7 +348,6 @@ public class MonteCarloEngine {
                 .build();
     }
 
-    // ── Statistics helpers ─────────────────────────────────────────────────────
 
     /**
      * Builds the percentile map from a sorted list of values.
@@ -388,7 +362,6 @@ public class MonteCarloEngine {
             List<BigDecimal> sortedValues,
             List<BigDecimal> customLevels
     ) {
-        // Use TreeSet<BigDecimal> for exact deduplication and natural sort order.
         TreeSet<BigDecimal> levelSet = new TreeSet<>(DEFAULT_PERCENTILE_LEVELS);
         if (customLevels != null) {
             customLevels.stream()

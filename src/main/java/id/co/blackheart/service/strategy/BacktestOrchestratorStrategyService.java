@@ -42,6 +42,7 @@ public class BacktestOrchestratorStrategyService implements StrategyExecutor {
 
     @Override
     public StrategyDecision execute(EnrichedStrategyContext context) {
+        log.info("start Orchestrator strategy execution");
         if (context == null) {
             return hold("Context is null", null);
         }

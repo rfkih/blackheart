@@ -42,8 +42,7 @@ public class MonteCarloService {
                     "BacktestRun must be COMPLETED. Current status: " + backtestRun.getStatus());
         }
 
-        List<BacktestTrade> trades = backtestTradeRepository
-                .findByBacktestRunIdAndStatus(request.getBacktestRunId(), "CLOSED");
+        List<BacktestTrade> trades = backtestTradeRepository.findByBacktestRunIdAndStatus(request.getBacktestRunId(), "CLOSED");
 
         if (trades == null || trades.size() < MIN_TRADES) {
             throw new IllegalStateException(
@@ -51,18 +50,14 @@ public class MonteCarloService {
                     + (trades == null ? 0 : trades.size()));
         }
 
-        // Use request capital if provided, otherwise inherit from the source backtest.
         BigDecimal initialCapital = request.getInitialCapital() != null
                 ? request.getInitialCapital()
                 : backtestRun.getInitialCapital();
 
-        // Determine simulation seed — echo it in the response for reproducibility.
         long effectiveSeed = request.getRandomSeed() != null
                 ? request.getRandomSeed()
                 : System.nanoTime();
 
-        // Normalise trade returns against backtest initial capital (not MC capital).
-        // This preserves proportional sizing semantics when MC capital differs.
         List<MonteCarloEngine.TradeReturnSample> samples =
                 monteCarloEngine.buildSamples(trades, backtestRun.getInitialCapital());
 
@@ -92,7 +87,6 @@ public class MonteCarloService {
         return response;
     }
 
-    // ── Persistence ────────────────────────────────────────────────────────────
 
     private void persistRun(
             MonteCarloResponse response,
@@ -144,8 +138,6 @@ public class MonteCarloService {
                     monteCarloRunId, e.getMessage());
         }
     }
-
-    // ── Validation ─────────────────────────────────────────────────────────────
 
     private void validateRequest(MonteCarloRequest request) {
         if (request == null) {

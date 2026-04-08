@@ -183,10 +183,6 @@ public class LsrV2StrategyService implements StrategyExecutor {
             return hold(context, "Regime veto: " + regime.name());
         }
 
-        // Order matters:
-        // 1) Higher conviction long sweep reclaim
-        // 2) Higher-frequency long continuation reclaim
-        // 3) Premium short exhaustion only
 
         if ((regime == RegimeState.BULL_TREND
                 || regime == RegimeState.RANGING
