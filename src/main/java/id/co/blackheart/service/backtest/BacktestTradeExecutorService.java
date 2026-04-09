@@ -225,7 +225,6 @@ public class BacktestTradeExecutorService {
                         : BigDecimal.ZERO)
                 .highestPriceDuringTrade(entryPrice)
                 .lowestPriceDuringTrade(entryPrice)
-                // ── Entry featureStore snapshot ────────────────────────────────
                 .entrySignalScore(decision.getSignalScore())
                 .entryConfidenceScore(decision.getConfidenceScore())
                 .entryTrendRegime(featureStore != null ? featureStore.getTrendRegime() : null)
@@ -245,7 +244,6 @@ public class BacktestTradeExecutorService {
                 .entryCloseLocationValue(featureStore != null ? featureStore.getCloseLocationValue() : null)
                 .entryIsBullishBreakout(featureStore != null ? featureStore.getIsBullishBreakout() : null)
                 .entryIsBearishBreakout(featureStore != null ? featureStore.getIsBearishBreakout() : null)
-                // ── Bias featureStore snapshot ─────────────────────────────────
                 .biasTrendRegime(biasFeatureStore != null ? biasFeatureStore.getTrendRegime() : null)
                 .biasAdx(biasFeatureStore != null ? biasFeatureStore.getAdx() : null)
                 .biasAtr(biasFeatureStore != null ? biasFeatureStore.getAtr() : null)
