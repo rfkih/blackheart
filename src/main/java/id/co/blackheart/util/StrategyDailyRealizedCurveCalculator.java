@@ -63,6 +63,7 @@ public class StrategyDailyRealizedCurveCalculator {
                 .closedPositionCount(defaultInt(aggregate.getClosedPositionCount()))
                 .winPositionCount(defaultInt(aggregate.getWinPositionCount()))
                 .lossPositionCount(defaultInt(aggregate.getLossPositionCount()))
+                .breakevenPositionCount(defaultInt(aggregate.getBreakevenPositionCount()))
                 .calculationVersion(CALCULATION_VERSION)
                 .createdAt(createdAt)
                 .updatedAt(now)

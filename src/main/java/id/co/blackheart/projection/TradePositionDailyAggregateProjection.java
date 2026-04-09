@@ -19,4 +19,6 @@ public interface TradePositionDailyAggregateProjection {
     Integer getWinPositionCount();
 
     Integer getLossPositionCount();
+
+    Integer getBreakevenPositionCount();
 }

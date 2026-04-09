@@ -60,7 +60,8 @@ public interface TradePositionRepository extends JpaRepository<TradePosition, UU
                 COALESCE(SUM(tp.entry_quote_qty), 0) AS dailyClosedNotional,
                 COUNT(*) AS closedPositionCount,
                 COALESCE(SUM(CASE WHEN tp.realized_pnl_amount > 0 THEN 1 ELSE 0 END), 0) AS winPositionCount,
-                COALESCE(SUM(CASE WHEN tp.realized_pnl_amount < 0 THEN 1 ELSE 0 END), 0) AS lossPositionCount
+                COALESCE(SUM(CASE WHEN tp.realized_pnl_amount < 0 THEN 1 ELSE 0 END), 0) AS lossPositionCount,
+                COALESCE(SUM(CASE WHEN tp.realized_pnl_amount = 0 THEN 1 ELSE 0 END), 0) AS breakevenPositionCount
             FROM trade_position tp
             WHERE tp.status = 'CLOSED'
               AND tp.exit_time >= :startDateTime

@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,6 +45,37 @@ public interface StrategyDailyRealizedCurveRepository extends JpaRepository<Stra
             ORDER BY account_strategy_id ASC
             """, nativeQuery = true)
     List<StrategyDailyRealizedCurve> findByCurveDate(
+            @Param("curveDate") LocalDate curveDate
+    );
+
+    /**
+     * Batch fetch: for each accountStrategyId in the list, returns the single most-recent
+     * curve row strictly before curveDate (i.e. the "previous" curve). Uses DISTINCT ON
+     * so the result has at most one row per accountStrategyId.
+     */
+    @Query(value = """
+            SELECT DISTINCT ON (account_strategy_id) *
+            FROM strategy_daily_realized_curve
+            WHERE account_strategy_id IN (:accountStrategyIds)
+              AND curve_date < :curveDate
+            ORDER BY account_strategy_id, curve_date DESC
+            """, nativeQuery = true)
+    List<StrategyDailyRealizedCurve> findLatestBeforeDateForStrategies(
+            @Param("accountStrategyIds") Collection<UUID> accountStrategyIds,
+            @Param("curveDate") LocalDate curveDate
+    );
+
+    /**
+     * Batch fetch: returns all curve rows for the given accountStrategyIds on exactly curveDate.
+     */
+    @Query(value = """
+            SELECT *
+            FROM strategy_daily_realized_curve
+            WHERE account_strategy_id IN (:accountStrategyIds)
+              AND curve_date = :curveDate
+            """, nativeQuery = true)
+    List<StrategyDailyRealizedCurve> findByAccountStrategyIdsAndCurveDate(
+            @Param("accountStrategyIds") Collection<UUID> accountStrategyIds,
             @Param("curveDate") LocalDate curveDate
     );
 }
