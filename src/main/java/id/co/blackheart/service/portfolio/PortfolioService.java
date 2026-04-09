@@ -39,7 +39,6 @@ public class PortfolioService {
     public void reloadAsset() {
         log.info("Starting portfolio reload...");
         List<Account> accountList = accountRepository.findByIsActive("1");
-        log.info("account {}", accountList);
         accountList.parallelStream().forEach(account -> {
             try {
                 log.info("account {}", account);

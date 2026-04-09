@@ -223,7 +223,6 @@ public class LsrStrategyService implements StrategyExecutor {
 
 
     private RegimeState classifyRegime(EnrichedStrategyContext context, FeatureStore fs) {
-        // 1) ATR spike override
         if (strategyHelper.hasValue(fs.getAtrRatio())
                 && fs.getAtrRatio().compareTo(ATR_RATIO_EXHAUSTION) >= 0) {
             return RegimeState.EXHAUSTION_SPIKE;
@@ -333,8 +332,6 @@ public class LsrStrategyService implements StrategyExecutor {
             return null;
         }
 
-        // Block entries when 4H bias is NEUTRAL — backtest showed NEUTRAL-bias trades had
-        // near-zero gross edge (WR 35%, avg -0.45R) vs BULL/BEAR bias (WR 50%+, net positive).
         FeatureStore biasFs = context.getBiasFeatureStore();
         if (biasFs != null && "NEUTRAL".equalsIgnoreCase(biasFs.getTrendRegime())) {
             return null;

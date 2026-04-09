@@ -1,10 +1,8 @@
 package id.co.blackheart.logging;
 
-
 import id.co.blackheart.config.RuntimeHintsConfig;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Configuration;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpInputMessage;
@@ -15,26 +13,22 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestBodyAdviceAd
 import java.lang.reflect.Type;
 
 @RestControllerAdvice
-@Configuration
 @ImportRuntimeHints(value = {RuntimeHintsConfig.class})
+@RequiredArgsConstructor
 public class CustomRequestBodyAdviceAdapter extends RequestBodyAdviceAdapter {
+
     private final LoggingService loggingService;
-
-    @Autowired
-    private HttpServletRequest httpServletRequest;
-
-    public CustomRequestBodyAdviceAdapter(LoggingService loggingService, HttpServletRequest httpServletRequest) {
-        this.loggingService = loggingService;
-        this.httpServletRequest = httpServletRequest;
-    }
+    private final HttpServletRequest httpServletRequest;
 
     @Override
-    public boolean supports(MethodParameter methodParameter, Type type, Class<? extends HttpMessageConverter<?>> aClass) {
+    public boolean supports(MethodParameter methodParameter, Type type,
+                            Class<? extends HttpMessageConverter<?>> converterType) {
         return true;
     }
 
     @Override
-    public Object afterBodyRead(Object body, HttpInputMessage inputMessage, MethodParameter parameter, Type targetType, Class<? extends HttpMessageConverter<?>> converterType) {
+    public Object afterBodyRead(Object body, HttpInputMessage inputMessage, MethodParameter parameter,
+                                Type targetType, Class<? extends HttpMessageConverter<?>> converterType) {
         loggingService.logRequest(httpServletRequest, body);
         return super.afterBodyRead(body, inputMessage, parameter, targetType, converterType);
     }
