@@ -27,7 +27,7 @@ public class PortofolioController {
     }
 
     @GetMapping("/reload")
-    public ResponseEntity<ResponseDto> portofolioUpdate() throws Exception {
+    public ResponseEntity<ResponseDto> portofolioUpdate() {
         portofolioService.reloadAsset();
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())

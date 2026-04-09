@@ -1,6 +1,6 @@
 package id.co.blackheart.logging;
 
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.ServerHttpRequest;
@@ -11,9 +11,10 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
 @RestControllerAdvice
+@RequiredArgsConstructor
 public class CustomResponseBodyAdviceAdapter implements ResponseBodyAdvice<Object> {
-    @Autowired
-    LoggingService loggingService;
+
+    private final LoggingService loggingService;
 
     @Override
     public boolean supports(MethodParameter returnType, Class converterType) {
@@ -24,12 +25,9 @@ public class CustomResponseBodyAdviceAdapter implements ResponseBodyAdvice<Objec
     public Object beforeBodyWrite(Object body, MethodParameter returnType,
                                   MediaType selectedContentType, Class selectedConverterType,
                                   ServerHttpRequest request, ServerHttpResponse response) {
-        if (request instanceof ServletServerHttpRequest req && response instanceof ServletServerHttpResponse res) {
-            loggingService.logResponse(
-                    (req).getServletRequest(),
-                    (res).getServletResponse(),
-                    body
-            );
+        if (request instanceof ServletServerHttpRequest req
+                && response instanceof ServletServerHttpResponse res) {
+            loggingService.logResponse(req.getServletRequest(), res.getServletResponse(), body);
         }
         return body;
     }

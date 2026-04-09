@@ -6,4 +6,7 @@ public class ServiceUnavailableException extends RuntimeException {
         super(message);
     }
 
+    public ServiceUnavailableException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

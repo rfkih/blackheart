@@ -8,6 +8,7 @@ import lombok.Setter;
 public class SchedulerRequest {
     String schedulerId;
     String jobType;
+    String jobName;
     String mode;
     Long intervalMs;
     Integer hour;
