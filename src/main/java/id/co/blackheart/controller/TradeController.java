@@ -7,8 +7,8 @@ import id.co.blackheart.dto.response.*;
 import id.co.blackheart.service.trade.TradeExecutionService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,11 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping(value = "v1/trade")
 @Slf4j
+@RequiredArgsConstructor
 @Tag(name = "TradeController", description = "Controller for Trade Execution")
 public class TradeController {
 
-    @Autowired
-    private TradeExecutionService tradeExecutionService;
+    private final TradeExecutionService tradeExecutionService;
 
 
     @PostMapping("/place-market-order-binance")

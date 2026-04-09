@@ -281,14 +281,10 @@ public class BinanceWebSocketClient {
             List<AccountStrategy> activeStrategies = accountStrategyRepository
                     .findByEnabledTrueAndIntervalName(interval);
 
-            // Batch-fetch all active accounts in one query, then index by accountId.
             Map<UUID, Account> activeAccountMap = accountRepository.findByIsActive("1")
                     .stream()
                     .collect(Collectors.toMap(Account::getAccountId, a -> a));
 
-            // Group strategies by accountId. Accounts with 2+ strategies on the same
-            // interval are routed through the orchestrator so only the first entry signal
-            // fires; active trades are then managed exclusively by the owning strategy.
             Map<UUID, List<AccountStrategy>> byAccount = activeStrategies.stream()
                     .collect(Collectors.groupingBy(AccountStrategy::getAccountId));
 
@@ -303,13 +299,9 @@ public class BinanceWebSocketClient {
 
                 try {
                     if (strategies.size() == 1) {
-                        // Single strategy — existing behaviour, no orchestration needed.
-                        liveTradingCoordinatorService.process(
-                                account, strategies.getFirst(), SYMBOL, interval, marketData, featureStore);
+                        liveTradingCoordinatorService.process(account, strategies.getFirst(), SYMBOL, interval, marketData, featureStore);
                     } else {
-                        // Multiple strategies on the same interval — orchestrator decides who acts.
-                        liveOrchestratorCoordinatorService.process(
-                                account, strategies, SYMBOL, interval, marketData, featureStore);
+                        liveOrchestratorCoordinatorService.process(account, strategies, SYMBOL, interval, marketData, featureStore);
                     }
 
                 } catch (Exception e) {
@@ -325,8 +317,6 @@ public class BinanceWebSocketClient {
     }
 
     private boolean requiresFeatureComputation(String interval) {
-        // All intervals that reach this method are already in ACCEPTED_INTERVALS,
-        // so feature computation is always required here. Method kept for clarity.
         return ACCEPTED_INTERVALS.contains(interval);
     }
 

@@ -1,7 +1,5 @@
 package id.co.blackheart.dto.response;
 
-
-
 import id.co.blackheart.util.ResponseCode;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -15,8 +13,14 @@ import java.io.Serializable;
 @Builder
 @Data
 public class ResponseDto implements Serializable {
+
     private String responseCode;
+
     @Builder.Default
     private String responseDesc = ResponseCode.SUCCESS.getDescription();
-    private transient Object data;
+
+    private Object data;
+
+    /** Populated only on error responses. Null on success. */
+    private String errorMessage;
 }
