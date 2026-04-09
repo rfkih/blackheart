@@ -73,21 +73,33 @@ public class LsrStrategyService implements StrategyExecutor {
     private static final BigDecimal STOP_ATR_BUFFER = new BigDecimal("0.20");
     private static final BigDecimal MAX_RISK_PCT = new BigDecimal("0.03");
 
-    private static final BigDecimal TP1_R_LONG_SWEEP = new BigDecimal("1.60");
-    private static final BigDecimal TP1_R_LONG_CONTINUATION = new BigDecimal("1.40");
-    private static final BigDecimal TP1_R_SHORT = new BigDecimal("1.20");
+    // ── TP ratios raised to overcome round-trip fee drag (~0.15% of notional).
+    // Previous: SWEEP 1.60R, CONT 1.40R, SHORT 1.20R — average winner barely cleared fees.
+    // New targets ensure each winning trade generates meaningful net profit above fees.
+    private static final BigDecimal TP1_R_LONG_SWEEP = new BigDecimal("2.00");
+    private static final BigDecimal TP1_R_LONG_CONTINUATION = new BigDecimal("1.80");
+    private static final BigDecimal TP1_R_SHORT = new BigDecimal("1.60");
 
     private static final BigDecimal BE_TRIGGER_R_LONG_SWEEP = new BigDecimal("0.90");
     private static final BigDecimal BE_TRIGGER_R_LONG_CONTINUATION = new BigDecimal("0.80");
     private static final BigDecimal BE_TRIGGER_R_SHORT = new BigDecimal("0.60");
 
-    private static final int TIME_STOP_BARS_LONG_SWEEP = 10;
-    private static final int TIME_STOP_BARS_LONG_CONTINUATION = 8;
-    private static final int TIME_STOP_BARS_SHORT = 8;
+    // ── Fee buffer applied when moving SL to "break-even".
+    // Setting SL to exact entry (0R) always produces a net loss = entry fee + exit fee.
+    // Moving SL to entry + 0.20R ensures the exit generates enough gross profit to cover fees.
+    private static final BigDecimal BE_FEE_BUFFER_R = new BigDecimal("0.20");
 
-    private static final BigDecimal TIME_STOP_MIN_R_LONG_SWEEP = new BigDecimal("0.15");
-    private static final BigDecimal TIME_STOP_MIN_R_LONG_CONTINUATION = new BigDecimal("0.10");
-    private static final BigDecimal TIME_STOP_MIN_R_SHORT = new BigDecimal("0.08");
+    // ── Time-stop bars extended to give trades more room to reach the raised TP targets.
+    private static final int TIME_STOP_BARS_LONG_SWEEP = 14;
+    private static final int TIME_STOP_BARS_LONG_CONTINUATION = 12;
+    private static final int TIME_STOP_BARS_SHORT = 10;
+
+    // ── Time-stop minimum R raised from 0.08–0.15R to 0.50–0.60R.
+    // At tight stops (riskPerUnit ≈ 1% of entry), 0.10R profit = ~$0.09 — less than the ~$0.135 fee.
+    // 0.50–0.60R ensures time-stopped exits always generate net profit above the fee cost.
+    private static final BigDecimal TIME_STOP_MIN_R_LONG_SWEEP = new BigDecimal("0.60");
+    private static final BigDecimal TIME_STOP_MIN_R_LONG_CONTINUATION = new BigDecimal("0.50");
+    private static final BigDecimal TIME_STOP_MIN_R_SHORT = new BigDecimal("0.50");
 
     private static final BigDecimal SHORT_NOTIONAL_MULTIPLIER = new BigDecimal("0.70");
     private static final BigDecimal LONG_CONTINUATION_NOTIONAL_MULTIPLIER = new BigDecimal("0.85");
@@ -102,7 +114,10 @@ public class LsrStrategyService implements StrategyExecutor {
     private static final BigDecimal LONG_SWEEP_RVOL_MIN = new BigDecimal("0.95");
     private static final BigDecimal LONG_SWEEP_BODY_MIN = new BigDecimal("0.28");
     private static final BigDecimal LONG_SWEEP_CLV_MIN = new BigDecimal("0.58");
-    private static final BigDecimal MIN_SIGNAL_SCORE_LONG_SWEEP = new BigDecimal("0.48");
+    // ── Raised from 0.48 → 0.72. Backtest showed trades below 0.72 had near-zero gross edge;
+    // fees turned them all net-negative. Only high-conviction sweeps (score ≥ 0.72, conf ≥ 0.75) are kept.
+    private static final BigDecimal MIN_SIGNAL_SCORE_LONG_SWEEP = new BigDecimal("0.72");
+    private static final BigDecimal MIN_CONFIDENCE_SCORE_LONG_SWEEP = new BigDecimal("0.75");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Long continuation reclaim setup
@@ -113,7 +128,9 @@ public class LsrStrategyService implements StrategyExecutor {
     private static final BigDecimal LONG_CONT_BODY_MIN = new BigDecimal("0.24");
     private static final BigDecimal LONG_CONT_CLV_MIN = new BigDecimal("0.60");
     private static final BigDecimal LONG_CONT_DONCHIAN_BUFFER_ATR = new BigDecimal("0.10");
-    private static final BigDecimal MIN_SIGNAL_SCORE_LONG_CONT = new BigDecimal("0.46");
+    // ── Raised from 0.46 → 0.72, same rationale as sweep.
+    private static final BigDecimal MIN_SIGNAL_SCORE_LONG_CONT = new BigDecimal("0.72");
+    private static final BigDecimal MIN_CONFIDENCE_SCORE_LONG_CONT = new BigDecimal("0.75");
 
     // ─────────────────────────────────────────────────────────────────────────
     // Premium short exhaustion setup
@@ -312,7 +329,14 @@ public class LsrStrategyService implements StrategyExecutor {
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore, false);
 
         if (signalScore.compareTo(MIN_SIGNAL_SCORE_LONG_SWEEP) < 0
-                || confidenceScore.compareTo(MIN_SIGNAL_SCORE_LONG_SWEEP) < 0) {
+                || confidenceScore.compareTo(MIN_CONFIDENCE_SCORE_LONG_SWEEP) < 0) {
+            return null;
+        }
+
+        // Block entries when 4H bias is NEUTRAL — backtest showed NEUTRAL-bias trades had
+        // near-zero gross edge (WR 35%, avg -0.45R) vs BULL/BEAR bias (WR 50%+, net positive).
+        FeatureStore biasFs = context.getBiasFeatureStore();
+        if (biasFs != null && "NEUTRAL".equalsIgnoreCase(biasFs.getTrendRegime())) {
             return null;
         }
 
@@ -404,7 +428,12 @@ public class LsrStrategyService implements StrategyExecutor {
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore, false);
 
         if (signalScore.compareTo(MIN_SIGNAL_SCORE_LONG_CONT) < 0
-                || confidenceScore.compareTo(MIN_SIGNAL_SCORE_LONG_CONT) < 0) {
+                || confidenceScore.compareTo(MIN_CONFIDENCE_SCORE_LONG_CONT) < 0) {
+            return null;
+        }
+
+        FeatureStore biasFsCont = context.getBiasFeatureStore();
+        if (biasFsCont != null && "NEUTRAL".equalsIgnoreCase(biasFsCont.getTrendRegime())) {
             return null;
         }
 
@@ -618,7 +647,8 @@ public class LsrStrategyService implements StrategyExecutor {
         if (close.subtract(entry).compareTo(threshold) < 0) {
             return hold(context, "Long BE not triggered");
         }
-        if (curStop.compareTo(entry) >= 0) {
+        BigDecimal longBeStop = entry.add(risk.multiply(BE_FEE_BUFFER_R));
+        if (curStop.compareTo(longBeStop) >= 0) {
             return hold(context, "Long BE already set");
         }
 
@@ -631,8 +661,8 @@ public class LsrStrategyService implements StrategyExecutor {
                 .signalType(SIGNAL_TYPE_MANAGEMENT)
                 .setupType(SETUP_LONG_BE)
                 .side(SIDE_LONG)
-                .reason("Move long stop to BE")
-                .stopLossPrice(entry)
+                .reason("Move long stop to BE+fee buffer")
+                .stopLossPrice(longBeStop)
                 .takeProfitPrice1(snap.getTakeProfitPrice())
                 .targetPositionRole(TARGET_ALL)
                 .decisionTime(LocalDateTime.now())
@@ -677,7 +707,8 @@ public class LsrStrategyService implements StrategyExecutor {
         if (entry.subtract(close).compareTo(threshold) < 0) {
             return hold(context, "Short BE not triggered");
         }
-        if (curStop.compareTo(entry) <= 0) {
+        BigDecimal shortBeStop = entry.subtract(risk.multiply(BE_FEE_BUFFER_R));
+        if (curStop.compareTo(shortBeStop) <= 0) {
             return hold(context, "Short BE already set");
         }
 
@@ -690,8 +721,8 @@ public class LsrStrategyService implements StrategyExecutor {
                 .signalType(SIGNAL_TYPE_MANAGEMENT)
                 .setupType(SETUP_SHORT_BE)
                 .side(SIDE_SHORT)
-                .reason("Move short stop to BE")
-                .stopLossPrice(entry)
+                .reason("Move short stop to BE+fee buffer")
+                .stopLossPrice(shortBeStop)
                 .takeProfitPrice1(snap.getTakeProfitPrice())
                 .targetPositionRole(TARGET_ALL)
                 .decisionTime(LocalDateTime.now())
