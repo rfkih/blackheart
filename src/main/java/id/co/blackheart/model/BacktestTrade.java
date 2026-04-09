@@ -304,42 +304,4 @@ public class BacktestTrade {
     @Column(name = "updated_time", nullable = false)
     private LocalDateTime updatedTime;
 
-    // ─────────────────────────────────────────────────────────────
-    // Helper methods
-    // ─────────────────────────────────────────────────────────────
-
-    @PrePersist
-    @PreUpdate
-    public void normalizeDerivedFields() {
-        if (entryTime != null && exitTime != null) {
-            this.holdingMinutes = Duration.between(entryTime, exitTime).toMinutes();
-        }
-
-        if (avgEntryPrice != null
-                && initialStopLossPrice != null
-                && totalEntryQty != null
-                && totalEntryQty.compareTo(BigDecimal.ZERO) > 0) {
-
-            BigDecimal riskPerUnit = side != null && side.equalsIgnoreCase("SHORT")
-                    ? initialStopLossPrice.subtract(avgEntryPrice)
-                    : avgEntryPrice.subtract(initialStopLossPrice);
-
-            this.initialRiskPerUnit = riskPerUnit;
-
-            if (riskPerUnit.compareTo(BigDecimal.ZERO) > 0) {
-                this.initialRiskAmount = riskPerUnit.multiply(totalEntryQty);
-
-                if (avgEntryPrice.compareTo(BigDecimal.ZERO) > 0) {
-                    this.initialRiskPercent = riskPerUnit
-                            .divide(avgEntryPrice, 8, BigDecimal.ROUND_HALF_UP)
-                            .multiply(new BigDecimal("100"));
-                }
-
-                if (realizedPnlAmount != null) {
-                    this.realizedRMultiple = realizedPnlAmount
-                            .divide(initialRiskAmount, 8, BigDecimal.ROUND_HALF_UP);
-                }
-            }
-        }
-    }
 }

@@ -21,4 +21,5 @@ public class DailyPositionAggregateDto {
     private Integer closedPositionCount;
     private Integer winPositionCount;
     private Integer lossPositionCount;
+    private Integer breakevenPositionCount;
 }

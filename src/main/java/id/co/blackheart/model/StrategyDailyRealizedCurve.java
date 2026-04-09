@@ -59,6 +59,9 @@ public class StrategyDailyRealizedCurve {
     @Column(name = "loss_position_count", nullable = false)
     private Integer lossPositionCount;
 
+    @Column(name = "breakeven_position_count", nullable = false)
+    private Integer breakevenPositionCount;
+
     @Column(name = "calculation_version", nullable = false, length = 20)
     private String calculationVersion;
 

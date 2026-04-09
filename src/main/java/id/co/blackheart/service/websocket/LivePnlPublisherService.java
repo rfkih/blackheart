@@ -19,11 +19,11 @@ public class LivePnlPublisherService {
     private final LivePnlSubscriptionRegistry subscriptionRegistry;
     private final TradePnlQueryService tradePnlQueryService;
 
-    @Scheduled(fixedRate = 1000)
+    @Scheduled(fixedDelay = 1000)
     public void publishLivePnl() {
         for (UUID accountId : subscriptionRegistry.getSubscribedAcccountId()) {
             try {
-                log.info("accountId : {}", accountId);
+                log.debug("Publishing live PnL | accountId={}", accountId);
                 ActiveTradePnlResponse response = tradePnlQueryService.getCurrentActiveTradePnl(accountId);
                 messagingTemplate.convertAndSend("/topic/pnl/" + accountId, response);
             } catch (Exception e) {

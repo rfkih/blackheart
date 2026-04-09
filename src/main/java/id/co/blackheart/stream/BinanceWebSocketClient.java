@@ -20,6 +20,7 @@ import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -127,7 +128,10 @@ public class BinanceWebSocketClient {
                 URI.create(BINANCE_WS_URL),
                 session -> session.receive()
                         .map(WebSocketMessage::getPayloadAsText)
-                        .flatMap(this::handleMessage)
+                        .flatMap(msg -> Mono.fromCallable(() -> {
+                            handleMessage(msg);
+                            return msg;
+                        }).subscribeOn(Schedulers.boundedElastic()).then())
                         .onErrorResume(error -> {
                             log.error("WebSocket session error", error);
                             return Mono.empty();
@@ -152,7 +156,7 @@ public class BinanceWebSocketClient {
         ));
     }
 
-    private Mono<Void> handleMessage(String message) {
+    private void handleMessage(String message) {
         try {
             lastMessageTime = Instant.now();
 
@@ -163,27 +167,23 @@ public class BinanceWebSocketClient {
             String interval = kline.getString("i");
             boolean finalCandle = kline.getBoolean("x");
 
-            BigDecimal latestPrice =  new BigDecimal(kline.getString("c"));
+            BigDecimal latestPrice = new BigDecimal(kline.getString("c"));
 
             if ("5m".equals(interval)) {
                 cacheService.saveLatestPrice(SYMBOL, latestPrice, LocalDateTime.now());
                 liveTradeListenerService.process(SYMBOL, latestPrice);
             }
 
-
             if (!isProcessable(interval, finalCandle)) {
-                return Mono.empty();
+                return;
             }
 
-
-
             MarketData incomingMarketData = buildMarketData(container, kline, interval);
-
 
             MarketData latestBeforeInsert = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
 
             if (isDuplicateAgainstLatest(latestBeforeInsert, incomingMarketData)) {
-                return Mono.empty();
+                return;
             }
 
             marketDataService.backfillMissingCandlesBeforeInsert(
@@ -201,17 +201,14 @@ public class BinanceWebSocketClient {
 
             if (!exists) {
                 persistMarketData(interval, incomingMarketData);
+                processPostPersist(interval, incomingMarketData, incomingMarketData.getStartTime());
+            } else {
+                log.debug("Candle startTime already exists, skipping strategy execution | interval={} startTime={}",
+                        interval, incomingMarketData.getStartTime());
             }
-
-
-
-            processPostPersist(interval, incomingMarketData, incomingMarketData.getStartTime());
-
-            return Mono.empty();
 
         } catch (Exception e) {
             log.error("Failed to process websocket message: {}", message, e);
-            return Mono.empty();
         }
     }
 
@@ -284,6 +281,11 @@ public class BinanceWebSocketClient {
             List<AccountStrategy> activeStrategies = accountStrategyRepository
                     .findByEnabledTrueAndIntervalName(interval);
 
+            // Batch-fetch all active accounts in one query, then index by accountId.
+            Map<UUID, Account> activeAccountMap = accountRepository.findByIsActive("1")
+                    .stream()
+                    .collect(Collectors.toMap(Account::getAccountId, a -> a));
+
             // Group strategies by accountId. Accounts with 2+ strategies on the same
             // interval are routed through the orchestrator so only the first entry signal
             // fires; active trades are then managed exclusively by the owning strategy.
@@ -294,12 +296,12 @@ public class BinanceWebSocketClient {
                 UUID accountId = entry.getKey();
                 List<AccountStrategy> strategies = entry.getValue();
 
-                try {
-                    Account account = accountRepository.findByAccountId(accountId).orElse(null);
-                    if (account == null || !"1".equals(account.getIsActive())) {
-                        continue;
-                    }
+                Account account = activeAccountMap.get(accountId);
+                if (account == null) {
+                    continue;
+                }
 
+                try {
                     if (strategies.size() == 1) {
                         // Single strategy — existing behaviour, no orchestration needed.
                         liveTradingCoordinatorService.process(
@@ -323,7 +325,9 @@ public class BinanceWebSocketClient {
     }
 
     private boolean requiresFeatureComputation(String interval) {
-        return "5m".equals(interval) || "15m".equals(interval) || "1h".equals(interval) || "4h".equals(interval);
+        // All intervals that reach this method are already in ACCEPTED_INTERVALS,
+        // so feature computation is always required here. Method kept for clarity.
+        return ACCEPTED_INTERVALS.contains(interval);
     }
 
     private void startWatchdog() {
