@@ -41,8 +41,6 @@ public class ExecutionTestService implements StrategyExecutor {
     private static final String TARGET_RUNNER = "RUNNER";
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
-    private static final BigDecimal DEFAULT_ATR = BigDecimal.ONE;
-
     private static final BigDecimal LONG_STOP_ATR = new BigDecimal("1.5");
     private static final BigDecimal SHORT_STOP_ATR = new BigDecimal("1.5");
 
@@ -81,6 +79,9 @@ public class ExecutionTestService implements StrategyExecutor {
         }
 
         BigDecimal atr = resolveAtr(featureStore);
+        if (atr == null) {
+            return hold(context, "ATR unavailable, cannot compute trade levels");
+        }
         String exitStructure = resolveExitStructure(context);
 
         UUID activeTradeId = context.getExecutionMetadata("activeTradeId", UUID.class);
@@ -214,6 +215,7 @@ public class ExecutionTestService implements StrategyExecutor {
                         .side(SIDE_LONG)
                         .exitReason(EXIT_TEST_MANUAL_CLOSE)
                         .reason("Execution test close long")
+                        .targetPositionRole(TARGET_ALL)
                         .decisionTime(LocalDateTime.now())
                         .tags(List.of("TEST", "EXIT", "LONG"))
                         .build();
@@ -235,6 +237,7 @@ public class ExecutionTestService implements StrategyExecutor {
                         .side(SIDE_SHORT)
                         .exitReason(EXIT_TEST_MANUAL_CLOSE)
                         .reason("Execution test close short")
+                        .targetPositionRole(TARGET_ALL)
                         .decisionTime(LocalDateTime.now())
                         .tags(List.of("TEST", "EXIT", "SHORT"))
                         .build();
@@ -267,9 +270,10 @@ public class ExecutionTestService implements StrategyExecutor {
         BigDecimal breakEvenStop = entryPrice;
         BigDecimal trailingStop = closePrice.subtract(atr.multiply(TRAIL_DISTANCE_ATR));
 
+        boolean trailActive = move.compareTo(atr.multiply(TRAIL_TRIGGER_ATR)) >= 0;
         BigDecimal updatedStop = maxNonNull(currentStop, breakEvenStop);
 
-        if (move.compareTo(atr.multiply(TRAIL_TRIGGER_ATR)) >= 0) {
+        if (trailActive) {
             updatedStop = maxNonNull(updatedStop, trailingStop);
         }
 
@@ -296,7 +300,7 @@ public class ExecutionTestService implements StrategyExecutor {
                 .side(SIDE_LONG)
                 .reason("Execution test long management update")
                 .stopLossPrice(updatedStop)
-                .trailingStopPrice(updatedStop)
+                .trailingStopPrice(trailActive ? trailingStop : null)
                 .takeProfitPrice1(resolveManagementTp1(positionSnapshot, updatedTp))
                 .takeProfitPrice2(resolveManagementTp2(positionSnapshot, updatedTp))
                 .takeProfitPrice3(null)
@@ -333,9 +337,10 @@ public class ExecutionTestService implements StrategyExecutor {
         BigDecimal breakEvenStop = entryPrice;
         BigDecimal trailingStop = closePrice.add(atr.multiply(TRAIL_DISTANCE_ATR));
 
+        boolean trailActive = move.compareTo(atr.multiply(TRAIL_TRIGGER_ATR)) >= 0;
         BigDecimal updatedStop = minNonNull(currentStop, breakEvenStop);
 
-        if (move.compareTo(atr.multiply(TRAIL_TRIGGER_ATR)) >= 0) {
+        if (trailActive) {
             updatedStop = minNonNull(updatedStop, trailingStop);
         }
 
@@ -362,7 +367,7 @@ public class ExecutionTestService implements StrategyExecutor {
                 .side(SIDE_SHORT)
                 .reason("Execution test short management update")
                 .stopLossPrice(updatedStop)
-                .trailingStopPrice(updatedStop)
+                .trailingStopPrice(trailActive ? trailingStop : null)
                 .takeProfitPrice1(resolveManagementTp1(positionSnapshot, updatedTp))
                 .takeProfitPrice2(resolveManagementTp2(positionSnapshot, updatedTp))
                 .takeProfitPrice3(null)
@@ -402,7 +407,7 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private BigDecimal resolveTakeProfit2(String exitStructure, BigDecimal tp2) {
-        return EXIT_STRUCTURE_TP1_TP2_RUNNER.equalsIgnoreCase(exitStructure) ? tp2 : null;
+        return EXIT_STRUCTURE_TP1_TP2_RUNNER.equals(exitStructure) ? tp2 : null;
     }
 
     private String resolveTargetRole(PositionSnapshot snapshot, String exitStructure) {
@@ -446,7 +451,7 @@ public class ExecutionTestService implements StrategyExecutor {
                 && featureStore.getAtr().compareTo(BigDecimal.ZERO) > 0) {
             return featureStore.getAtr();
         }
-        return DEFAULT_ATR;
+        return null;
     }
 
     private BigDecimal maxNonNull(BigDecimal a, BigDecimal b) {
