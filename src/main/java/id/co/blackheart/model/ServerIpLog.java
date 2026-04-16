@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Entity
 @Table(name = "server_ip_log")
@@ -12,9 +13,11 @@ import java.time.LocalDateTime;
 @Setter
 public class ServerIpLog {
 
+
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue(strategy = GenerationType.UUID)
+    @Column(name = "server_ip_log_id", nullable = false, updatable = false)
+    private UUID serverIpLogId;
 
     @Column(name = "ip_address", nullable = false)
     private String ipAddress;

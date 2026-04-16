@@ -51,6 +51,30 @@ public class PortfolioService {
         log.info("✅ Portfolio Update Completed!");
     }
 
+    public java.util.Map<String, String> checkBinanceConnectivity() {
+        List<Account> accountList = accountRepository.findByIsActive("1");
+        java.util.Map<String, String> result = new java.util.LinkedHashMap<>();
+
+        for (Account account : accountList) {
+            try {
+                BinanceAssetRequest request = new BinanceAssetRequest();
+                request.setApiKey(account.getApiKey());
+                request.setApiSecret(account.getApiSecret());
+                request.setRecvWindow(RECV_WINDOW);
+                binanceClientService.getBinanceAssetDetails(request);
+                result.put(account.getUsername(), "OK");
+            } catch (Exception e) {
+                String msg = e.getMessage();
+                if (msg != null && msg.length() > 120) {
+                    msg = msg.substring(0, 120) + "...";
+                }
+                result.put(account.getUsername(), "ERROR: " + msg);
+            }
+        }
+
+        return result;
+    }
+
     public Portfolio updateAndGetTokocryptoAssetBalance(String asset, Account user) throws JsonProcessingException {
         log.info("update Data for User: {} and Asset: {}", user.getUsername(), asset);
 
