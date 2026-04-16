@@ -30,6 +30,7 @@ public class TradeOpenService {
     private final TradePositionRepository tradePositionRepository;
     private final TradeExecutionService tradeExecutionService;
     private final TradeStateSyncService tradeStateSyncService;
+    private final TradeExecutionLogService tradeExecutionLogService;
 
     public void openMarketOrder(
             EnrichedStrategyContext context,
@@ -56,6 +57,9 @@ public class TradeOpenService {
             String asset
     ) {
         Trades persistedTrade = null;
+        String strategyName = resolveStrategyName(context, decision);
+        String entryReason = decision != null ? decision.getDecisionType() != null
+                ? decision.getDecisionType().name() : null : null;
 
         try {
             PreTradeValidationResult validation = validateBeforeOpen(
@@ -152,10 +156,21 @@ public class TradeOpenService {
                     now
             );
 
+            tradeExecutionLogService.logOpenSuccess(
+                    context.getAccount(), asset, strategyName, tradeType.name(),
+                    entryReason, persistedTrade.getTradeId()
+            );
+
             return persistedTrade.getTradeId();
 
         } catch (Exception e) {
             log.error("❌ Error placing {} parent trade for {}", tradeType, asset, e);
+
+            UUID failedTradeId = persistedTrade != null ? persistedTrade.getTradeId() : null;
+            tradeExecutionLogService.logOpenFailure(
+                    context != null ? context.getAccount() : null,
+                    asset, strategyName, tradeType.name(), entryReason, failedTradeId, e.getMessage()
+            );
 
             if (persistedTrade != null) {
                 persistedTrade.setTradeMode("UNALLOCATED");
