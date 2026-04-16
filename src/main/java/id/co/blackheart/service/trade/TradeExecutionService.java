@@ -28,8 +28,8 @@ public class TradeExecutionService {
             }
 
             return response;
-        }catch (Exception e) {
-            log.info("[binanceMarketOrder] Request failed: " + e.getMessage());
+        } catch (Exception e) {
+            log.error("[binanceMarketOrder] Request failed: {}", e.getMessage(), e);
             throw new RuntimeException(e);
         }
     }
@@ -38,15 +38,17 @@ public class TradeExecutionService {
     public BinanceOrderDetailResponse getOrderDetailBinance(BinanceOrderDetailRequest orderDetailRequest) {
         try {
             BinanceOrderDetailResponse response = binanceClientService.orderDetailBinance(orderDetailRequest);
-            log.info("orderDetailBinance : " + response);
+            log.info("orderDetailBinance : {}", response);
 
             if (response == null) {
                 log.warn("⚠No data received for ID Detail : {}", orderDetailRequest.getOrderId());
-                throw new Exception("No data Received for ID Detail :" + orderDetailRequest.getOrderId());
+                throw new RuntimeException("No data received for ID Detail: " + orderDetailRequest.getOrderId());
             }
 
             return response;
-        }catch (Exception e) {
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }

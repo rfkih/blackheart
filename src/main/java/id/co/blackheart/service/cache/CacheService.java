@@ -1,5 +1,7 @@
 package id.co.blackheart.service.cache;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import lombok.extern.slf4j.Slf4j;
@@ -36,9 +38,11 @@ public class CacheService {
     private static final ZoneOffset ZONE = ZoneOffset.UTC;
 
     private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
 
-    public CacheService(RedisTemplate<String, Object> redisTemplate) {
+    public CacheService(RedisTemplate<String, Object> redisTemplate, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
@@ -166,10 +170,11 @@ public class CacheService {
         String key = TRADE_POSITIONS_KEY_PREFIX + tradeId;
 
         try {
+            List<String> serialized = serializePositions(tradePositions);
             redisTemplate.executePipelined((RedisCallback<?>) connection -> {
                 redisTemplate.delete(key);
-                if (tradePositions != null && !tradePositions.isEmpty()) {
-                    redisTemplate.opsForList().rightPushAll(key, new ArrayList<>(tradePositions));
+                if (!serialized.isEmpty()) {
+                    redisTemplate.opsForList().rightPushAll(key, new ArrayList<>(serialized));
                     redisTemplate.expire(key, TRADE_POSITIONS_TTL);
                 }
                 return null;
@@ -189,6 +194,14 @@ public class CacheService {
         String accountKey   = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
 
         Map<String, Object> tradeMap = buildTradeMap(trade);
+        List<String> serializedPositions;
+        try {
+            serializedPositions = serializePositions(tradePositions);
+        } catch (Exception e) {
+            log.error("Failed to serialize trade positions | tradeId={}", tradeId, e);
+            serializedPositions = List.of();
+        }
+        final List<String> positionsToStore = serializedPositions;
 
         try {
             redisTemplate.executePipelined((RedisCallback<?>) connection -> {
@@ -196,8 +209,8 @@ public class CacheService {
                 redisTemplate.expire(tradeKey, TRADE_TTL);
 
                 redisTemplate.delete(positionsKey);
-                if (tradePositions != null && !tradePositions.isEmpty()) {
-                    redisTemplate.opsForList().rightPushAll(positionsKey, new ArrayList<>(tradePositions));
+                if (!positionsToStore.isEmpty()) {
+                    redisTemplate.opsForList().rightPushAll(positionsKey, new ArrayList<>(positionsToStore));
                     redisTemplate.expire(positionsKey, TRADE_POSITIONS_TTL);
                 }
 
@@ -255,16 +268,23 @@ public class CacheService {
 
     public List<TradePosition> getTradePositions(UUID tradeId) {
         String key = TRADE_POSITIONS_KEY_PREFIX + tradeId;
-        List<Object> positions = redisTemplate.opsForList().range(key, 0, -1);
+        List<Object> raw = redisTemplate.opsForList().range(key, 0, -1);
 
-        if (positions == null || positions.isEmpty()) {
+        if (raw == null || raw.isEmpty()) {
             return List.of();
         }
 
-        return positions.stream()
+        return raw.stream()
                 .filter(Objects::nonNull)
-                .filter(TradePosition.class::isInstance)
-                .map(TradePosition.class::cast)
+                .map(item -> {
+                    try {
+                        return objectMapper.readValue(String.valueOf(item), TradePosition.class);
+                    } catch (JsonProcessingException e) {
+                        log.warn("Failed to deserialize TradePosition from cache | tradeId={}", tradeId);
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
     }
 
@@ -272,8 +292,11 @@ public class CacheService {
 
     public void addAccountActiveTrade(UUID accountId, UUID tradeId) {
         String key = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
-        redisTemplate.opsForSet().add(key, tradeId.toString());
-        redisTemplate.expire(key, ACCOUNT_TRADE_SET_TTL);
+        redisTemplate.executePipelined((RedisCallback<?>) connection -> {
+            redisTemplate.opsForSet().add(key, tradeId.toString());
+            redisTemplate.expire(key, ACCOUNT_TRADE_SET_TTL);
+            return null;
+        });
     }
 
     public void removeAccountActiveTrade(UUID accountId, UUID tradeId) {
@@ -381,6 +404,22 @@ public class CacheService {
         m.put("createdAt",          toDateTimeString(trade.getCreatedAt()));
         m.put("updatedAt",          toDateTimeString(trade.getUpdatedAt()));
         return m;
+    }
+
+    private List<String> serializePositions(List<TradePosition> positions) {
+        if (positions == null || positions.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (TradePosition position : positions) {
+            try {
+                result.add(objectMapper.writeValueAsString(position));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize TradePosition | tradePositionId={}",
+                        position.getTradePositionId(), e);
+            }
+        }
+        return result;
     }
 
     private String asString(Object value) {

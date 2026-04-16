@@ -9,7 +9,6 @@ import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.TradePositionRepository;
-import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.trade.TradeService;
 import lombok.RequiredArgsConstructor;
@@ -18,8 +17,6 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDateTime;
-import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,7 +37,6 @@ public class LiveTradingDecisionExecutorService {
     private static final String EXIT_REASON_MANUAL_CLOSE = "MANUAL_CLOSE";
     private static final String EXIT_REASON_STRATEGY_EXIT = "STRATEGY_EXIT";
 
-    private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
     private final PortfolioService portfolioService;
     private final TradeService tradeService;
@@ -88,10 +84,7 @@ public class LiveTradingDecisionExecutorService {
                     activeTradePosition.getTradePositionId(),
                     activeTradePosition.getSide()
             );
-            return;
         }
-
-        refreshParentTradeSummary(activeTradePosition.getTradeId());
     }
 
     public void executeManualClosePosition(Account account, UUID tradePositionId) throws JsonProcessingException {
@@ -113,10 +106,7 @@ public class LiveTradingDecisionExecutorService {
                     tradePosition.getTradePositionId(),
                     tradePosition.getSide()
             );
-            return;
         }
-
-        refreshParentTradeSummary(tradePosition.getTradeId());
     }
 
     public void executeListenerClosePositions(
@@ -147,10 +137,7 @@ public class LiveTradingDecisionExecutorService {
                     firstPosition.getTradeId(),
                     firstPosition.getSide()
             );
-            return;
         }
-
-        refreshParentTradeSummary(firstPosition.getTradeId());
     }
 
     public void executeManualCloseTrade(Account account, UUID tradeId) throws JsonProcessingException {
@@ -176,10 +163,7 @@ public class LiveTradingDecisionExecutorService {
                     tradeId,
                     firstPosition.getSide()
             );
-            return;
         }
-
-        refreshParentTradeSummary(tradeId);
     }
 
     private void executeOpenLong(
@@ -265,7 +249,6 @@ public class LiveTradingDecisionExecutorService {
         }
 
         tradeService.updateOpenTradePositions(activeTrade, decision);
-        refreshParentTradeSummary(activeTrade.getTradeId());
     }
 
     private void executeCloseTrade(Trades activeTrade, Account account, String exitReason) throws JsonProcessingException {
@@ -297,95 +280,7 @@ public class LiveTradingDecisionExecutorService {
                     activeTrade.getTradeId(),
                     firstPosition.getSide()
             );
-            return;
         }
-
-        refreshParentTradeSummary(activeTrade.getTradeId());
-    }
-
-    private void refreshParentTradeSummary(UUID tradeId) {
-        Trades trade = tradesRepository.findByTradeId(tradeId).orElse(null);
-        if (trade == null) {
-            return;
-        }
-
-        List<TradePosition> allPositions = tradePositionRepository.findAllByTradeId(tradeId);
-        if (allPositions.isEmpty()) {
-            return;
-        }
-
-        BigDecimal totalRemainingQty = allPositions.stream()
-                .map(TradePosition::getRemainingQty)
-                .filter(v -> v != null)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal realizedPnlAmount = allPositions.stream()
-                .map(TradePosition::getRealizedPnlAmount)
-                .filter(v -> v != null)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal totalFeeAmount = allPositions.stream()
-                .map(tp -> safe(tp.getEntryFee()).add(safe(tp.getExitFee())))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        List<TradePosition> closedPositions = allPositions.stream()
-                .filter(tp -> STATUS_CLOSED.equalsIgnoreCase(tp.getStatus()))
-                .toList();
-
-        BigDecimal avgExitPrice = null;
-        if (!closedPositions.isEmpty()) {
-            BigDecimal totalClosedQty = closedPositions.stream()
-                    .map(TradePosition::getExitExecutedQty)
-                    .filter(v -> v != null)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            BigDecimal totalClosedQuote = closedPositions.stream()
-                    .map(tp -> safe(tp.getExitPrice()).multiply(safe(tp.getExitExecutedQty())))
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            if (totalClosedQty.compareTo(BigDecimal.ZERO) > 0) {
-                avgExitPrice = totalClosedQuote.divide(totalClosedQty, 8, RoundingMode.HALF_UP);
-            }
-        }
-
-        long openCount = allPositions.stream()
-                .filter(tp -> STATUS_OPEN.equalsIgnoreCase(tp.getStatus()))
-                .count();
-
-        trade.setTotalRemainingQty(totalRemainingQty);
-        trade.setRealizedPnlAmount(realizedPnlAmount);
-        trade.setTotalFeeAmount(totalFeeAmount);
-        trade.setAvgExitPrice(avgExitPrice);
-
-        if (trade.getTotalEntryQuoteQty() != null
-                && trade.getTotalEntryQuoteQty().compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal pnlPercent = realizedPnlAmount
-                    .divide(trade.getTotalEntryQuoteQty(), 8, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"));
-            trade.setRealizedPnlPercent(pnlPercent);
-        }
-
-        if (openCount == 0) {
-            trade.setStatus(STATUS_CLOSED);
-            trade.setExitTime(LocalDateTime.now());
-
-            TradePosition latestClosed = closedPositions.stream()
-                    .max(Comparator.comparing(
-                            TradePosition::getExitTime,
-                            Comparator.nullsLast(Comparator.naturalOrder())
-                    ))
-                    .orElse(null);
-
-            if (latestClosed != null) {
-                trade.setExitReason(latestClosed.getExitReason());
-            }
-        } else if (openCount < allPositions.size()) {
-            trade.setStatus(STATUS_PARTIALLY_CLOSED);
-        } else {
-            trade.setStatus(STATUS_OPEN);
-        }
-
-        tradesRepository.save(trade);
     }
 
     private BigDecimal safe(BigDecimal value) {

@@ -48,4 +48,16 @@ public class RestTemplateConfig {
 
         return restTemplate;
     }
+
+    /**
+     * Dedicated RestTemplate for Telegram bot polling with explicit timeouts.
+     * Prevents a Telegram API hang from blocking the shared RestTemplate thread pool.
+     */
+    @Bean("telegramRestTemplate")
+    public RestTemplate telegramRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(10_000);
+        return new RestTemplate(factory);
+    }
 }

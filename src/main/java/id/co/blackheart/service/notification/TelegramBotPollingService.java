@@ -3,16 +3,21 @@ package id.co.blackheart.service.notification;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.service.portfolio.PortfolioService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -24,6 +29,11 @@ public class TelegramBotPollingService {
     @Value("${telegram.bot.query.key}")
     private String queryKey;
 
+    @Value("${telegram.chat.ids}")
+    private String chatIdsConfig;
+
+    private Set<Long> allowedChatIds;
+
     private final RestTemplate restTemplate;
     private final IpMonitorService ipMonitorService;
     private final PortfolioService portfolioService;
@@ -31,7 +41,7 @@ public class TelegramBotPollingService {
 
     private final AtomicLong updateOffset = new AtomicLong(0);
 
-    public TelegramBotPollingService(RestTemplate restTemplate,
+    public TelegramBotPollingService(@Qualifier("telegramRestTemplate") RestTemplate restTemplate,
                                      IpMonitorService ipMonitorService,
                                      PortfolioService portfolioService,
                                      ObjectMapper objectMapper) {
@@ -39,6 +49,16 @@ public class TelegramBotPollingService {
         this.ipMonitorService = ipMonitorService;
         this.portfolioService = portfolioService;
         this.objectMapper = objectMapper;
+    }
+
+    @PostConstruct
+    public void init() {
+        allowedChatIds = Arrays.stream(chatIdsConfig.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .map(Long::parseLong)
+                .collect(Collectors.toSet());
+        log.info("[TelegramBot] Allowed chat IDs: {}", allowedChatIds);
     }
 
     @Scheduled(fixedDelayString = "${telegram.bot.poll.interval-ms:5000}")
@@ -69,6 +89,11 @@ public class TelegramBotPollingService {
 
                 String text = message.path("text").asText("").trim();
                 long chatId = message.path("chat").path("id").asLong();
+
+                if (!allowedChatIds.contains(chatId)) {
+                    log.warn("[TelegramBot] Rejected message from unauthorized chat {}", chatId);
+                    continue;
+                }
 
                 if (text.equalsIgnoreCase(queryKey)) {
                     log.info("[TelegramBot] IP query key received from chat {}", chatId);

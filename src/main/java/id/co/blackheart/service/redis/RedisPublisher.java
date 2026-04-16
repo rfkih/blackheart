@@ -1,29 +1,40 @@
 package id.co.blackheart.service.redis;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.model.TradePosition;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
 
+@Slf4j
 @Service
 public class RedisPublisher {
 
     private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
 
-    public RedisPublisher(RedisTemplate<String, Object> redisTemplate) {
+    public RedisPublisher(RedisTemplate<String, Object> redisTemplate, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
-    // Publish trade state change (e.g., when the trade is closed) to Redis channel
     public void publishTradeStateChange(UUID tradeId, String tradeState) {
         String message = "Trade " + tradeId + " state changed to: " + tradeState;
-        redisTemplate.convertAndSend("tradeStateUpdates", message);  // Publish to "tradeStateUpdates" channel
+        redisTemplate.convertAndSend("tradeStateUpdates", message);
     }
 
-    // Publish when a trade position is updated
     public void publishTradePositionUpdate(UUID tradeId, TradePosition tradePosition) {
-        String message = "Trade " + tradeId + " position updated: " + tradePosition.toString();
-        redisTemplate.convertAndSend("tradePositionUpdates", message);  // Publish to "tradePositionUpdates" channel
+        String positionJson;
+        try {
+            positionJson = objectMapper.writeValueAsString(tradePosition);
+        } catch (JsonProcessingException e) {
+            log.warn("[RedisPublisher] Failed to serialize TradePosition | tradeId={} tradePositionId={}",
+                    tradeId, tradePosition != null ? tradePosition.getTradePositionId() : "null");
+            positionJson = "{\"tradeId\":\"" + tradeId + "\",\"error\":\"serialization_failed\"}";
+        }
+        redisTemplate.convertAndSend("tradePositionUpdates", positionJson);
     }
 }

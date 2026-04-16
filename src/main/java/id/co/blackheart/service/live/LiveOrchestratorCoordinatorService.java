@@ -44,10 +44,12 @@ public class LiveOrchestratorCoordinatorService {
             MarketData marketData,
             FeatureStore featureStore
     ) {
-        log.info("orchestrator service {}", strategies.size());
-        if (strategies.isEmpty() || strategies.size() < 2) {
-            throw new IllegalArgumentException("Orchestrator requires at least 2 strategies");
+        if (strategies == null || strategies.size() < 2) {
+            log.warn("[Orchestrator] Requires at least 2 strategies, got={}. Skipping account={}",
+                    strategies == null ? 0 : strategies.size(), account.getAccountId());
+            return;
         }
+        log.info("orchestrator service {}", strategies.size());
 
         // Sort by priorityOrder ascending — lower number = higher priority.
         List<AccountStrategy> sorted = strategies.stream()

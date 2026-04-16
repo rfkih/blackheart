@@ -20,7 +20,9 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @Slf4j
@@ -34,6 +36,21 @@ public class PortfolioService {
     private final ObjectMapper objectMapper;
 
     private static final int RECV_WINDOW = 5000;
+
+    /**
+     * Refreshes the portfolio balance for a single account from Binance asynchronously.
+     * Intended as a fire-and-forget call before strategy evaluation so that the
+     * <em>next</em> candle sees fresh balance data even if the current one uses the
+     * last-persisted value.
+     */
+    @Async
+    public void refreshAccountBalance(Account account) {
+        try {
+            updateAndGetBinanceAssetBalance(account);
+        } catch (Exception e) {
+            log.warn("[Portfolio] Background balance refresh failed for account={}", account.getUsername(), e);
+        }
+    }
 
     @Async
     public void reloadAsset() {
@@ -51,9 +68,9 @@ public class PortfolioService {
         log.info("✅ Portfolio Update Completed!");
     }
 
-    public java.util.Map<String, String> checkBinanceConnectivity() {
+    public Map<String, String> checkBinanceConnectivity() {
         List<Account> accountList = accountRepository.findByIsActive("1");
-        java.util.Map<String, String> result = new java.util.LinkedHashMap<>();
+        Map<String, String> result = new LinkedHashMap<>();
 
         for (Account account : accountList) {
             try {
@@ -98,9 +115,12 @@ public class PortfolioService {
 
         BinanceAssetResponse binanceAssetResponse = binanceClientService.getBinanceAssetDetails(binanceAssetRequest);
 
+        if (binanceAssetResponse == null || binanceAssetResponse.getAssets() == null) {
+            log.warn("[Portfolio] No asset data returned from Binance for account={}", account.getUsername());
+            return;
+        }
 
         saveAllBinanceAssets(account, binanceAssetResponse.getAssets());
-
     }
 
     public Portfolio updateAndGetAssetBalance(String asset, Account user) throws JsonProcessingException {

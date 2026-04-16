@@ -43,11 +43,12 @@ public class IpMonitorService {
             }
             currentIp = currentIp.trim();
 
-            String previous = lastKnownIp.getAndSet(currentIp);
+            String previous = lastKnownIp.get();
 
             if (previous == null) {
                 log.info("[IpMonitor] Initial IP recorded: {}", currentIp);
                 persistLog(currentIp, null, "INIT");
+                lastKnownIp.set(currentIp);
                 telegramNotificationService.sendMessage(
                         "\uD83D\uDD14 <b>Blackheart Server IP Initialized</b>\n"
                         + "IP: <code>" + currentIp + "</code>");
@@ -55,6 +56,7 @@ public class IpMonitorService {
             } else if (!previous.equals(currentIp)) {
                 log.warn("[IpMonitor] IP changed! {} → {}", previous, currentIp);
                 persistLog(currentIp, previous, "CHANGED");
+                lastKnownIp.set(currentIp);
                 telegramNotificationService.sendMessage(
                         "\u26A0\uFE0F <b>Blackheart Server IP Changed!</b>\n"
                         + "Old IP: <code>" + previous + "</code>\n"

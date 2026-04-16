@@ -51,12 +51,8 @@ public class StrategyDailyRealizedCurveService {
 
     @Transactional
     public void generateForDate(LocalDate curveDate) {
-        // Convert the Jakarta calendar day boundaries to UTC, since exit_time is stored in UTC.
-        // Without this, atStartOfDay() uses the JVM timezone and the query window is off by ±7h.
-        LocalDateTime startDateTime = curveDate.atStartOfDay(DEFAULT_ZONE)
-                .withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
-        LocalDateTime endDateTime = curveDate.plusDays(1).atStartOfDay(DEFAULT_ZONE)
-                .withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        LocalDateTime startDateTime = curveDate.atStartOfDay(DEFAULT_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        LocalDateTime endDateTime = curveDate.plusDays(1).atStartOfDay(DEFAULT_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         log.info("Generating strategy daily realized curve for date={}", curveDate);
@@ -67,8 +63,7 @@ public class StrategyDailyRealizedCurveService {
                 .map(EnabledAccountStrategyProjection::getAccountStrategyId)
                 .toList();
 
-        List<TradePositionDailyAggregateProjection> aggregateProjections =
-                tradePositionRepository.findDailyClosedPositionAggregates(startDateTime, endDateTime);
+        List<TradePositionDailyAggregateProjection> aggregateProjections = tradePositionRepository.findDailyClosedPositionAggregates(startDateTime, endDateTime);
 
         Map<UUID, DailyPositionAggregateDto> aggregateByStrategyId = aggregateProjections.stream()
                 .map(this::toDto)

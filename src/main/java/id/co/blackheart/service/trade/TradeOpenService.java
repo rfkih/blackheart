@@ -58,8 +58,7 @@ public class TradeOpenService {
     ) {
         Trades persistedTrade = null;
         String strategyName = resolveStrategyName(context, decision);
-        String entryReason = decision != null ? decision.getDecisionType() != null
-                ? decision.getDecisionType().name() : null : null;
+        String entryReason = decision != null ? decision.getReason() : null;
 
         try {
             PreTradeValidationResult validation = validateBeforeOpen(
