@@ -15,7 +15,7 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class TradeExecutionLog {
+public class TradeExecutionLog extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

@@ -59,8 +59,6 @@ public class CacheService {
         }
 
         try {
-            // putAll + expire in a pipeline to avoid the window where the key
-            // exists but has no TTL (e.g. on a partial update).
             redisTemplate.executePipelined((RedisCallback<?>) connection -> {
                 redisTemplate.opsForHash().putAll(key, value);
                 redisTemplate.expire(key, LATEST_PRICE_TTL);
@@ -145,8 +143,8 @@ public class CacheService {
         tradeMap.put("entryRsi",            asString(trade.getEntryRsi()));
         tradeMap.put("entryTime",           toDateTimeString(trade.getEntryTime()));
         tradeMap.put("exitTime",            toDateTimeString(trade.getExitTime()));
-        tradeMap.put("createdAt",           toDateTimeString(trade.getCreatedAt()));
-        tradeMap.put("updatedAt",           toDateTimeString(trade.getUpdatedAt()));
+        tradeMap.put("createdTime",           toDateTimeString(trade.getCreatedTime()));
+        tradeMap.put("updatedTime",           toDateTimeString(trade.getUpdatedTime()));
 
         try {
             redisTemplate.executePipelined((RedisCallback<?>) connection -> {
@@ -259,8 +257,8 @@ public class CacheService {
         trade.setEntryRsi(asBigDecimal(d.get("entryRsi")));
         trade.setEntryTime(asLocalDateTime(d.get("entryTime")));
         trade.setExitTime(asLocalDateTime(d.get("exitTime")));
-        trade.setCreatedAt(asLocalDateTime(d.get("createdAt")));
-        trade.setUpdatedAt(asLocalDateTime(d.get("updatedAt")));
+        trade.setCreatedTime(asLocalDateTime(d.get("createdAt")));
+        trade.setUpdatedTime(asLocalDateTime(d.get("updatedAt")));
 
         return trade;
     }
@@ -380,8 +378,8 @@ public class CacheService {
         m.put("entryRsi",           asString(trade.getEntryRsi()));
         m.put("entryTime",          toDateTimeString(trade.getEntryTime()));
         m.put("exitTime",           toDateTimeString(trade.getExitTime()));
-        m.put("createdAt",          toDateTimeString(trade.getCreatedAt()));
-        m.put("updatedAt",          toDateTimeString(trade.getUpdatedAt()));
+        m.put("createdTime",          toDateTimeString(trade.getCreatedTime()));
+        m.put("updatedTime",          toDateTimeString(trade.getUpdatedTime()));
         return m;
     }
 

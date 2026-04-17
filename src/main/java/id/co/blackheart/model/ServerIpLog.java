@@ -11,7 +11,7 @@ import java.util.UUID;
 @Table(name = "server_ip_log")
 @Getter
 @Setter
-public class ServerIpLog {
+public class ServerIpLog extends BaseEntity {
 
 
     @Id

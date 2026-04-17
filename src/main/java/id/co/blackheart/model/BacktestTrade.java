@@ -6,8 +6,6 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -21,7 +19,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Entity
 @Table(name = "backtest_trade")
-public class BacktestTrade {
+public class BacktestTrade extends BaseEntity {
 
     @Id
     @Column(name = "backtest_trade_id", nullable = false, updatable = false)
@@ -296,12 +294,5 @@ public class BacktestTrade {
     @Column(name = "bars_held")
     private Integer barsHeld;
 
-    @CreationTimestamp
-    @Column(name = "created_time", nullable = false, updatable = false)
-    private LocalDateTime createdTime;
-
-    @UpdateTimestamp
-    @Column(name = "updated_time", nullable = false)
-    private LocalDateTime updatedTime;
 
 }

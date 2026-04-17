@@ -3,13 +3,12 @@ package id.co.blackheart.model;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
-import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "scheduler_jobs")
 @Getter
 @Setter
-public class SchedulerJob {
+public class SchedulerJob extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -27,11 +26,6 @@ public class SchedulerJob {
     @Column(name = "status", nullable = false)
     private String status;
 
-    @Column(name = "created_at")
-    private LocalDateTime createdAt;
-
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
 
 }
 

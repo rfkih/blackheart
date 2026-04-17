@@ -46,7 +46,7 @@ public class StrategyDailyRealizedCurveCalculator {
         BigDecimal cumulativeWeightedReturnIndex = previousIndex.multiply(ONE.add(dailyWeightedReturnPct))
                 .setScale(SCALE, RoundingMode.HALF_UP);
 
-        LocalDateTime createdAt = currentCurveOrNull != null ? currentCurveOrNull.getCreatedAt() : now;
+        LocalDateTime createdAt = currentCurveOrNull != null ? currentCurveOrNull.getCreatedTime() : now;
 
         return StrategyDailyRealizedCurve.builder()
                 .strategyDailyRealizedCurveId(currentCurveOrNull != null
@@ -65,8 +65,6 @@ public class StrategyDailyRealizedCurveCalculator {
                 .lossPositionCount(defaultInt(aggregate.getLossPositionCount()))
                 .breakevenPositionCount(defaultInt(aggregate.getBreakevenPositionCount()))
                 .calculationVersion(CALCULATION_VERSION)
-                .createdAt(createdAt)
-                .updatedAt(now)
                 .build();
     }
 

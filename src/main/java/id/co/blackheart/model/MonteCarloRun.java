@@ -2,10 +2,8 @@ package id.co.blackheart.model;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.CreationTimestamp;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Getter
@@ -15,7 +13,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Entity
 @Table(name = "monte_carlo_run")
-public class MonteCarloRun {
+public class MonteCarloRun extends BaseEntity {
 
     @Id
     @Column(name = "monte_carlo_run_id", nullable = false, updatable = false)
@@ -107,7 +105,4 @@ public class MonteCarloRun {
     @Column(name = "status", length = 20)
     private String status;
 
-    @CreationTimestamp
-    @Column(name = "created_time", updatable = false)
-    private LocalDateTime createdTime;
 }

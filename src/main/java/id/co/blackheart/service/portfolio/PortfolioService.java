@@ -152,7 +152,7 @@ public class PortfolioService {
         portfolio.setIsActive("1");
         portfolio.setBalance(new BigDecimal(free));
         portfolio.setLocked(new BigDecimal(locked));
-        portfolio.setUpdatedAt(LocalDateTime.now());
+        portfolio.setUpdatedTime(LocalDateTime.now());
 
         portfolioRepository.save(portfolio);
         return portfolio;

@@ -7,7 +7,6 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.UuidGenerator;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Data
@@ -15,7 +14,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @Entity
 @Table(name = "accounts")
-public class Account {
+public class Account extends BaseEntity {
 
     @Id
     @GeneratedValue
@@ -50,9 +49,4 @@ public class Account {
     @Column(name = "api_secret", nullable = false)
     private String apiSecret;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt = LocalDateTime.now();
-
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
 }

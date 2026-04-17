@@ -5,7 +5,6 @@ import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
@@ -20,7 +19,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class StrategyDailyRealizedCurve {
+public class StrategyDailyRealizedCurve extends BaseEntity {
 
     @Id
     @Column(name = "strategy_daily_realized_curve_id", nullable = false, updatable = false)
@@ -65,9 +64,4 @@ public class StrategyDailyRealizedCurve {
     @Column(name = "calculation_version", nullable = false, length = 20)
     private String calculationVersion;
 
-    @Column(name = "created_at", nullable = false)
-    private LocalDateTime createdAt;
-
-    @Column(name = "updated_at", nullable = false)
-    private LocalDateTime updatedAt;
 }
