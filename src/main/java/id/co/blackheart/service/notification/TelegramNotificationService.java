@@ -1,6 +1,7 @@
 package id.co.blackheart.service.notification;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -23,7 +24,7 @@ public class TelegramNotificationService {
 
     private final RestTemplate restTemplate;
 
-    public TelegramNotificationService(RestTemplate restTemplate) {
+    public TelegramNotificationService(@Qualifier("telegramRestTemplate") RestTemplate restTemplate) {
         this.restTemplate = restTemplate;
     }
 

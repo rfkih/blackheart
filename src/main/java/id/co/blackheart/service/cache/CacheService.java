@@ -22,7 +22,6 @@ import java.util.stream.Collectors;
 @Slf4j
 public class CacheService {
 
-    // ── Key prefixes ─────────────────────────────────────────────────────────
     private static final String TRADE_KEY_PREFIX              = "trade:";
     private static final String TRADE_POSITIONS_KEY_PREFIX    = "tradePositions:";
     private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "accountActiveTrades:";
@@ -337,35 +336,15 @@ public class CacheService {
 
     /**
      * Removes all cache entries for a closed trade.
-     * Fetches the accountId directly from the hash (single field read) rather than
-     * deserialising the whole Trades object, avoiding a TOCTOU window where
-     * getTrade() returns null if the trade was already partially evicted.
+     * Callers must supply accountId directly to guarantee the account active-trade
+     * set is always cleaned — do not rely on reading accountId back from Redis,
+     * which can silently fail if the key is partially evicted.
      */
-    public void removeClosedTrade(UUID tradeId) {
-        String tradeKey = TRADE_KEY_PREFIX + tradeId;
-
-        // Read accountId from the hash before deleting — cheaper than getTrade()
-        // and avoids full deserialisation.
-        Object accountIdRaw = null;
-        try {
-            accountIdRaw = redisTemplate.opsForHash().get(tradeKey, "accountId");
-        } catch (Exception e) {
-            log.warn("Could not read accountId from cache before deleting trade | tradeId={}", tradeId, e);
-        }
-
-        UUID accountId = asUuid(accountIdRaw, null);
-
-        redisTemplate.delete(tradeKey);
-        redisTemplate.delete(TRADE_POSITIONS_KEY_PREFIX + tradeId);
-
-        if (accountId != null) {
-            removeAccountActiveTrade(accountId, tradeId);
-        } else {
-            log.warn("accountId not found in cache for tradeId={} — account active-trade set may contain a stale entry", tradeId);
-        }
-    }
-
     public void removeClosedTrade(UUID accountId, UUID tradeId) {
+        if (accountId == null || tradeId == null) {
+            log.warn("[Cache] removeClosedTrade called with null | accountId={} tradeId={}", accountId, tradeId);
+            return;
+        }
         redisTemplate.delete(TRADE_KEY_PREFIX + tradeId);
         redisTemplate.delete(TRADE_POSITIONS_KEY_PREFIX + tradeId);
         removeAccountActiveTrade(accountId, tradeId);

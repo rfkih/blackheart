@@ -56,9 +56,6 @@ public class LiveTradingCoordinatorService {
             return;
         }
 
-        // Fire-and-forget: refresh this account's balance from Binance asynchronously
-        // so the next candle evaluation sees up-to-date balance. Current candle uses
-        // the last-persisted value from portfolioRepository.
         portfolioService.refreshAccountBalance(account);
 
         String strategyCode = accountStrategy.getStrategyCode();
