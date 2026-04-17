@@ -21,6 +21,5 @@ public class ResponseDto implements Serializable {
 
     private Object data;
 
-    /** Populated only on error responses. Null on success. */
     private String errorMessage;
 }
