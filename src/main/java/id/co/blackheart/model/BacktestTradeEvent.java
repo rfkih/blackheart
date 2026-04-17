@@ -2,7 +2,6 @@ package id.co.blackheart.model;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.CreationTimestamp;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -15,7 +14,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Entity
 @Table(name = "backtest_trade_event")
-public class BacktestTradeEvent {
+public class BacktestTradeEvent extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -49,7 +48,4 @@ public class BacktestTradeEvent {
     @Column(name = "note", columnDefinition = "TEXT")
     private String note;
 
-    @CreationTimestamp
-    @Column(name = "created_time", nullable = false, updatable = false)
-    private LocalDateTime createdTime;
 }

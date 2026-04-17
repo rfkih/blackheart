@@ -61,7 +61,7 @@ public class BacktestEquityPointRecorder {
 
         BacktestEquityPoint existing = state.getEquityPointIndex().get(equityDate);
         UUID pointId = existing != null ? existing.getBacktestEquityPointId() : UUID.randomUUID();
-        LocalDateTime createdAt = existing != null ? existing.getCreatedAt() : LocalDateTime.now();
+        LocalDateTime createdAt = existing != null ? existing.getCreatedTime() : LocalDateTime.now();
 
         BacktestEquityPoint point = BacktestEquityPoint.builder()
                 .backtestEquityPointId(pointId)
@@ -74,8 +74,9 @@ public class BacktestEquityPointRecorder {
                 .drawdownPercent(currentDrawdown)
                 .dailyReturnPct(dailyReturnPct)
                 .openPositions(openPositions)
-                .createdAt(createdAt)
                 .build();
+
+        point.setCreatedTime(createdAt);
 
         state.getEquityPointIndex().put(equityDate, point);
     }

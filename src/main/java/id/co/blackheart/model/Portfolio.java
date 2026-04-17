@@ -5,7 +5,6 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
@@ -17,7 +16,7 @@ import java.util.UUID;
                 @UniqueConstraint(name = "uk_portfolio_user_asset", columnNames = {"user_id", "asset"})
         }
 )
-public class Portfolio {
+public class Portfolio extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -39,9 +38,4 @@ public class Portfolio {
     @Column(name = "locked", nullable = false, precision = 20, scale = 8)
     private BigDecimal locked;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt = LocalDateTime.now();
-
-    @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
 }

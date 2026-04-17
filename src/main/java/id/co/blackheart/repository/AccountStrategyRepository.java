@@ -16,7 +16,7 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
         FROM account_strategy acs
         WHERE acs.enabled = true
           AND acs.interval_name = :interval
-        ORDER BY acs.priority_order ASC, acs.created_at ASC
+        ORDER BY acs.priority_order ASC, acs.created_time ASC
         """, nativeQuery = true)
     List<AccountStrategy> findByEnabledTrueAndIntervalName(@Param("interval") String interval);
 

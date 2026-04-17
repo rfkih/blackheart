@@ -7,24 +7,19 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
+import lombok.*;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
-@Data
+@Getter
+@Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
 @Table(name = "trend_following_config_detail")
-public class TrendFollowingConfigDetail {
+public class TrendFollowingConfigDetail extends BaseEntity {
 
     @Id
     @Column(name = "trend_following_config_detail_id", nullable = false, updatable = false)
@@ -67,11 +62,4 @@ public class TrendFollowingConfigDetail {
     @Column(name = "allow_bias_entry", nullable = false)
     private Boolean allowBiasEntry;
 
-    @CreationTimestamp
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
-
-    @UpdateTimestamp
-    @Column(name = "updated_at", nullable = false)
-    private LocalDateTime updatedAt;
 }

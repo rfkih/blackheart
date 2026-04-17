@@ -8,10 +8,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
 
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Data
@@ -20,7 +17,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Entity
 @Table(name = "strategy_definition")
-public class StrategyDefinition {
+public class StrategyDefinition extends BaseEntity {
 
     @Id
     @Column(name = "strategy_definition_id", nullable = false, updatable = false)
@@ -41,11 +38,4 @@ public class StrategyDefinition {
     @Column(name = "status", nullable = false, length = 20)
     private String status;
 
-    @CreationTimestamp
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
-
-    @UpdateTimestamp
-    @Column(name = "updated_at", nullable = false)
-    private LocalDateTime updatedAt;
 }

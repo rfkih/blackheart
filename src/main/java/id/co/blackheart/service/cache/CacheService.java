@@ -1,15 +1,19 @@
 package id.co.blackheart.service.cache;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -18,17 +22,26 @@ import java.util.stream.Collectors;
 @Slf4j
 public class CacheService {
 
-    private static final String TRADE_KEY_PREFIX = "trade:";
-    private static final String TRADE_POSITIONS_KEY_PREFIX = "tradePositions:";
+    private static final String TRADE_KEY_PREFIX              = "trade:";
+    private static final String TRADE_POSITIONS_KEY_PREFIX    = "tradePositions:";
     private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "accountActiveTrades:";
+    private static final String LATEST_PRICE_KEY_PREFIX       = "latestPrice:";
+
+    private static final Duration LATEST_PRICE_TTL       = Duration.ofMinutes(5);
+    private static final Duration TRADE_TTL              = Duration.ofHours(24);
+    private static final Duration TRADE_POSITIONS_TTL    = Duration.ofHours(24);
+    private static final Duration ACCOUNT_TRADE_SET_TTL  = Duration.ofHours(48);
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final ZoneId DEFAULT_ZONE_ID = ZoneId.systemDefault();
+
+    private static final ZoneOffset ZONE = ZoneOffset.UTC;
 
     private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
 
-    public CacheService(RedisTemplate<String, Object> redisTemplate) {
+    public CacheService(RedisTemplate<String, Object> redisTemplate, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
@@ -36,21 +49,23 @@ public class CacheService {
             return;
         }
 
-        String key = "latestPrice:" + symbol;
+        String key = LATEST_PRICE_KEY_PREFIX + symbol;
 
         Map<String, String> value = new HashMap<>();
         value.put("symbol", symbol);
         value.put("price", price.toPlainString());
-
         if (updatedAt != null) {
-            value.put("updatedAt", updatedAt.toString());
+            value.put("updatedAt", updatedAt.format(DATE_TIME_FORMATTER));
         }
 
         try {
-            redisTemplate.opsForHash().putAll(key, value);
+            redisTemplate.executePipelined((RedisCallback<?>) connection -> {
+                redisTemplate.opsForHash().putAll(key, value);
+                redisTemplate.expire(key, LATEST_PRICE_TTL);
+                return null;
+            });
         } catch (Exception e) {
-            log.error("Failed to save latest price to Redis | symbol={} price={} updatedAt={}",
-                    symbol, price, updatedAt, e);
+            log.error("Failed to save latest price | symbol={} price={}", symbol, price, e);
         }
     }
 
@@ -59,7 +74,7 @@ public class CacheService {
             return null;
         }
 
-        String key = "latestPrice:" + symbol;
+        String key = LATEST_PRICE_KEY_PREFIX + symbol;
         Object value = redisTemplate.opsForHash().get(key, "price");
 
         if (value == null) {
@@ -69,7 +84,9 @@ public class CacheService {
         try {
             return new BigDecimal(String.valueOf(value));
         } catch (Exception e) {
-            throw new IllegalArgumentException("Failed to parse latest price for symbol: " + symbol, e);
+            // Do not throw — a parse error must not crash strategy execution.
+            log.warn("Failed to parse latest price from cache | symbol={} raw={}", symbol, value);
+            return null;
         }
     }
 
@@ -78,120 +95,215 @@ public class CacheService {
             return null;
         }
 
-        String key = "latestPrice:" + symbol;
+        String key = LATEST_PRICE_KEY_PREFIX + symbol;
         Object value = redisTemplate.opsForHash().get(key, "updatedAt");
 
         if (value == null) {
             return null;
         }
 
-        return LocalDateTime.parse(String.valueOf(value));
+        return asLocalDateTime(value);
     }
 
+    // ── Trade caching ─────────────────────────────────────────────────────────
+
+    /**
+     * Writes the full trade hash to Redis.
+     * Uses putAll directly (no prior delete) — Redis hash putAll is effectively
+     * a field-level overwrite, which is atomic per field. Deleting first would
+     * create a window where the key does not exist.
+     */
     public void cacheActiveTrade(UUID tradeId, Trades trade) {
         String tradeKey = TRADE_KEY_PREFIX + tradeId;
 
         Map<String, Object> tradeMap = new HashMap<>();
-        tradeMap.put("tradeId", toStringValue(trade.getTradeId()));
-        tradeMap.put("accountId", toStringValue(trade.getAccountId()));
-        tradeMap.put("accountStrategyId", toStringValue(trade.getAccountStrategyId()));
+        tradeMap.put("tradeId",             asString(trade.getTradeId()));
+        tradeMap.put("accountId",           asString(trade.getAccountId()));
+        tradeMap.put("accountStrategyId",   asString(trade.getAccountStrategyId()));
+        tradeMap.put("strategyName",        asString(trade.getStrategyName()));
+        tradeMap.put("interval",            asString(trade.getInterval()));
+        tradeMap.put("exchange",            asString(trade.getExchange()));
+        tradeMap.put("asset",               asString(trade.getAsset()));
+        tradeMap.put("side",                asString(trade.getSide()));
+        tradeMap.put("status",              asString(trade.getStatus()));
+        tradeMap.put("tradeMode",           asString(trade.getTradeMode()));
+        tradeMap.put("avgEntryPrice",       asString(trade.getAvgEntryPrice()));
+        tradeMap.put("avgExitPrice",        asString(trade.getAvgExitPrice()));
+        tradeMap.put("totalEntryQty",       asString(trade.getTotalEntryQty()));
+        tradeMap.put("totalEntryQuoteQty",  asString(trade.getTotalEntryQuoteQty()));
+        tradeMap.put("totalRemainingQty",   asString(trade.getTotalRemainingQty()));
+        tradeMap.put("realizedPnlAmount",   asString(trade.getRealizedPnlAmount()));
+        tradeMap.put("realizedPnlPercent",  asString(trade.getRealizedPnlPercent()));
+        tradeMap.put("totalFeeAmount",      asString(trade.getTotalFeeAmount()));
+        tradeMap.put("totalFeeCurrency",    asString(trade.getTotalFeeCurrency()));
+        tradeMap.put("exitReason",          asString(trade.getExitReason()));
+        tradeMap.put("entryTrendRegime",    asString(trade.getEntryTrendRegime()));
+        tradeMap.put("entryAdx",            asString(trade.getEntryAdx()));
+        tradeMap.put("entryAtr",            asString(trade.getEntryAtr()));
+        tradeMap.put("entryRsi",            asString(trade.getEntryRsi()));
+        tradeMap.put("entryTime",           toDateTimeString(trade.getEntryTime()));
+        tradeMap.put("exitTime",            toDateTimeString(trade.getExitTime()));
+        tradeMap.put("createdTime",           toDateTimeString(trade.getCreatedTime()));
+        tradeMap.put("updatedTime",           toDateTimeString(trade.getUpdatedTime()));
 
-        tradeMap.put("status", trade.getStatus());
-        tradeMap.put("asset", trade.getAsset());
-        tradeMap.put("side", trade.getSide());
-        tradeMap.put("strategyName", trade.getStrategyName());
-        tradeMap.put("interval", trade.getInterval());
-        tradeMap.put("exchange", trade.getExchange());
-
-        tradeMap.put("avgEntryPrice", toStringValue(trade.getAvgEntryPrice()));
-        tradeMap.put("avgExitPrice", toStringValue(trade.getAvgExitPrice()));
-        tradeMap.put("totalEntryQty", toStringValue(trade.getTotalEntryQty()));
-        tradeMap.put("totalEntryQuoteQty", toStringValue(trade.getTotalEntryQuoteQty()));
-        tradeMap.put("totalRemainingQty", toStringValue(trade.getTotalRemainingQty()));
-        tradeMap.put("realizedPnlAmount", toStringValue(trade.getRealizedPnlAmount()));
-        tradeMap.put("realizedPnlPercent", toStringValue(trade.getRealizedPnlPercent()));
-
-        tradeMap.put("entryTime", toDateTimeString(trade.getEntryTime()));
-        tradeMap.put("exitTime", toDateTimeString(trade.getExitTime()));
-
-        redisTemplate.delete(tradeKey);
-        redisTemplate.opsForHash().putAll(tradeKey, tradeMap);
-    }
-
-    public void cacheTradePositions(UUID tradeId, List<TradePosition> tradePositions) {
-        String tradePositionsKey = TRADE_POSITIONS_KEY_PREFIX + tradeId;
-
-        redisTemplate.delete(tradePositionsKey);
-
-        if (tradePositions == null || tradePositions.isEmpty()) {
-            return;
+        try {
+            redisTemplate.executePipelined((RedisCallback<?>) connection -> {
+                redisTemplate.opsForHash().putAll(tradeKey, tradeMap);
+                redisTemplate.expire(tradeKey, TRADE_TTL);
+                return null;
+            });
+        } catch (Exception e) {
+            log.error("Failed to cache active trade | tradeId={}", tradeId, e);
         }
-
-        redisTemplate.opsForList().rightPushAll(tradePositionsKey, new ArrayList<>(tradePositions));
     }
+
+    /**
+     * Replaces the positions list atomically using a pipeline.
+     * DELETE + RPUSH are pipelined to minimise the window where the key is empty,
+     * but they are not a single atomic MULTI/EXEC transaction. For the live trading
+     * use case (single writer per trade), this is safe in practice.
+     */
+    public void cacheTradePositions(UUID tradeId, List<TradePosition> tradePositions) {
+        String key = TRADE_POSITIONS_KEY_PREFIX + tradeId;
+
+        try {
+            List<String> serialized = serializePositions(tradePositions);
+            redisTemplate.executePipelined((RedisCallback<?>) connection -> {
+                redisTemplate.delete(key);
+                if (!serialized.isEmpty()) {
+                    redisTemplate.opsForList().rightPushAll(key, new ArrayList<>(serialized));
+                    redisTemplate.expire(key, TRADE_POSITIONS_TTL);
+                }
+                return null;
+            });
+        } catch (Exception e) {
+            log.error("Failed to cache trade positions | tradeId={}", tradeId, e);
+        }
+    }
+
+    /**
+     * Caches all three pieces of trade state in a single pipeline to minimise
+     * partial-failure windows.
+     */
+    public void cacheUserActiveTrade(UUID accountId, UUID tradeId, Trades trade, List<TradePosition> tradePositions) {
+        String tradeKey     = TRADE_KEY_PREFIX + tradeId;
+        String positionsKey = TRADE_POSITIONS_KEY_PREFIX + tradeId;
+        String accountKey   = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
+
+        Map<String, Object> tradeMap = buildTradeMap(trade);
+        List<String> serializedPositions;
+        try {
+            serializedPositions = serializePositions(tradePositions);
+        } catch (Exception e) {
+            log.error("Failed to serialize trade positions | tradeId={}", tradeId, e);
+            serializedPositions = List.of();
+        }
+        final List<String> positionsToStore = serializedPositions;
+
+        try {
+            redisTemplate.executePipelined((RedisCallback<?>) connection -> {
+                redisTemplate.opsForHash().putAll(tradeKey, tradeMap);
+                redisTemplate.expire(tradeKey, TRADE_TTL);
+
+                redisTemplate.delete(positionsKey);
+                if (!positionsToStore.isEmpty()) {
+                    redisTemplate.opsForList().rightPushAll(positionsKey, new ArrayList<>(positionsToStore));
+                    redisTemplate.expire(positionsKey, TRADE_POSITIONS_TTL);
+                }
+
+                redisTemplate.opsForSet().add(accountKey, tradeId.toString());
+                redisTemplate.expire(accountKey, ACCOUNT_TRADE_SET_TTL);
+                return null;
+            });
+        } catch (Exception e) {
+            log.error("Failed to cache user active trade | accountId={} tradeId={}", accountId, tradeId, e);
+        }
+    }
+
+    // ── Trade reads ───────────────────────────────────────────────────────────
 
     public Trades getTrade(UUID tradeId) {
         String tradeKey = TRADE_KEY_PREFIX + tradeId;
-        Map<Object, Object> tradeData = redisTemplate.opsForHash().entries(tradeKey);
+        Map<Object, Object> d = redisTemplate.opsForHash().entries(tradeKey);
 
-        if (tradeData.isEmpty()) {
+        if (d.isEmpty()) {
             return null;
         }
 
         Trades trade = new Trades();
-        trade.setTradeId(asUuid(tradeData.get("tradeId"), tradeId));
-        trade.setAccountId(asUuid(tradeData.get("accountId"), null));
-        trade.setAccountStrategyId(asUuid(tradeData.get("accountStrategyId"), null));
-
-        trade.setStatus(asString(tradeData.get("status")));
-        trade.setAsset(asString(tradeData.get("asset")));
-        trade.setSide(asString(tradeData.get("side")));
-        trade.setStrategyName(asString(tradeData.get("strategyName")));
-        trade.setInterval(asString(tradeData.get("interval")));
-        trade.setExchange(asString(tradeData.get("exchange")));
-
-        trade.setAvgEntryPrice(asBigDecimal(tradeData.get("avgEntryPrice")));
-        trade.setAvgExitPrice(asBigDecimal(tradeData.get("avgExitPrice")));
-        trade.setTotalEntryQty(asBigDecimal(tradeData.get("totalEntryQty")));
-        trade.setTotalEntryQuoteQty(asBigDecimal(tradeData.get("totalEntryQuoteQty")));
-        trade.setTotalRemainingQty(asBigDecimal(tradeData.get("totalRemainingQty")));
-        trade.setRealizedPnlAmount(asBigDecimal(tradeData.get("realizedPnlAmount")));
-        trade.setRealizedPnlPercent(asBigDecimal(tradeData.get("realizedPnlPercent")));
-
-        trade.setEntryTime(asLocalDateTime(tradeData.get("entryTime")));
-        trade.setExitTime(asLocalDateTime(tradeData.get("exitTime")));
+        trade.setTradeId(asUuid(d.get("tradeId"), tradeId));
+        trade.setAccountId(asUuid(d.get("accountId"), null));
+        trade.setAccountStrategyId(asUuid(d.get("accountStrategyId"), null));
+        trade.setStrategyName(asString(d.get("strategyName")));
+        trade.setInterval(asString(d.get("interval")));
+        trade.setExchange(asString(d.get("exchange")));
+        trade.setAsset(asString(d.get("asset")));
+        trade.setSide(asString(d.get("side")));
+        trade.setStatus(asString(d.get("status")));
+        trade.setTradeMode(asString(d.get("tradeMode")));
+        trade.setAvgEntryPrice(asBigDecimal(d.get("avgEntryPrice")));
+        trade.setAvgExitPrice(asBigDecimal(d.get("avgExitPrice")));
+        trade.setTotalEntryQty(asBigDecimal(d.get("totalEntryQty")));
+        trade.setTotalEntryQuoteQty(asBigDecimal(d.get("totalEntryQuoteQty")));
+        trade.setTotalRemainingQty(asBigDecimal(d.get("totalRemainingQty")));
+        trade.setRealizedPnlAmount(asBigDecimal(d.get("realizedPnlAmount")));
+        trade.setRealizedPnlPercent(asBigDecimal(d.get("realizedPnlPercent")));
+        trade.setTotalFeeAmount(asBigDecimal(d.get("totalFeeAmount")));
+        trade.setTotalFeeCurrency(asString(d.get("totalFeeCurrency")));
+        trade.setExitReason(asString(d.get("exitReason")));
+        trade.setEntryTrendRegime(asString(d.get("entryTrendRegime")));
+        trade.setEntryAdx(asBigDecimal(d.get("entryAdx")));
+        trade.setEntryAtr(asBigDecimal(d.get("entryAtr")));
+        trade.setEntryRsi(asBigDecimal(d.get("entryRsi")));
+        trade.setEntryTime(asLocalDateTime(d.get("entryTime")));
+        trade.setExitTime(asLocalDateTime(d.get("exitTime")));
+        trade.setCreatedTime(asLocalDateTime(d.get("createdAt")));
+        trade.setUpdatedTime(asLocalDateTime(d.get("updatedAt")));
 
         return trade;
     }
 
     public List<TradePosition> getTradePositions(UUID tradeId) {
-        String tradePositionsKey = TRADE_POSITIONS_KEY_PREFIX + tradeId;
-        List<Object> positions = redisTemplate.opsForList().range(tradePositionsKey, 0, -1);
+        String key = TRADE_POSITIONS_KEY_PREFIX + tradeId;
+        List<Object> raw = redisTemplate.opsForList().range(key, 0, -1);
 
-        if (positions == null || positions.isEmpty()) {
+        if (raw == null || raw.isEmpty()) {
             return List.of();
         }
 
-        return positions.stream()
+        return raw.stream()
                 .filter(Objects::nonNull)
-                .filter(TradePosition.class::isInstance)
-                .map(TradePosition.class::cast)
+                .map(item -> {
+                    try {
+                        return objectMapper.readValue(String.valueOf(item), TradePosition.class);
+                    } catch (JsonProcessingException e) {
+                        log.warn("Failed to deserialize TradePosition from cache | tradeId={}", tradeId);
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
     }
 
+    // ── Account active trade set ──────────────────────────────────────────────
+
     public void addAccountActiveTrade(UUID accountId, UUID tradeId) {
-        String accountActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
-        redisTemplate.opsForSet().add(accountActiveTradesKey, tradeId.toString());
+        String key = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
+        redisTemplate.executePipelined((RedisCallback<?>) connection -> {
+            redisTemplate.opsForSet().add(key, tradeId.toString());
+            redisTemplate.expire(key, ACCOUNT_TRADE_SET_TTL);
+            return null;
+        });
     }
 
     public void removeAccountActiveTrade(UUID accountId, UUID tradeId) {
-        String userActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
-        redisTemplate.opsForSet().remove(userActiveTradesKey, tradeId.toString());
+        String key = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
+        redisTemplate.opsForSet().remove(key, tradeId.toString());
     }
 
     public Set<UUID> getAccountActiveTradeIds(UUID accountId) {
-        String accountActiveTradesKey = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
-        Set<Object> members = redisTemplate.opsForSet().members(accountActiveTradesKey);
+        String key = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
+        Set<Object> members = redisTemplate.opsForSet().members(key);
 
         if (members == null || members.isEmpty()) {
             return Set.of();
@@ -218,34 +330,76 @@ public class CacheService {
                 .collect(Collectors.toList());
     }
 
-    public void cacheUserActiveTrade(UUID accountId, UUID tradeId, Trades trade, List<TradePosition> tradePositions) {
-        cacheActiveTrade(tradeId, trade);
-        cacheTradePositions(tradeId, tradePositions);
-        addAccountActiveTrade(accountId, tradeId);
-    }
+    // ── Trade removal ─────────────────────────────────────────────────────────
 
-    public void removeClosedTrade(UUID tradeId) {
-        Trades cachedTrade = getTrade(tradeId);
-
-        redisTemplate.delete(TRADE_KEY_PREFIX + tradeId);
-        redisTemplate.delete(TRADE_POSITIONS_KEY_PREFIX + tradeId);
-
-        if (cachedTrade != null && cachedTrade.getAccountId() != null) {
-            removeAccountActiveTrade(cachedTrade.getAccountId(), tradeId);
-        }
-    }
-
+    /**
+     * Removes all cache entries for a closed trade.
+     * Callers must supply accountId directly to guarantee the account active-trade
+     * set is always cleaned — do not rely on reading accountId back from Redis,
+     * which can silently fail if the key is partially evicted.
+     */
     public void removeClosedTrade(UUID accountId, UUID tradeId) {
+        if (accountId == null || tradeId == null) {
+            log.warn("[Cache] removeClosedTrade called with null | accountId={} tradeId={}", accountId, tradeId);
+            return;
+        }
         redisTemplate.delete(TRADE_KEY_PREFIX + tradeId);
         redisTemplate.delete(TRADE_POSITIONS_KEY_PREFIX + tradeId);
         removeAccountActiveTrade(accountId, tradeId);
     }
 
-    private String asString(Object value) {
-        return value == null ? null : String.valueOf(value);
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private Map<String, Object> buildTradeMap(Trades trade) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("tradeId",            asString(trade.getTradeId()));
+        m.put("accountId",          asString(trade.getAccountId()));
+        m.put("accountStrategyId",  asString(trade.getAccountStrategyId()));
+        m.put("strategyName",       asString(trade.getStrategyName()));
+        m.put("interval",           asString(trade.getInterval()));
+        m.put("exchange",           asString(trade.getExchange()));
+        m.put("asset",              asString(trade.getAsset()));
+        m.put("side",               asString(trade.getSide()));
+        m.put("status",             asString(trade.getStatus()));
+        m.put("tradeMode",          asString(trade.getTradeMode()));
+        m.put("avgEntryPrice",      asString(trade.getAvgEntryPrice()));
+        m.put("avgExitPrice",       asString(trade.getAvgExitPrice()));
+        m.put("totalEntryQty",      asString(trade.getTotalEntryQty()));
+        m.put("totalEntryQuoteQty", asString(trade.getTotalEntryQuoteQty()));
+        m.put("totalRemainingQty",  asString(trade.getTotalRemainingQty()));
+        m.put("realizedPnlAmount",  asString(trade.getRealizedPnlAmount()));
+        m.put("realizedPnlPercent", asString(trade.getRealizedPnlPercent()));
+        m.put("totalFeeAmount",     asString(trade.getTotalFeeAmount()));
+        m.put("totalFeeCurrency",   asString(trade.getTotalFeeCurrency()));
+        m.put("exitReason",         asString(trade.getExitReason()));
+        m.put("entryTrendRegime",   asString(trade.getEntryTrendRegime()));
+        m.put("entryAdx",           asString(trade.getEntryAdx()));
+        m.put("entryAtr",           asString(trade.getEntryAtr()));
+        m.put("entryRsi",           asString(trade.getEntryRsi()));
+        m.put("entryTime",          toDateTimeString(trade.getEntryTime()));
+        m.put("exitTime",           toDateTimeString(trade.getExitTime()));
+        m.put("createdTime",          toDateTimeString(trade.getCreatedTime()));
+        m.put("updatedTime",          toDateTimeString(trade.getUpdatedTime()));
+        return m;
     }
 
-    private String toStringValue(Object value) {
+    private List<String> serializePositions(List<TradePosition> positions) {
+        if (positions == null || positions.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (TradePosition position : positions) {
+            try {
+                result.add(objectMapper.writeValueAsString(position));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize TradePosition | tradePositionId={}",
+                        position.getTradePositionId(), e);
+            }
+        }
+        return result;
+    }
+
+    private String asString(Object value) {
         return value == null ? null : String.valueOf(value);
     }
 
@@ -254,31 +408,21 @@ public class CacheService {
     }
 
     private BigDecimal asBigDecimal(Object value) {
-        if (value == null) {
-            return null;
-        }
-
-        if (value instanceof BigDecimal bigDecimal) {
-            return bigDecimal;
-        }
-
+        if (value == null) return null;
+        if (value instanceof BigDecimal bd) return bd;
         String raw = String.valueOf(value).trim();
-        if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) {
+        if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) return null;
+        try {
+            return new BigDecimal(raw);
+        } catch (NumberFormatException e) {
+            log.warn("Failed to parse BigDecimal from cache value: {}", raw);
             return null;
         }
-
-        return new BigDecimal(raw);
     }
 
     private UUID asUuid(Object value, UUID fallback) {
-        if (value == null) {
-            return fallback;
-        }
-
-        if (value instanceof UUID uuid) {
-            return uuid;
-        }
-
+        if (value == null) return fallback;
+        if (value instanceof UUID uuid) return uuid;
         try {
             return UUID.fromString(String.valueOf(value));
         } catch (Exception e) {
@@ -294,44 +438,37 @@ public class CacheService {
         }
     }
 
+    /**
+     * Parses a LocalDateTime from various formats that may come out of Redis.
+     * Returns null (with a warning) rather than throwing, so a bad cache value
+     * never crashes the live trading path.
+     */
     private LocalDateTime asLocalDateTime(Object value) {
-        if (value == null) {
-            return null;
-        }
-
-        if (value instanceof LocalDateTime localDateTime) {
-            return localDateTime;
-        }
-
-        if (value instanceof Date date) {
-            return LocalDateTime.ofInstant(date.toInstant(), DEFAULT_ZONE_ID);
-        }
+        if (value == null) return null;
+        if (value instanceof LocalDateTime ldt) return ldt;
 
         if (value instanceof Long epochMillis) {
-            return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), DEFAULT_ZONE_ID);
+            return LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(epochMillis), ZONE);
         }
 
         String raw = String.valueOf(value).trim();
-        if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) {
-            return null;
-        }
+        if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) return null;
 
         try {
             return LocalDateTime.parse(raw, DATE_TIME_FORMATTER);
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) { }
 
         try {
             return LocalDateTime.parse(raw);
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) { }
 
         try {
-            long epochMillis = Long.parseLong(raw);
-            return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), DEFAULT_ZONE_ID);
-        } catch (Exception ignored) {
-        }
+            return LocalDateTime.ofInstant(
+                    java.time.Instant.ofEpochMilli(Long.parseLong(raw)), ZONE);
+        } catch (Exception ignored) { }
 
-        throw new IllegalArgumentException("Failed to parse LocalDateTime from value: " + raw);
+        // Do not throw — log the problem and return null so callers stay alive.
+        log.warn("Failed to parse LocalDateTime from cache value: {}", raw);
+        return null;
     }
 }

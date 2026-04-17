@@ -28,6 +28,7 @@ public class TradeCloseService {
     private final TradeExecutionService tradeExecutionService;
     private final TradeSummaryService tradeSummaryService;
     private final TradeStateSyncService tradeStateSyncService;
+    private final TradeExecutionLogService tradeExecutionLogService;
 
     public void closeSinglePosition(
             Account user,
@@ -56,8 +57,16 @@ public class TradeCloseService {
             tradeSummaryService.refreshParentTradeSummary(validated.getTradeId());
             tradeStateSyncService.syncTradeState(validated.getTradeId());
 
+            tradeExecutionLogService.logCloseSuccess(
+                    user, asset, tradeType.name(), validated.getExitReason(), validated.getTradeId()
+            );
+
         } catch (Exception e) {
             log.error("❌ Error closing {} position | tradePositionId={}", tradeType, tradePosition.getTradePositionId(), e);
+            tradeExecutionLogService.logCloseFailure(
+                    user, asset, tradeType.name(), tradePosition.getExitReason(),
+                    tradePosition.getTradeId(), e.getMessage()
+            );
         }
     }
 
@@ -106,8 +115,15 @@ public class TradeCloseService {
             tradeSummaryService.refreshParentTradeSummary(first.getTradeId());
             tradeStateSyncService.syncTradeState(first.getTradeId());
 
+            tradeExecutionLogService.logCloseSuccess(
+                    user, asset, tradeType.name(), first.getExitReason(), first.getTradeId()
+            );
+
         } catch (Exception e) {
             log.error("❌ Error closing grouped {} positions | tradeId={}", tradeType, first.getTradeId(), e);
+            tradeExecutionLogService.logCloseFailure(
+                    user, asset, tradeType.name(), first.getExitReason(), first.getTradeId(), e.getMessage()
+            );
         }
     }
 

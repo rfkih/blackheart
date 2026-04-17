@@ -3,7 +3,6 @@ package id.co.blackheart.model;
 import jakarta.persistence.*;
 import lombok.*;
 
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
@@ -13,7 +12,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class BacktestRunStrategy {
+public class BacktestRunStrategy extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -35,6 +34,4 @@ public class BacktestRunStrategy {
     @Column(name = "weight", precision = 12, scale = 6)
     private java.math.BigDecimal weight;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
 }

@@ -15,6 +15,7 @@ import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.PortfolioRepository;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.strategy.StrategyContextEnrichmentService;
 import id.co.blackheart.service.strategy.StrategyExecutor;
 import id.co.blackheart.service.strategy.StrategyExecutorFactory;
@@ -37,6 +38,7 @@ public class LiveTradingCoordinatorService {
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
     private final PortfolioRepository portfolioRepository;
+    private final PortfolioService portfolioService;
     private final StrategyExecutorFactory strategyExecutorFactory;
     private final StrategyContextEnrichmentService strategyContextEnrichmentService;
     private final LiveTradingDecisionExecutorService liveTradingDecisionExecutorService;
@@ -53,6 +55,8 @@ public class LiveTradingCoordinatorService {
         if (!isApplicable(accountStrategy, interval)) {
             return;
         }
+
+        portfolioService.refreshAccountBalance(account);
 
         String strategyCode = accountStrategy.getStrategyCode();
 
@@ -231,16 +235,22 @@ public class LiveTradingCoordinatorService {
                 .build();
     }
 
+    private static final List<String> KNOWN_QUOTE_ASSETS = List.of(
+            "USDT", "USDC", "BUSD", "TUSD", "FDUSD", "BTC", "ETH", "BNB"
+    );
+
     private AssetPair resolveAssetPair(String symbol) {
         if (symbol == null || symbol.isBlank()) {
             throw new IllegalArgumentException("Symbol cannot be blank");
         }
 
-        if (symbol.endsWith("USDT")) {
-            return new AssetPair(
-                    symbol.substring(0, symbol.length() - 4),
-                    "USDT"
-            );
+        for (String quote : KNOWN_QUOTE_ASSETS) {
+            if (symbol.endsWith(quote) && symbol.length() > quote.length()) {
+                return new AssetPair(
+                        symbol.substring(0, symbol.length() - quote.length()),
+                        quote
+                );
+            }
         }
 
         throw new IllegalArgumentException("Unsupported symbol format: " + symbol);

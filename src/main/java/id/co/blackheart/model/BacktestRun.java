@@ -2,8 +2,6 @@ package id.co.blackheart.model;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -16,7 +14,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Entity
 @Table(name = "backtest_run")
-public class BacktestRun {
+public class BacktestRun extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -171,11 +169,4 @@ public class BacktestRun {
     @Column(name = "status", length = 30, nullable = false)
     private String status;
 
-    @CreationTimestamp
-    @Column(name = "created_time", nullable = false, updatable = false)
-    private LocalDateTime createdTime;
-
-    @UpdateTimestamp
-    @Column(name = "updated_time", nullable = false)
-    private LocalDateTime updatedTime;
 }

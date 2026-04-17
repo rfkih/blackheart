@@ -3,6 +3,7 @@ package id.co.blackheart.service.scheduler;
 import id.co.blackheart.model.SchedulerJob;
 import id.co.blackheart.repository.SchedulerJobRepository;
 import id.co.blackheart.service.DeepLearningService;
+import id.co.blackheart.service.notification.IpMonitorService;
 import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.tradequery.StrategyDailyRealizedCurveService;
 import jakarta.annotation.PostConstruct;
@@ -30,6 +31,7 @@ public class SchedulerService {
     private final DeepLearningService deepLearningService;
     private final StrategyDailyRealizedCurveService strategyDailyRealizedCurveService;
     private final SchedulerJobRepository schedulerJobRepository;
+    private final IpMonitorService ipMonitorService;
 
     @PostConstruct
     public void initSchedulersFromDB() {
@@ -77,6 +79,11 @@ public class SchedulerService {
                 case "GENERATE_DAILY_REALIZED_CURVE":
                     strategyDailyRealizedCurveService.generateForYesterday();
                     log.info("[{}][GENERATE_DAILY_REALIZED_CURVE] Triggered at {}", jobName, LocalDateTime.now());
+                    break;
+
+                case "IP_MONITOR":
+                    ipMonitorService.checkAndNotifyIfChanged();
+                    log.info("[{}][IP_MONITOR] Triggered at {}", jobName, LocalDateTime.now());
                     break;
 
                 default:
