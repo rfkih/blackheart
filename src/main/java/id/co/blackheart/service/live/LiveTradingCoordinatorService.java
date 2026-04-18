@@ -226,10 +226,6 @@ public class LiveTradingCoordinatorService {
             return livePositionSnapshotMapper.toSnapshot(activeTradePositions.getFirst());
         }
 
-        if (activeTrade != null) {
-            return livePositionSnapshotMapper.toSnapshot(activeTrade);
-        }
-
         return PositionSnapshot.builder()
                 .hasOpenPosition(false)
                 .build();

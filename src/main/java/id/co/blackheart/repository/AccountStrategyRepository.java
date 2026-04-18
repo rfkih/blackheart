@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface AccountStrategyRepository extends JpaRepository<AccountStrategy, UUID> {
@@ -28,4 +29,13 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
             WHERE acs.enabled = true
             """, nativeQuery = true)
     List<EnabledAccountStrategyProjection> findAllEnabledStrategyRefs();
+
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+            ORDER BY acs.priority_order ASC, acs.created_time ASC
+            """, nativeQuery = true)
+    List<AccountStrategy> findByAccountId(@Param("accountId") UUID accountId);
+
 }
