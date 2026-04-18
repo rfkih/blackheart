@@ -389,7 +389,7 @@ public class BacktestCoordinatorService {
 
     private BiasData preloadBiasData(BacktestRun backtestRun, StrategyRequirements requirements) {
         if (requirements == null
-                || !Boolean.TRUE.equals(requirements.isRequireBiasTimeframe())
+                || !requirements.isRequireBiasTimeframe()
                 || requirements.getBiasInterval() == null
                 || requirements.getBiasInterval().isBlank()) {
             return new BiasData(List.of(), Map.of());

@@ -198,7 +198,7 @@ public class LiveTradingCoordinatorService {
                         ? List.of()
                         : tradePositionRepository.findAllByTradeIdAndStatus(activeTrade.getTradeId(), "OPEN");
 
-        PositionSnapshot positionSnapshot = buildPositionSnapshot(activeTrade, activeTradePositions);
+        PositionSnapshot positionSnapshot = buildPositionSnapshot(activeTradePositions);
 
         return new LiveState(
                 cashBalance,
@@ -221,7 +221,7 @@ public class LiveTradingCoordinatorService {
         );
     }
 
-    private PositionSnapshot buildPositionSnapshot(Trades activeTrade, List<TradePosition> activeTradePositions) {
+    private PositionSnapshot buildPositionSnapshot(List<TradePosition> activeTradePositions) {
         if (activeTradePositions != null && !activeTradePositions.isEmpty()) {
             return livePositionSnapshotMapper.toSnapshot(activeTradePositions.getFirst());
         }

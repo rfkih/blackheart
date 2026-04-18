@@ -15,8 +15,6 @@ public interface LsrStrategyParamRepository extends JpaRepository<LsrStrategyPar
 
     Optional<LsrStrategyParam> findByAccountStrategyId(UUID accountStrategyId);
 
-    boolean existsByAccountStrategyId(UUID accountStrategyId);
-
     @Modifying
     @Query("DELETE FROM LsrStrategyParam p WHERE p.accountStrategyId = :accountStrategyId")
     int deleteByAccountStrategyId(@Param("accountStrategyId") UUID accountStrategyId);

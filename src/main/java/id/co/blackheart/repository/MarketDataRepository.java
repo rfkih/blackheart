@@ -15,21 +15,6 @@ public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
 
 
     @Query(value = """
-        SELECT *
-        FROM market_data md
-        WHERE md.symbol = :symbol
-          AND md.interval = :interval
-        ORDER BY md.end_time DESC
-        LIMIT 1
-        """, nativeQuery = true)
-    Optional<MarketData> findLatestBySymbolAndInterval(
-            @Param("symbol") String symbol,
-            @Param("interval") String interval
-    );
-
-
-
-    @Query(value = """
     SELECT *
     FROM market_data
     WHERE symbol = :symbol
@@ -43,22 +28,6 @@ public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
             @Param("interval") String interval,
             @Param("startTime") LocalDateTime startTime,
             @Param("endTime") LocalDateTime endTime
-    );
-
-    @Query(
-            value = """
-                    SELECT *
-                    FROM market_data
-                    WHERE symbol = :symbol
-                      AND "interval" = :interval
-                    ORDER BY start_time DESC
-                    LIMIT 300
-                    """,
-            nativeQuery = true
-    )
-    List<MarketData> findLast300BySymbolAndInterval(
-            @Param("symbol") String symbol,
-            @Param("interval") String interval
     );
 
     /**
@@ -140,23 +109,6 @@ public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
             nativeQuery = true
     )
     boolean existsBySymbolAndIntervalAndStartTime(
-            @Param("symbol") String symbol,
-            @Param("interval") String interval,
-            @Param("startTime") LocalDateTime startTime
-    );
-
-    @Query(
-            value = """
-            SELECT *
-            FROM market_data
-            WHERE symbol = :symbol
-              AND "interval" = :interval
-              AND start_time = :startTime
-            LIMIT 1
-            """,
-            nativeQuery = true
-    )
-    MarketData findBySymbolAndIntervalAndStartTime(
             @Param("symbol") String symbol,
             @Param("interval") String interval,
             @Param("startTime") LocalDateTime startTime

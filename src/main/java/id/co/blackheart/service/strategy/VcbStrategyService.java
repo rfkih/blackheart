@@ -238,7 +238,7 @@ public class VcbStrategyService implements StrategyExecutor {
                 .entryTrendRegime(feature.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("ENTRY", "VCB", "LONG", "BREAKOUT", "V2_1_BALANCE"))
-                .diagnostics(buildDiagnostics(feature, entryPrice, stopLoss, tp1, signalScore, confidenceScore))
+                .diagnostics(buildDiagnostics( entryPrice, stopLoss, tp1))
                 .build();
     }
 
@@ -358,7 +358,7 @@ public class VcbStrategyService implements StrategyExecutor {
                 .entryTrendRegime(feature.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("ENTRY", "VCB", "SHORT", "BREAKOUT", "V2_1_BALANCE"))
-                .diagnostics(buildDiagnostics(feature, entryPrice, stopLoss, tp1, signalScore, confidenceScore))
+                .diagnostics(buildDiagnostics( entryPrice, stopLoss, tp1))
                 .build();
     }
 
@@ -908,8 +908,8 @@ public class VcbStrategyService implements StrategyExecutor {
     }
 
     private Map<String, Object> buildDiagnostics(
-            FeatureStore feature, BigDecimal entry, BigDecimal stop,
-            BigDecimal tp1, BigDecimal signal, BigDecimal confidence) {
+             BigDecimal entry, BigDecimal stop,
+            BigDecimal tp1) {
         return Map.of("module", "VcbStrategyService", "entryPrice", entry, "stopLoss", stop, "tp1", tp1);
     }
 
@@ -937,7 +937,7 @@ public class VcbStrategyService implements StrategyExecutor {
                 .vetoed(Boolean.TRUE)
                 .vetoReason(vetoReason)
                 .reason("VCB vetoed by risk layer")
-                .jumpRiskScore(resolveJumpRisk(context))
+                .jumpRiskScore(context != null ? resolveJumpRisk(context) : ZERO)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("VETO", "VCB", "RISK_LAYER"))
                 .diagnostics(Map.of())

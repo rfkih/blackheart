@@ -183,9 +183,19 @@ public class LsrParams implements Serializable {
 
     private static Optional<BigDecimal> bd(Map<String, Object> m, String key) {
         Object v = m.get(key);
-        if (v == null) return Optional.empty();
-        if (v instanceof BigDecimal bd) return Optional.of(bd);
-        if (v instanceof Number n) return Optional.of(BigDecimal.valueOf(n.doubleValue()));
+        switch (v) {
+            case null -> {
+                return Optional.empty();
+            }
+            case BigDecimal bd -> {
+                return Optional.of(bd);
+            }
+            case Number n -> {
+                return Optional.of(BigDecimal.valueOf(n.doubleValue()));
+            }
+            default -> {
+            }
+        }
         try {
             return Optional.of(new BigDecimal(v.toString().trim()));
         } catch (NumberFormatException e) {
@@ -195,9 +205,19 @@ public class LsrParams implements Serializable {
 
     private static Optional<Integer> intVal(Map<String, Object> m, String key) {
         Object v = m.get(key);
-        if (v == null) return Optional.empty();
-        if (v instanceof Integer i) return Optional.of(i);
-        if (v instanceof Number n) return Optional.of(n.intValue());
+        switch (v) {
+            case null -> {
+                return Optional.empty();
+            }
+            case Integer i -> {
+                return Optional.of(i);
+            }
+            case Number n -> {
+                return Optional.of(n.intValue());
+            }
+            default -> {
+            }
+        }
         try {
             return Optional.of(Integer.parseInt(v.toString().trim()));
         } catch (NumberFormatException e) {
