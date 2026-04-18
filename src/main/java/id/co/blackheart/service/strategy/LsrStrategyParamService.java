@@ -8,9 +8,12 @@ import id.co.blackheart.repository.LsrStrategyParamRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -119,22 +122,32 @@ public class LsrStrategyParamService {
     @Transactional
     public LsrParamResponse putParams(UUID accountStrategyId, LsrParamUpdateRequest request, String updatedBy) {
         Map<String, Object> newOverrides = buildOverrideMap(request);
+        try {
+            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
+                    .orElseGet(() -> LsrStrategyParam.builder()
+                            .accountStrategyId(accountStrategyId)
+                            .build());
 
-        LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                .orElseGet(() -> LsrStrategyParam.builder()
-                        .accountStrategyId(accountStrategyId)
-                        .build());
+            entity.setParamOverrides(newOverrides);
+            entity.setUpdatedBy(updatedBy);
+            if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
 
-        entity.setParamOverrides(newOverrides);
-        entity.setUpdatedBy(updatedBy);
-        if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
+            LsrStrategyParam saved = paramRepository.save(entity);
+            evictCacheAfterCommit(accountStrategyId);
 
-        LsrStrategyParam saved = paramRepository.save(entity);
-        evictCache(accountStrategyId);
+            log.info("LSR params PUT: accountStrategyId={} overrides={} by={}", accountStrategyId, newOverrides.keySet(), updatedBy);
 
-        log.info("LSR params PUT: accountStrategyId={} overrides={} by={}", accountStrategyId, newOverrides.keySet(), updatedBy);
-
-        return buildResponse(saved);
+            return buildResponse(saved);
+        } catch (DataIntegrityViolationException e) {
+            // Concurrent insert: another thread created the row — load it and update
+            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
+                    .orElseThrow(() -> e);
+            entity.setParamOverrides(newOverrides);
+            entity.setUpdatedBy(updatedBy);
+            LsrStrategyParam saved = paramRepository.save(entity);
+            evictCacheAfterCommit(accountStrategyId);
+            return buildResponse(saved);
+        }
     }
 
     /**
@@ -144,25 +157,39 @@ public class LsrStrategyParamService {
      */
     @Transactional
     public LsrParamResponse patchParams(UUID accountStrategyId, LsrParamUpdateRequest request, String updatedBy) {
-        LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                .orElseGet(() -> LsrStrategyParam.builder()
-                        .accountStrategyId(accountStrategyId)
-                        .paramOverrides(new HashMap<>())
-                        .build());
+        Map<String, Object> incoming = buildOverrideMap(request);
+        try {
+            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
+                    .orElseGet(() -> LsrStrategyParam.builder()
+                            .accountStrategyId(accountStrategyId)
+                            .paramOverrides(new HashMap<>())
+                            .build());
 
-        Map<String, Object> merged = new HashMap<>(entity.getParamOverrides());
-        merged.putAll(buildOverrideMap(request));
+            Map<String, Object> merged = new HashMap<>(entity.getParamOverrides());
+            merged.putAll(incoming);
 
-        entity.setParamOverrides(merged);
-        entity.setUpdatedBy(updatedBy);
-        if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
+            entity.setParamOverrides(merged);
+            entity.setUpdatedBy(updatedBy);
+            if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
 
-        LsrStrategyParam saved = paramRepository.save(entity);
-        evictCache(accountStrategyId);
+            LsrStrategyParam saved = paramRepository.save(entity);
+            evictCacheAfterCommit(accountStrategyId);
 
-        log.info("LSR params PATCH: accountStrategyId={} merged overrides={} by={}", accountStrategyId, merged.keySet(), updatedBy);
+            log.info("LSR params PATCH: accountStrategyId={} merged overrides={} by={}", accountStrategyId, merged.keySet(), updatedBy);
 
-        return buildResponse(saved);
+            return buildResponse(saved);
+        } catch (DataIntegrityViolationException e) {
+            // Concurrent insert: another thread created the row — load it and merge
+            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
+                    .orElseThrow(() -> e);
+            Map<String, Object> merged = new HashMap<>(entity.getParamOverrides());
+            merged.putAll(incoming);
+            entity.setParamOverrides(merged);
+            entity.setUpdatedBy(updatedBy);
+            LsrStrategyParam saved = paramRepository.save(entity);
+            evictCacheAfterCommit(accountStrategyId);
+            return buildResponse(saved);
+        }
     }
 
     /**
@@ -198,6 +225,20 @@ public class LsrStrategyParamService {
         } catch (Exception e) {
             log.warn("Failed to evict LSR params cache for accountStrategyId={}: {}", accountStrategyId, e.getMessage());
         }
+    }
+
+    /**
+     * Registers a post-commit hook to evict the cache only after the surrounding transaction
+     * has been committed. Prevents a concurrent reader from re-populating the cache with
+     * stale DB data during the window between eviction and commit.
+     */
+    private void evictCacheAfterCommit(UUID accountStrategyId) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                evictCache(accountStrategyId);
+            }
+        });
     }
 
     private LsrParamResponse buildResponse(LsrStrategyParam entity) {

@@ -1,6 +1,7 @@
 package id.co.blackheart.converter;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
@@ -20,7 +21,9 @@ import java.util.Map;
 @Slf4j
 public class JsonMapConverter implements AttributeConverter<Map<String, Object>, String> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .enable(DeserializationFeature.USE_BIG_INTEGER_FOR_INTS);
     private static final TypeReference<Map<String, Object>> MAP_TYPE =
             new TypeReference<>() {};
 

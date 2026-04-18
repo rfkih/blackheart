@@ -20,10 +20,7 @@ import java.util.UUID;
  * <p>Primary key is {@code account_strategy_id} — one param set per strategy config.
  */
 @Entity
-@Table(name = "lsr_strategy_param",
-        indexes = {
-                @Index(name = "idx_lsr_param_account_strategy", columnList = "account_strategy_id", unique = true)
-        })
+@Table(name = "lsr_strategy_param")
 @Getter
 @Setter
 @Builder
