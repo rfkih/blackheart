@@ -33,6 +33,7 @@ public class BacktestService {
 
         BacktestRun backtestRun = BacktestRun.builder()
                 .accountStrategyId(request.getAccountStrategyId())
+                .strategyAccountStrategyIds(request.getStrategyAccountStrategyIds())
                 .strategyName(resolvedStrategyName)
                 .strategyCode(resolvedStrategyCode)
                 .asset(request.getAsset())
@@ -115,9 +116,6 @@ public class BacktestService {
     private void validateRequest(BacktestRunRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("BacktestRunRequest cannot be null");
-        }
-        if (request.getAccountStrategyId() == null) {
-            throw new IllegalArgumentException("accountStrategyId cannot be null");
         }
 
         boolean hasStrategyCodes = request.getStrategyCodes() != null

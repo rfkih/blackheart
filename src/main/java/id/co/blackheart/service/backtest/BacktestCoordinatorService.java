@@ -593,8 +593,13 @@ public class BacktestCoordinatorService {
     }
 
     private AccountStrategy buildSyntheticAccountStrategy(BacktestRun backtestRun, String strategyCode) {
+        UUID resolvedId = (backtestRun.getStrategyAccountStrategyIds() != null
+                && backtestRun.getStrategyAccountStrategyIds().containsKey(strategyCode))
+                ? backtestRun.getStrategyAccountStrategyIds().get(strategyCode)
+                : backtestRun.getAccountStrategyId();
+
         return AccountStrategy.builder()
-                .accountStrategyId(backtestRun.getAccountStrategyId())
+                .accountStrategyId(resolvedId)
                 .strategyCode(strategyCode)
                 .intervalName(backtestRun.getInterval())
                 .allowLong(resolveAllowLong(backtestRun))
