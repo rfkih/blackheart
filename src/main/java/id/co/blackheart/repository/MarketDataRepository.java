@@ -61,6 +61,25 @@ public interface MarketDataRepository extends JpaRepository<MarketData, Long> {
             @Param("interval") String interval
     );
 
+    /**
+     * Returns the most recent MarketData row whose end_time is strictly before the given boundary.
+     * Used by the live enrichment service to get the last COMPLETED bias candle.
+     */
+    @Query(value = """
+    SELECT *
+    FROM market_data
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND end_time < :boundary
+    ORDER BY end_time DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    Optional<MarketData> findLatestCompletedBySymbolAndInterval(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("boundary") LocalDateTime boundary
+    );
+
     @Query(value = """
     SELECT *
     FROM market_data

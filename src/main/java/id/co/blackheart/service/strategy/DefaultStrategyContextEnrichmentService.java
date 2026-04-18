@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Map;
 
 @Service
@@ -37,6 +38,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
 
         MarketData biasMarketData = null;
         FeatureStore biasFeatureStore = null;
+        FeatureStore previousFeatureStore = null;
 
         boolean isBacktest = baseContext.getExecutionMetadata() != null
                 && "backtest".equals(baseContext.getExecutionMetadata().get("source"));
@@ -45,12 +47,30 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
                 && requirements.isRequireBiasTimeframe()
                 && requirements.getBiasInterval() != null
                 && !requirements.getBiasInterval().isBlank()) {
-            biasFeatureStore = featureStoreRepository
-                    .findLatestBySymbolAndInterval(baseContext.getAsset(), requirements.getBiasInterval())
-                    .orElse(null);
-
+            // Bug fix: use last COMPLETED bias candle (end_time < now) not the current forming one
+            LocalDateTime now = LocalDateTime.now();
             biasMarketData = marketDataRepository
-                    .findLatestBySymbolAndInterval(baseContext.getAsset(), requirements.getBiasInterval())
+                    .findLatestCompletedBySymbolAndInterval(baseContext.getAsset(), requirements.getBiasInterval(), now)
+                    .orElse(null);
+            if (biasMarketData != null) {
+                biasFeatureStore = featureStoreRepository
+                        .findLatestCompletedBySymbolAndInterval(baseContext.getAsset(), requirements.getBiasInterval(), now)
+                        .orElse(null);
+            }
+        }
+
+        // Bug fix: populate previousFeatureStore for live (backtest sets it manually after enrichment)
+        if (!isBacktest
+                && requirements.isRequirePreviousFeatureStore()
+                && baseContext.getAsset() != null
+                && baseContext.getInterval() != null
+                && baseContext.getFeatureStore() != null
+                && baseContext.getFeatureStore().getStartTime() != null) {
+            previousFeatureStore = featureStoreRepository
+                    .findPreviousBySymbolIntervalAndStartTime(
+                            baseContext.getAsset(),
+                            baseContext.getInterval(),
+                            baseContext.getFeatureStore().getStartTime())
                     .orElse(null);
         }
 
@@ -81,6 +101,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
                 .featureStore(baseContext.getFeatureStore())
                 .biasMarketData(biasMarketData)
                 .biasFeatureStore(biasFeatureStore)
+                .previousFeatureStore(previousFeatureStore)
                 .regimeSnapshot(regimeSnapshot)
                 .volatilitySnapshot(volatilitySnapshot)
                 .riskSnapshot(riskSnapshot)
