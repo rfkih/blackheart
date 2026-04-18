@@ -1,6 +1,10 @@
 package id.co.blackheart.exception;
 
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.exception.InvalidCredentialsException;
+import id.co.blackheart.exception.UserAccountDisabledException;
+import id.co.blackheart.exception.UserAlreadyExistsException;
+import id.co.blackheart.exception.UserNotFoundException;
 import id.co.blackheart.util.ResponseCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -51,6 +55,52 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ResponseDto> handleIllegalState(IllegalStateException ex) {
         log.warn("Illegal state: {}", ex.getMessage());
         return badRequest(ResponseCode.ILLEGAL_STATE, ex.getMessage());
+    }
+
+    // ── 409 Conflict ─────────────────────────────────────────────────────────
+
+    @ExceptionHandler(UserAlreadyExistsException.class)
+    public ResponseEntity<ResponseDto> handleUserAlreadyExists(UserAlreadyExistsException ex) {
+        log.warn("User already exists: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ResponseDto.builder()
+                .responseCode(HttpStatus.CONFLICT.value() + ResponseCode.USER_ALREADY_EXISTS.getCode())
+                .responseDesc(ResponseCode.USER_ALREADY_EXISTS.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
+    // ── 401 Unauthorized ─────────────────────────────────────────────────────
+
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<ResponseDto> handleInvalidCredentials(InvalidCredentialsException ex) {
+        log.warn("Invalid credentials: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ResponseDto.builder()
+                .responseCode(HttpStatus.UNAUTHORIZED.value() + ResponseCode.INVALID_CREDENTIALS.getCode())
+                .responseDesc(ResponseCode.INVALID_CREDENTIALS.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
+    @ExceptionHandler(UserAccountDisabledException.class)
+    public ResponseEntity<ResponseDto> handleAccountDisabled(UserAccountDisabledException ex) {
+        log.warn("Account disabled: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ResponseDto.builder()
+                .responseCode(HttpStatus.FORBIDDEN.value() + ResponseCode.ACCOUNT_DISABLED.getCode())
+                .responseDesc(ResponseCode.ACCOUNT_DISABLED.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
+    // ── 404 Not Found ────────────────────────────────────────────────────────
+
+    @ExceptionHandler(UserNotFoundException.class)
+    public ResponseEntity<ResponseDto> handleUserNotFound(UserNotFoundException ex) {
+        log.warn("User not found: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ResponseDto.builder()
+                .responseCode(HttpStatus.NOT_FOUND.value() + ResponseCode.NOT_FOUND.getCode())
+                .responseDesc(ResponseCode.NOT_FOUND.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
     }
 
     // ── 404 Not Found ────────────────────────────────────────────────────────

@@ -1,15 +1,14 @@
 package id.co.blackheart.model;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 import org.hibernate.annotations.UuidGenerator;
 
 import java.math.BigDecimal;
 import java.util.UUID;
 
-@Data
+@Getter
+@Setter
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
@@ -21,6 +20,15 @@ public class Account extends BaseEntity {
     @UuidGenerator
     @Column(name = "account_id", nullable = false, updatable = false)
     private UUID accountId;
+
+    /**
+     * FK → users.user_id.
+     * The platform user who owns this exchange API account.
+     * Nullable to preserve backwards-compatibility with rows created before the
+     * users table was introduced; should be non-null for all new rows.
+     */
+    @Column(name = "user_id")
+    private UUID userId;
 
     @Column(name = "username", nullable = false, unique = true, length = 50)
     private String username;

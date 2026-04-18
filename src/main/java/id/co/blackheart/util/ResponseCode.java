@@ -50,7 +50,13 @@ public enum ResponseCode {
     MALFORMED_URL("74", "Validation Error - Malformed URL"),
     JSON_PARSING_ERROR("75", "Validation Error - JSON Parsing"),
     XML_PARSING_ERROR("76", "Validation Error - XML Parsing"),
-    TOO_MANY_REQUESTS("80", "Too Many Requests");
+    TOO_MANY_REQUESTS("80", "Too Many Requests"),
+
+    // User / Auth Errors
+    USER_ALREADY_EXISTS("81", "User Already Exists"),
+    INVALID_CREDENTIALS("82", "Invalid Credentials"),
+    ACCOUNT_DISABLED("83", "Account Disabled or Suspended"),
+    UNAUTHORIZED("84", "Unauthorized - Token missing or invalid");
 
     private final String code;
     private final String description;
