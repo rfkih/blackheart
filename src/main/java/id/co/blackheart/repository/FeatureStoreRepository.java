@@ -14,7 +14,18 @@ import java.util.Optional;
 @Repository
 public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long> {
 
-
+    @Query(value = """
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+    ORDER BY start_time DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    Optional<FeatureStore> findLatestBySymbolAndInterval(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval
+    );
 
     @Query(value = """
     SELECT *
