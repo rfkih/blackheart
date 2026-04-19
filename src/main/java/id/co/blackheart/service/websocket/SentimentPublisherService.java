@@ -53,7 +53,6 @@ public class SentimentPublisherService {
     /** symbol → last seen 4h FeatureStore startTime */
     private final Map<String, LocalDateTime> lastFeatureTime4h = new ConcurrentHashMap<>();
 
-    // ── Public API ────────────────────────────────────────────────────────────
 
     public void addSubscription(String symbol) {
         activeSubscriptions.add(symbol.toUpperCase());
@@ -79,7 +78,6 @@ public class SentimentPublisherService {
         return computeAndCache(key);
     }
 
-    // ── Scheduled publisher ───────────────────────────────────────────────────
 
     /**
      * Runs every 15 seconds.
