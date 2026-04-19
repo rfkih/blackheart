@@ -32,4 +32,13 @@ public interface PortfolioRepository extends JpaRepository<Portfolio, Long> {
       AND p.is_active = '1'
     """, nativeQuery = true)
     List<Portfolio> findAllByAccountIdAndAssetIn(UUID accountId, List<String> assets);
+
+    @Query(value = """
+    SELECT *
+    FROM portfolio p
+    WHERE p.account_id = :accountId
+      AND p.is_active = '1'
+    ORDER BY p.asset ASC
+    """, nativeQuery = true)
+    List<Portfolio> findAllByAccountId(@Param("accountId") UUID accountId);
 }

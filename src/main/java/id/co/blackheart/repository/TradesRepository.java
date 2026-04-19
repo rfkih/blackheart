@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -56,5 +57,62 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
             @Param("interval") String interval,
             @Param("statuses") List<String> statuses
     );
+
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.account_id IN (:accountIds)
+            ORDER BY t.entry_time DESC
+            LIMIT :limitVal OFFSET :offsetVal
+            """, nativeQuery = true)
+    List<Trades> findByAccountIds(
+            @Param("accountIds") List<UUID> accountIds,
+            @Param("limitVal") int limitVal,
+            @Param("offsetVal") int offsetVal
+    );
+
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.account_id IN (:accountIds)
+              AND t.status = :status
+            ORDER BY t.entry_time DESC
+            LIMIT :limitVal OFFSET :offsetVal
+            """, nativeQuery = true)
+    List<Trades> findByAccountIdsAndStatus(
+            @Param("accountIds") List<UUID> accountIds,
+            @Param("status") String status,
+            @Param("limitVal") int limitVal,
+            @Param("offsetVal") int offsetVal
+    );
+
+    @Query(value = "SELECT COUNT(*) FROM trades WHERE account_id IN (:accountIds)", nativeQuery = true)
+    long countByAccountIds(@Param("accountIds") List<UUID> accountIds);
+
+    @Query(value = "SELECT COUNT(*) FROM trades WHERE account_id IN (:accountIds) AND status = :status", nativeQuery = true)
+    long countByAccountIdsAndStatus(
+            @Param("accountIds") List<UUID> accountIds,
+            @Param("status") String status
+    );
+
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.account_id IN (:accountIds)
+              AND t.status = 'CLOSED'
+              AND t.exit_time >= :from
+              AND t.exit_time < :to
+            ORDER BY t.exit_time DESC
+            """, nativeQuery = true)
+    List<Trades> findClosedInPeriodByAccountIds(
+            @Param("accountIds") List<UUID> accountIds,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to
+    );
+
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.account_id IN (:accountIds)
+              AND t.status IN ('OPEN', 'PARTIALLY_CLOSED')
+            ORDER BY t.entry_time DESC
+            """, nativeQuery = true)
+    List<Trades> findOpenByAccountIds(@Param("accountIds") List<UUID> accountIds);
 
 }
