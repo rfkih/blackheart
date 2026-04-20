@@ -87,6 +87,13 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
     @Query(value = "SELECT COUNT(*) FROM trades WHERE account_id IN (:accountIds)", nativeQuery = true)
     long countByAccountIds(@Param("accountIds") List<UUID> accountIds);
 
+    @Query(value = """
+            SELECT COUNT(*) FROM trades t
+            WHERE t.account_strategy_id = :accountStrategyId
+              AND t.status IN ('OPEN', 'PARTIALLY_CLOSED')
+            """, nativeQuery = true)
+    long countOpenByAccountStrategyId(@Param("accountStrategyId") UUID accountStrategyId);
+
     @Query(value = "SELECT COUNT(*) FROM trades WHERE account_id IN (:accountIds) AND status = :status", nativeQuery = true)
     long countByAccountIdsAndStatus(
             @Param("accountIds") List<UUID> accountIds,
