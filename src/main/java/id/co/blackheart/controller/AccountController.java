@@ -1,7 +1,7 @@
 package id.co.blackheart.controller;
 
 import id.co.blackheart.dto.response.ResponseDto;
-import id.co.blackheart.service.strategy.AccountStrategyService;
+import id.co.blackheart.service.user.AccountQueryService;
 import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,51 +15,43 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 
+/**
+ * Read-only account summaries for the authenticated user.
+ * Used by the frontend account switcher to enumerate Binance accounts without
+ * exposing API keys/secrets.
+ */
 @RestController
-@RequestMapping("/api/v1/account-strategies")
+@RequestMapping("/api/v1/accounts")
 @RequiredArgsConstructor
 @Slf4j
-@Tag(name = "AccountStrategyController", description = "Account strategy inquiry endpoints")
-public class AccountStrategyController {
+@Tag(name = "AccountController", description = "Account inquiry endpoints (metadata only, never keys)")
+public class AccountController {
 
-    private final AccountStrategyService accountStrategyService;
+    private final AccountQueryService accountQueryService;
     private final JwtService jwtService;
 
     @GetMapping
-    @Operation(summary = "Get all strategies across all accounts belonging to the authenticated user",
+    @Operation(summary = "List all accounts owned by the authenticated user",
                security = @SecurityRequirement(name = "bearerAuth"))
-    public ResponseEntity<ResponseDto> getMyStrategies(
+    public ResponseEntity<ResponseDto> listMyAccounts(
             @RequestHeader("Authorization") String authHeader) {
         UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(accountStrategyService.getStrategiesByUser(userId))
+                .data(accountQueryService.getAccountsByUser(userId))
                 .build());
     }
 
-    @GetMapping("/{accountStrategyId}")
-    @Operation(summary = "Get a single account strategy by id, scoped to the authenticated user",
+    @GetMapping("/{accountId}")
+    @Operation(summary = "Get a single account owned by the authenticated user",
                security = @SecurityRequirement(name = "bearerAuth"))
-    public ResponseEntity<ResponseDto> getStrategyById(
-            @RequestHeader("Authorization") String authHeader,
-            @PathVariable UUID accountStrategyId) {
-        UUID userId = extractUserId(authHeader);
-        return ResponseEntity.ok(ResponseDto.builder()
-                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(accountStrategyService.getStrategyById(userId, accountStrategyId))
-                .build());
-    }
-
-    @GetMapping("/account/{accountId}")
-    @Operation(summary = "Get all strategies for a specific account belonging to the authenticated user",
-               security = @SecurityRequirement(name = "bearerAuth"))
-    public ResponseEntity<ResponseDto> getStrategiesByAccount(
+    public ResponseEntity<ResponseDto> getAccount(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID accountId) {
         UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(accountStrategyService.getStrategiesByUserAndAccount(userId, accountId))
+                .data(accountQueryService.getAccountForUser(userId, accountId))
                 .build());
     }
 

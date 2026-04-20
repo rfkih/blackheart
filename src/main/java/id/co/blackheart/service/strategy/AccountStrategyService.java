@@ -42,6 +42,26 @@ public class AccountStrategyService {
     }
 
     /**
+     * Returns a single account strategy by id, verifying that its account belongs to the user.
+     */
+    @Transactional(readOnly = true)
+    public AccountStrategyResponse getStrategyById(UUID userId, UUID accountStrategyId) {
+        AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Account strategy not found: " + accountStrategyId));
+
+        Account account = accountRepository.findByAccountId(strategy.getAccountId())
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Account strategy not found: " + accountStrategyId));
+
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException("Account strategy not found: " + accountStrategyId);
+        }
+
+        return toResponse(strategy);
+    }
+
+    /**
      * Returns all account strategies for a specific account, verifying the account belongs to the user.
      */
     @Transactional(readOnly = true)
