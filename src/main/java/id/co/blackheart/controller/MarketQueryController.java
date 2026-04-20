@@ -12,9 +12,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.*;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -73,11 +72,25 @@ public class MarketQueryController {
     }
 
     private LocalDateTime parseDateTime(String s) {
+        if (s == null || s.isBlank()) {
+            throw new IllegalArgumentException("Date string is empty");
+        }
+
+        if (s.matches("\\d{13}")) {
+            return Instant.ofEpochMilli(Long.parseLong(s))
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDateTime();
+        }
+
         try {
             return LocalDateTime.parse(s);
-        } catch (Exception e) {
+        } catch (DateTimeParseException ignored) {}
+
+        try {
             return LocalDate.parse(s).atStartOfDay();
-        }
+        } catch (DateTimeParseException ignored) {}
+
+        throw new IllegalArgumentException("Unsupported date format: " + s);
     }
 
     private Long toEpochMs(LocalDateTime ldt) {
