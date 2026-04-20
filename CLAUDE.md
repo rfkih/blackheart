@@ -60,7 +60,7 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 |---|---|
 | `User` | Platform user (email/password login, JWT) |
 | `Account` | Exchange API account; `userId` FK to `User` |
-| `AccountStrategy` | Links account → strategy; interval, capital allocation, priority, allow-long/short flags |
+| `AccountStrategy` | Links account → strategy; interval, capital allocation, priority, allow-long/short flags. Soft-delete via `is_deleted` + `deleted_at` (preserves FK targets for historical trades/P&L) |
 | `LsrStrategyParam` | Per-account-strategy LSR overrides; JSONB `param_overrides`, `@Version` optimistic lock |
 | `VcbStrategyParam` | Per-account-strategy VCB overrides; same structure as LSR |
 | `Trades` | Parent trade record (status: OPEN / PARTIALLY_CLOSED / CLOSED) |
@@ -80,6 +80,12 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 | `RAHT_V1` | `RahtV1` | RahtV1 strategy |
 | `TSMOM_V1` | `TsMomV1` | Time-series momentum |
 | `TEST` | `ExecutionTestService` | Execution testing only |
+
+## Account Strategy Lifecycle
+- **Create**: `POST /api/v1/account-strategies` — verifies user owns the target account and that `strategyCode` resolves via `StrategyDefinitionRepository`. New rows default to `enabled=false`, `currentStatus="STOPPED"`, `is_deleted=false`. Users explicitly toggle `enabled` on to go live.
+- **Soft-delete**: `DELETE /api/v1/account-strategies/:id` — sets `is_deleted=true`, `enabled=false`, `deleted_at=now()`. Blocked in-service if `TradesRepository.countOpenByAccountStrategyId > 0` (throws `IllegalStateException` with count). Historical trades / P&L continue to resolve the strategy because the row is preserved.
+- **Liveness flag is `enabled`, not `currentStatus`**: `current_status` is a legacy column that **no service writes**. Every row holds its seed value (`"STOPPED"`). All active-strategy queries filter `enabled = true AND is_deleted = false`; never rely on `current_status`. The frontend status badge is derived from `enabled`.
+- **Read paths that filter `is_deleted`**: every query in `AccountStrategyRepository` (live orchestration, scheduler, UI list). Trade / P&L joins must **NOT** filter `is_deleted` — historical attribution depends on resolving deleted strategies by id.
 
 ## Per-Strategy Parameter System (LSR + VCB)
 Both LSR and VCB support per-`accountStrategyId` overrides in PostgreSQL:
@@ -109,7 +115,7 @@ Both LSR and VCB support per-`accountStrategyId` overrides in PostgreSQL:
 | Controller | Base Path | Purpose |
 |---|---|---|
 | `UserController` | `/api/v1/users` | Register, login, profile (GET/PATCH `/me`) |
-| `AccountStrategyController` | `/api/v1/account-strategies` | Inquiry account strategies by user |
+| `AccountStrategyController` | `/api/v1/account-strategies` | List/get strategies by user (excludes soft-deleted); `POST` create; `DELETE /:id` soft-delete (blocked if OPEN/PARTIALLY_CLOSED trades exist) |
 | `LsrStrategyParamController` | `/api/v1/lsr-params` | LSR param CRUD |
 | `VcbStrategyParamController` | `/api/v1/vcb-params` | VCB param CRUD |
 | `BacktestController` | `/api/v1/backtest` | Submit and query backtests |
