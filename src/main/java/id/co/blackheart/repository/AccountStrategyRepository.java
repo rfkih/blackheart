@@ -15,6 +15,7 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
         SELECT acs.*
         FROM account_strategy acs
         WHERE acs.enabled = true
+          AND acs.is_deleted = false
           AND acs.interval_name = :interval
         ORDER BY acs.priority_order ASC, acs.created_time ASC
         """, nativeQuery = true)
@@ -26,6 +27,17 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
                 acs.account_strategy_id AS accountStrategyId
             FROM account_strategy acs
             WHERE acs.enabled = true
+              AND acs.is_deleted = false
             """, nativeQuery = true)
     List<EnabledAccountStrategyProjection> findAllEnabledStrategyRefs();
+
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+              AND acs.is_deleted = false
+            ORDER BY acs.priority_order ASC, acs.created_time ASC
+            """, nativeQuery = true)
+    List<AccountStrategy> findByAccountId(@Param("accountId") UUID accountId);
+
 }

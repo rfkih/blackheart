@@ -15,18 +15,17 @@ import java.util.Optional;
 public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long> {
 
     @Query(value = """
-        SELECT *
-        FROM feature_store fs
-        WHERE fs.symbol = :symbol
-          AND fs.interval = :interval
-        ORDER BY fs.start_time DESC
-        LIMIT 1
-        """, nativeQuery = true)
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+    ORDER BY start_time DESC
+    LIMIT 1
+    """, nativeQuery = true)
     Optional<FeatureStore> findLatestBySymbolAndInterval(
             @Param("symbol") String symbol,
             @Param("interval") String interval
     );
-
 
     @Query(value = """
     SELECT *
@@ -74,19 +73,6 @@ public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long
     );
 
 
-    @Query(value = """
-    SELECT *
-    FROM feature_store
-    WHERE symbol = :symbol
-      AND interval = :interval
-      AND start_time = :startTime
-    LIMIT 1
-    """, nativeQuery = true)
-    Optional<FeatureStore> getFeatureForBacktest(
-            @Param("symbol") String symbol,
-            @Param("interval") String interval,
-            @Param("startTime") LocalDateTime startTime
-    );
 
     @Query(
             value = """
@@ -103,6 +89,44 @@ public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long
             @Param("symbol") String symbol,
             @Param("interval") String interval,
             @Param("startTime") LocalDateTime startTime
+    );
+
+    /**
+     * Returns the most recent completed FeatureStore row strictly before the given startTime.
+     * Used by the live enrichment service to populate previousFeatureStore.
+     */
+    @Query(value = """
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND start_time < :startTime
+    ORDER BY start_time DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    Optional<FeatureStore> findPreviousBySymbolIntervalAndStartTime(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime
+    );
+
+    /**
+     * Returns the most recent FeatureStore row whose start_time is before the given boundary.
+     * Used by the live enrichment service to get the last COMPLETED bias candle's features.
+     */
+    @Query(value = """
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND start_time < :boundary
+    ORDER BY start_time DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    Optional<FeatureStore> findLatestCompletedBySymbolAndInterval(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("boundary") LocalDateTime boundary
     );
 
     /**

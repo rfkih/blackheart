@@ -1,5 +1,6 @@
 package id.co.blackheart.service.strategy;
 
+import id.co.blackheart.dto.lsr.LsrParams;
 import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
 import id.co.blackheart.dto.strategy.RegimeSnapshot;
@@ -20,6 +21,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -27,9 +29,10 @@ import java.util.Map;
 public class LsrStrategyService implements StrategyExecutor {
 
     private final StrategyHelper strategyHelper;
+    private final LsrStrategyParamService lsrStrategyParamService;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Identity
+    // Identity (not user-configurable)
     // ─────────────────────────────────────────────────────────────────────────
     private static final String STRATEGY_CODE = "LSR";
     private static final String STRATEGY_NAME = "Liquidity Sweep Reversal Adaptive";
@@ -55,93 +58,9 @@ public class LsrStrategyService implements StrategyExecutor {
     private static final BigDecimal ONE = BigDecimal.ONE;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Regime / volatility thresholds
+    // All tunable parameters are now resolved per-account-strategy via
+    // LsrStrategyParamService (Redis-cached, DB-backed, defaults built-in).
     // ─────────────────────────────────────────────────────────────────────────
-    private static final BigDecimal ADX_TRENDING_MIN = new BigDecimal("22");
-    private static final BigDecimal ADX_COMPRESSION_MAX = new BigDecimal("18");
-
-    private static final BigDecimal ADX_ENTRY_MIN = new BigDecimal("15");
-    private static final BigDecimal ADX_ENTRY_MAX = new BigDecimal("30");
-
-    private static final BigDecimal ATR_RATIO_EXHAUSTION = new BigDecimal("2.50");
-    private static final BigDecimal ATR_RATIO_CHAOTIC = new BigDecimal("1.80");
-    private static final BigDecimal ATR_RATIO_COMPRESS = new BigDecimal("0.70");
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Risk / exits
-    // ─────────────────────────────────────────────────────────────────────────
-    private static final BigDecimal STOP_ATR_BUFFER = new BigDecimal("0.20");
-    private static final BigDecimal MAX_RISK_PCT = new BigDecimal("0.03");
-
-    // ── TP ratios raised to overcome round-trip fee drag (~0.15% of notional).
-    // Previous: SWEEP 1.60R, CONT 1.40R, SHORT 1.20R — average winner barely cleared fees.
-    // New targets ensure each winning trade generates meaningful net profit above fees.
-    private static final BigDecimal TP1_R_LONG_SWEEP = new BigDecimal("2.00");
-    private static final BigDecimal TP1_R_LONG_CONTINUATION = new BigDecimal("1.80");
-    private static final BigDecimal TP1_R_SHORT = new BigDecimal("1.60");
-
-    private static final BigDecimal BE_TRIGGER_R_LONG_SWEEP = new BigDecimal("0.90");
-    private static final BigDecimal BE_TRIGGER_R_LONG_CONTINUATION = new BigDecimal("0.80");
-    private static final BigDecimal BE_TRIGGER_R_SHORT = new BigDecimal("0.60");
-
-    // ── Fee buffer applied when moving SL to "break-even".
-    // Setting SL to exact entry (0R) always produces a net loss = entry fee + exit fee.
-    // Moving SL to entry + 0.20R ensures the exit generates enough gross profit to cover fees.
-    private static final BigDecimal BE_FEE_BUFFER_R = new BigDecimal("0.20");
-
-    // ── Time-stop bars extended to give trades more room to reach the raised TP targets.
-    private static final int TIME_STOP_BARS_LONG_SWEEP = 14;
-    private static final int TIME_STOP_BARS_LONG_CONTINUATION = 12;
-    private static final int TIME_STOP_BARS_SHORT = 10;
-
-    // ── Time-stop minimum R raised from 0.08–0.15R to 0.50–0.60R.
-    // At tight stops (riskPerUnit ≈ 1% of entry), 0.10R profit = ~$0.09 — less than the ~$0.135 fee.
-    // 0.50–0.60R ensures time-stopped exits always generate net profit above the fee cost.
-    private static final BigDecimal TIME_STOP_MIN_R_LONG_SWEEP = new BigDecimal("0.60");
-    private static final BigDecimal TIME_STOP_MIN_R_LONG_CONTINUATION = new BigDecimal("0.50");
-    private static final BigDecimal TIME_STOP_MIN_R_SHORT = new BigDecimal("0.50");
-
-    private static final BigDecimal SHORT_NOTIONAL_MULTIPLIER = new BigDecimal("0.70");
-    private static final BigDecimal LONG_CONTINUATION_NOTIONAL_MULTIPLIER = new BigDecimal("0.85");
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Long sweep reclaim setup
-    // ─────────────────────────────────────────────────────────────────────────
-    private static final BigDecimal LONG_SWEEP_MIN_ATR = new BigDecimal("0.15");
-    private static final BigDecimal LONG_SWEEP_MAX_ATR = new BigDecimal("2.20");
-    private static final BigDecimal LONG_SWEEP_RSI_MIN = new BigDecimal("35");
-    private static final BigDecimal LONG_SWEEP_RSI_MAX = new BigDecimal("48");
-    private static final BigDecimal LONG_SWEEP_RVOL_MIN = new BigDecimal("0.95");
-    private static final BigDecimal LONG_SWEEP_BODY_MIN = new BigDecimal("0.28");
-    private static final BigDecimal LONG_SWEEP_CLV_MIN = new BigDecimal("0.58");
-    // ── Raised from 0.48 → 0.72. Backtest showed trades below 0.72 had near-zero gross edge;
-    // fees turned them all net-negative. Only high-conviction sweeps (score ≥ 0.72, conf ≥ 0.75) are kept.
-    private static final BigDecimal MIN_SIGNAL_SCORE_LONG_SWEEP = new BigDecimal("0.72");
-    private static final BigDecimal MIN_CONFIDENCE_SCORE_LONG_SWEEP = new BigDecimal("0.75");
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Long continuation reclaim setup
-    // ─────────────────────────────────────────────────────────────────────────
-    private static final BigDecimal LONG_CONT_RSI_MIN = new BigDecimal("38");
-    private static final BigDecimal LONG_CONT_RSI_MAX = new BigDecimal("50");
-    private static final BigDecimal LONG_CONT_RVOL_MIN = new BigDecimal("0.90");
-    private static final BigDecimal LONG_CONT_BODY_MIN = new BigDecimal("0.24");
-    private static final BigDecimal LONG_CONT_CLV_MIN = new BigDecimal("0.60");
-    private static final BigDecimal LONG_CONT_DONCHIAN_BUFFER_ATR = new BigDecimal("0.10");
-    // ── Raised from 0.46 → 0.72, same rationale as sweep.
-    private static final BigDecimal MIN_SIGNAL_SCORE_LONG_CONT = new BigDecimal("0.72");
-    private static final BigDecimal MIN_CONFIDENCE_SCORE_LONG_CONT = new BigDecimal("0.75");
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Premium short exhaustion setup
-    // ─────────────────────────────────────────────────────────────────────────
-    private static final BigDecimal SHORT_SWEEP_MIN_ATR = new BigDecimal("0.25");
-    private static final BigDecimal SHORT_SWEEP_MAX_ATR = new BigDecimal("1.80");
-    private static final BigDecimal SHORT_RSI_MIN = new BigDecimal("65");
-    private static final BigDecimal SHORT_RVOL_MIN = new BigDecimal("1.20");
-    private static final BigDecimal SHORT_BODY_MIN = new BigDecimal("0.42");
-    private static final BigDecimal SHORT_CLV_MAX = new BigDecimal("0.30");
-    private static final BigDecimal MIN_SIGNAL_SCORE_SHORT = new BigDecimal("0.60");
 
     @Override
     public StrategyRequirements getRequirements() {
@@ -162,6 +81,10 @@ public class LsrStrategyService implements StrategyExecutor {
             return hold(context, "Invalid context or missing market data");
         }
 
+        UUID accountStrategyId = context.getAccountStrategy() != null
+                ? context.getAccountStrategy().getAccountStrategyId() : null;
+        LsrParams p = lsrStrategyParamService.getParams(accountStrategyId);
+
         MarketData md = context.getMarketData();
         FeatureStore fs = context.getFeatureStore();
 
@@ -174,17 +97,17 @@ public class LsrStrategyService implements StrategyExecutor {
             return veto("Market vetoed by quality / jump-risk filter", context);
         }
 
-        if (isAtrSpikeVetoed(fs)) {
+        if (isAtrSpikeVetoed(fs, p)) {
             return veto("ATR spike veto — exhaustion or chaotic volatility regime", context);
         }
 
-        if (isAdxOutsideActiveZone(fs)) {
-            return hold(context, "ADX outside active zone [15, 30]");
+        if (isAdxOutsideActiveZone(fs, p)) {
+            return hold(context, "ADX outside active zone");
         }
 
         PositionSnapshot snap = context.getPositionSnapshot();
         if (context.hasTradablePosition() && snap != null) {
-            return managePosition(context, md, fs, snap);
+            return managePosition(context, md, fs, snap, p);
         }
 
         if (context.getPreviousFeatureStore() == null) {
@@ -192,7 +115,7 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         FeatureStore prevFs = context.getPreviousFeatureStore();
-        RegimeState regime = classifyRegime(context, fs);
+        RegimeState regime = classifyRegime(context, fs, p);
 
         if (regime == RegimeState.COMPRESSION
                 || regime == RegimeState.EXHAUSTION_SPIKE
@@ -200,21 +123,20 @@ public class LsrStrategyService implements StrategyExecutor {
             return hold(context, "Regime veto: " + regime.name());
         }
 
-
         if ((regime == RegimeState.BULL_TREND
                 || regime == RegimeState.RANGING
                 || regime == RegimeState.NEUTRAL)
                 && context.isLongAllowed()) {
-            StrategyDecision sweepLong = tryLongSweepReclaimEntry(context, md, fs, prevFs, regime);
+            StrategyDecision sweepLong = tryLongSweepReclaimEntry(context, md, fs, prevFs, regime, p);
             if (sweepLong != null) return sweepLong;
 
-            StrategyDecision contLong = tryLongContinuationReclaimEntry(context, md, fs, prevFs, regime);
+            StrategyDecision contLong = tryLongContinuationReclaimEntry(context, md, fs, prevFs, regime, p);
             if (contLong != null) return contLong;
         }
 
         if ((regime == RegimeState.BEAR_TREND || regime == RegimeState.RANGING)
                 && context.isShortAllowed()) {
-            StrategyDecision shortPremium = tryShortExhaustionEntry(context, md, fs, prevFs, regime);
+            StrategyDecision shortPremium = tryShortExhaustionEntry(context, md, fs, prevFs, regime, p);
             if (shortPremium != null) return shortPremium;
         }
 
@@ -222,33 +144,28 @@ public class LsrStrategyService implements StrategyExecutor {
     }
 
 
-    private RegimeState classifyRegime(EnrichedStrategyContext context, FeatureStore fs) {
+    private RegimeState classifyRegime(EnrichedStrategyContext context, FeatureStore fs, LsrParams p) {
         if (strategyHelper.hasValue(fs.getAtrRatio())
-                && fs.getAtrRatio().compareTo(ATR_RATIO_EXHAUSTION) >= 0) {
+                && fs.getAtrRatio().compareTo(p.getAtrRatioExhaustion()) >= 0) {
             return RegimeState.EXHAUSTION_SPIKE;
         }
 
         FeatureStore bias = context.getBiasFeatureStore();
         MarketData biasData = context.getBiasMarketData();
 
-        // No 4H bias data -> fallback to NEUTRAL
         if (bias == null || biasData == null) {
             return RegimeState.NEUTRAL;
         }
 
-        BigDecimal adx4h = strategyHelper.hasValue(bias.getAdx())
-                ? bias.getAdx()
-                : ZERO;
+        BigDecimal adx4h = strategyHelper.hasValue(bias.getAdx()) ? bias.getAdx() : ZERO;
 
-        // 2) Chaotic trend override
-        if (adx4h.compareTo(ADX_TRENDING_MIN) >= 0
+        if (adx4h.compareTo(p.getAdxTrendingMin()) >= 0
                 && strategyHelper.hasValue(fs.getAtrRatio())
-                && fs.getAtrRatio().compareTo(ATR_RATIO_CHAOTIC) >= 0) {
+                && fs.getAtrRatio().compareTo(p.getAtrRatioChaotic()) >= 0) {
             return RegimeState.CHAOTIC_TREND;
         }
 
-        // 3) Trending regimes
-        if (adx4h.compareTo(ADX_TRENDING_MIN) >= 0
+        if (adx4h.compareTo(p.getAdxTrendingMin()) >= 0
                 && strategyHelper.hasValue(bias.getEma50())
                 && strategyHelper.hasValue(bias.getEma200())
                 && strategyHelper.hasValue(biasData.getClosePrice())) {
@@ -264,14 +181,12 @@ public class LsrStrategyService implements StrategyExecutor {
             }
         }
 
-        // 4) Compression
-        if (adx4h.compareTo(ADX_COMPRESSION_MAX) < 0
+        if (adx4h.compareTo(p.getAdxCompressionMax()) < 0
                 && strategyHelper.hasValue(fs.getAtrRatio())
-                && fs.getAtrRatio().compareTo(ATR_RATIO_COMPRESS) < 0) {
+                && fs.getAtrRatio().compareTo(p.getAtrRatioCompress()) < 0) {
             return RegimeState.COMPRESSION;
         }
 
-        // 5) Ranging vs Neutral fallback
         if (adx4h.compareTo(new BigDecimal("20")) <= 0) {
             return RegimeState.RANGING;
         }
@@ -288,10 +203,11 @@ public class LsrStrategyService implements StrategyExecutor {
             MarketData md,
             FeatureStore fs,
             FeatureStore prevFs,
-            RegimeState regime
+            RegimeState regime,
+            LsrParams p
     ) {
         if (!strategyHelper.hasValue(prevFs.getDonchianLower20())) return null;
-        if (!passesLongSweepFilters(fs)) return null;
+        if (!passesLongSweepFilters(fs, p)) return null;
 
         BigDecimal sweepLevel = prevFs.getDonchianLower20();
         BigDecimal low = strategyHelper.safe(md.getLowPrice());
@@ -306,8 +222,8 @@ public class LsrStrategyService implements StrategyExecutor {
         if (!swept || !reclaim || !bullishCandle) return null;
 
         BigDecimal sweepDist = sweepLevel.subtract(low);
-        if (sweepDist.compareTo(atr.multiply(LONG_SWEEP_MIN_ATR)) < 0
-                || sweepDist.compareTo(atr.multiply(LONG_SWEEP_MAX_ATR)) > 0) {
+        if (sweepDist.compareTo(atr.multiply(p.getLongSweepMinAtr())) < 0
+                || sweepDist.compareTo(atr.multiply(p.getLongSweepMaxAtr())) > 0) {
             return null;
         }
 
@@ -316,19 +232,19 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         BigDecimal entryPrice = close;
-        BigDecimal stopLoss = low.subtract(atr.multiply(STOP_ATR_BUFFER));
+        BigDecimal stopLoss = low.subtract(atr.multiply(p.getStopAtrBuffer()));
         BigDecimal riskPerUnit = entryPrice.subtract(stopLoss);
 
         if (riskPerUnit.compareTo(ZERO) <= 0) return null;
-        if (riskPerUnit.compareTo(entryPrice.multiply(MAX_RISK_PCT)) > 0) return null;
+        if (riskPerUnit.compareTo(entryPrice.multiply(p.getMaxRiskPct())) > 0) return null;
 
-        BigDecimal tp1 = entryPrice.add(riskPerUnit.multiply(TP1_R_LONG_SWEEP));
+        BigDecimal tp1 = entryPrice.add(riskPerUnit.multiply(p.getTp1RLongSweep()));
 
         BigDecimal signalScore = calculateLongSweepScore(context, fs, sweepDist, atr, regime);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore, false);
 
-        if (signalScore.compareTo(MIN_SIGNAL_SCORE_LONG_SWEEP) < 0
-                || confidenceScore.compareTo(MIN_CONFIDENCE_SCORE_LONG_SWEEP) < 0) {
+        if (signalScore.compareTo(p.getMinSignalScoreLongSweep()) < 0
+                || confidenceScore.compareTo(p.getMinConfidenceScoreLongSweep()) < 0) {
             return null;
         }
 
@@ -383,10 +299,11 @@ public class LsrStrategyService implements StrategyExecutor {
             MarketData md,
             FeatureStore fs,
             FeatureStore prevFs,
-            RegimeState regime
+            RegimeState regime,
+            LsrParams p
     ) {
         if (!strategyHelper.hasValue(prevFs.getDonchianLower20())) return null;
-        if (!passesLongContinuationFilters(fs)) return null;
+        if (!passesLongContinuationFilters(fs, p)) return null;
 
         BigDecimal donchianLower = prevFs.getDonchianLower20();
         BigDecimal low = strategyHelper.safe(md.getLowPrice());
@@ -394,7 +311,7 @@ public class LsrStrategyService implements StrategyExecutor {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         BigDecimal atr = resolveAtr(fs);
 
-        BigDecimal lowerBuffer = donchianLower.add(atr.multiply(LONG_CONT_DONCHIAN_BUFFER_ATR));
+        BigDecimal lowerBuffer = donchianLower.add(atr.multiply(p.getLongContDonchianBufferAtr()));
 
         boolean nearLowerBoundary = low.compareTo(lowerBuffer) <= 0;
         boolean reclaim = close.compareTo(donchianLower) >= 0;
@@ -402,9 +319,7 @@ public class LsrStrategyService implements StrategyExecutor {
 
         if (!nearLowerBoundary || !reclaim || !bullishCandle) return null;
 
-        // Avoid duplicating true sweep setup too aggressively
         if (low.compareTo(donchianLower) < 0) {
-            // If it is an actual sweep, let setup A own it.
             return null;
         }
 
@@ -413,19 +328,19 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         BigDecimal entryPrice = close;
-        BigDecimal stopLoss = low.subtract(atr.multiply(STOP_ATR_BUFFER));
+        BigDecimal stopLoss = low.subtract(atr.multiply(p.getStopAtrBuffer()));
         BigDecimal riskPerUnit = entryPrice.subtract(stopLoss);
 
         if (riskPerUnit.compareTo(ZERO) <= 0) return null;
-        if (riskPerUnit.compareTo(entryPrice.multiply(MAX_RISK_PCT)) > 0) return null;
+        if (riskPerUnit.compareTo(entryPrice.multiply(p.getMaxRiskPct())) > 0) return null;
 
-        BigDecimal tp1 = entryPrice.add(riskPerUnit.multiply(TP1_R_LONG_CONTINUATION));
+        BigDecimal tp1 = entryPrice.add(riskPerUnit.multiply(p.getTp1RLongContinuation()));
 
         BigDecimal signalScore = calculateLongContinuationScore(context, fs, atr, regime);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore, false);
 
-        if (signalScore.compareTo(MIN_SIGNAL_SCORE_LONG_CONT) < 0
-                || confidenceScore.compareTo(MIN_CONFIDENCE_SCORE_LONG_CONT) < 0) {
+        if (signalScore.compareTo(p.getMinSignalScoreLongCont()) < 0
+                || confidenceScore.compareTo(p.getMinConfidenceScoreLongCont()) < 0) {
             return null;
         }
 
@@ -435,7 +350,7 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         BigDecimal baseNotional = strategyHelper.calculateEntryNotional(context, SIDE_LONG);
-        BigDecimal notionalSize = baseNotional.multiply(LONG_CONTINUATION_NOTIONAL_MULTIPLIER).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal notionalSize = baseNotional.multiply(p.getLongContinuationNotionalMultiplier()).setScale(8, RoundingMode.HALF_UP);
 
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Long continuation notional size is zero");
@@ -482,10 +397,11 @@ public class LsrStrategyService implements StrategyExecutor {
             MarketData md,
             FeatureStore fs,
             FeatureStore prevFs,
-            RegimeState regime
+            RegimeState regime,
+            LsrParams p
     ) {
         if (!strategyHelper.hasValue(prevFs.getDonchianUpper20())) return null;
-        if (!passesShortPremiumFilters(fs)) return null;
+        if (!passesShortPremiumFilters(fs, p)) return null;
 
         BigDecimal sweepLevel = prevFs.getDonchianUpper20();
         BigDecimal high = strategyHelper.safe(md.getHighPrice());
@@ -500,8 +416,8 @@ public class LsrStrategyService implements StrategyExecutor {
         if (!swept || !reject || !bearishCandle) return null;
 
         BigDecimal sweepDist = high.subtract(sweepLevel);
-        if (sweepDist.compareTo(atr.multiply(SHORT_SWEEP_MIN_ATR)) < 0
-                || sweepDist.compareTo(atr.multiply(SHORT_SWEEP_MAX_ATR)) > 0) {
+        if (sweepDist.compareTo(atr.multiply(p.getShortSweepMinAtr())) < 0
+                || sweepDist.compareTo(atr.multiply(p.getShortSweepMaxAtr())) > 0) {
             return null;
         }
 
@@ -510,24 +426,24 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         BigDecimal entryPrice = close;
-        BigDecimal stopLoss = high.add(atr.multiply(STOP_ATR_BUFFER));
+        BigDecimal stopLoss = high.add(atr.multiply(p.getStopAtrBuffer()));
         BigDecimal riskPerUnit = stopLoss.subtract(entryPrice);
 
         if (riskPerUnit.compareTo(ZERO) <= 0) return null;
-        if (riskPerUnit.compareTo(entryPrice.multiply(MAX_RISK_PCT)) > 0) return null;
+        if (riskPerUnit.compareTo(entryPrice.multiply(p.getMaxRiskPct())) > 0) return null;
 
-        BigDecimal tp1 = entryPrice.subtract(riskPerUnit.multiply(TP1_R_SHORT));
+        BigDecimal tp1 = entryPrice.subtract(riskPerUnit.multiply(p.getTp1RShort()));
 
         BigDecimal signalScore = calculateShortPremiumScore(context, fs, sweepDist, atr, regime);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore, true);
 
-        if (signalScore.compareTo(MIN_SIGNAL_SCORE_SHORT) < 0
-                || confidenceScore.compareTo(MIN_SIGNAL_SCORE_SHORT) < 0) {
+        if (signalScore.compareTo(p.getMinSignalScoreShort()) < 0
+                || confidenceScore.compareTo(p.getMinSignalScoreShort()) < 0) {
             return null;
         }
 
         BigDecimal baseNotional = strategyHelper.calculateEntryNotional(context, SIDE_SHORT);
-        BigDecimal notionalSize = baseNotional.multiply(SHORT_NOTIONAL_MULTIPLIER).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal notionalSize = baseNotional.multiply(p.getShortNotionalMultiplier()).setScale(8, RoundingMode.HALF_UP);
 
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Short premium notional size is zero");
@@ -573,7 +489,8 @@ public class LsrStrategyService implements StrategyExecutor {
             EnrichedStrategyContext context,
             MarketData md,
             FeatureStore fs,
-            PositionSnapshot snap
+            PositionSnapshot snap,
+            LsrParams p
     ) {
         if (snap.getSide() == null || snap.getEntryPrice() == null || snap.getCurrentStopLossPrice() == null) {
             return hold(context, "Position management incomplete");
@@ -582,11 +499,11 @@ public class LsrStrategyService implements StrategyExecutor {
         String setupType = inferSetupType(snap);
 
         if (SIDE_LONG.equalsIgnoreCase(snap.getSide())) {
-            return manageLongPosition(context, md, fs, snap, setupType);
+            return manageLongPosition(context, md, fs, snap, setupType, p);
         }
 
         if (SIDE_SHORT.equalsIgnoreCase(snap.getSide())) {
-            return manageShortPosition(context, md, snap);
+            return manageShortPosition(context, md, snap, p);
         }
 
         return hold(context, "Unknown position side");
@@ -597,7 +514,8 @@ public class LsrStrategyService implements StrategyExecutor {
             MarketData md,
             FeatureStore fs,
             PositionSnapshot snap,
-            String setupType
+            String setupType,
+            LsrParams p
     ) {
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
         BigDecimal curStop = strategyHelper.safe(snap.getCurrentStopLossPrice());
@@ -608,9 +526,9 @@ public class LsrStrategyService implements StrategyExecutor {
 
         boolean continuation = SETUP_LONG_CONTINUATION.equals(setupType);
 
-        int timeStopBars = continuation ? TIME_STOP_BARS_LONG_CONTINUATION : TIME_STOP_BARS_LONG_SWEEP;
-        BigDecimal timeStopMinR = continuation ? TIME_STOP_MIN_R_LONG_CONTINUATION : TIME_STOP_MIN_R_LONG_SWEEP;
-        BigDecimal beTriggerR = continuation ? BE_TRIGGER_R_LONG_CONTINUATION : BE_TRIGGER_R_LONG_SWEEP;
+        int timeStopBars = continuation ? p.getTimeStopBarsLongContinuation() : p.getTimeStopBarsLongSweep();
+        BigDecimal timeStopMinR = continuation ? p.getTimeStopMinRLongContinuation() : p.getTimeStopMinRLongSweep();
+        BigDecimal beTriggerR = continuation ? p.getBeTriggerRLongContinuation() : p.getBeTriggerRLongSweep();
 
         // In the best ADX pocket, give longs a bit more room.
         if (strategyHelper.hasValue(fs.getAdx())
@@ -644,7 +562,7 @@ public class LsrStrategyService implements StrategyExecutor {
         if (close.subtract(entry).compareTo(threshold) < 0) {
             return hold(context, "Long BE not triggered");
         }
-        BigDecimal longBeStop = entry.add(risk.multiply(BE_FEE_BUFFER_R));
+        BigDecimal longBeStop = entry.add(risk.multiply(p.getBeFeeBufferR()));
         if (curStop.compareTo(longBeStop) >= 0) {
             return hold(context, "Long BE already set");
         }
@@ -670,7 +588,8 @@ public class LsrStrategyService implements StrategyExecutor {
     private StrategyDecision manageShortPosition(
             EnrichedStrategyContext context,
             MarketData md,
-            PositionSnapshot snap
+            PositionSnapshot snap,
+            LsrParams p
     ) {
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
         BigDecimal curStop = strategyHelper.safe(snap.getCurrentStopLossPrice());
@@ -680,9 +599,9 @@ public class LsrStrategyService implements StrategyExecutor {
         if (risk.compareTo(ZERO) <= 0) return hold(context, "Invalid short risk");
 
         long bars = computeBarsInTrade(snap, md, context.getInterval());
-        if (bars >= TIME_STOP_BARS_SHORT) {
+        if (bars >= p.getTimeStopBarsShort()) {
             BigDecimal profitR = entry.subtract(close).divide(risk, 6, RoundingMode.HALF_UP);
-            if (profitR.compareTo(TIME_STOP_MIN_R_SHORT) < 0) {
+            if (profitR.compareTo(p.getTimeStopMinRShort()) < 0) {
                 return StrategyDecision.builder()
                         .decisionType(DecisionType.CLOSE_SHORT)
                         .strategyCode(STRATEGY_CODE)
@@ -700,11 +619,11 @@ public class LsrStrategyService implements StrategyExecutor {
             }
         }
 
-        BigDecimal threshold = risk.multiply(BE_TRIGGER_R_SHORT);
+        BigDecimal threshold = risk.multiply(p.getBeTriggerRShort());
         if (entry.subtract(close).compareTo(threshold) < 0) {
             return hold(context, "Short BE not triggered");
         }
-        BigDecimal shortBeStop = entry.subtract(risk.multiply(BE_FEE_BUFFER_R));
+        BigDecimal shortBeStop = entry.subtract(risk.multiply(p.getBeFeeBufferR()));
         if (curStop.compareTo(shortBeStop) <= 0) {
             return hold(context, "Short BE already set");
         }
@@ -728,7 +647,7 @@ public class LsrStrategyService implements StrategyExecutor {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Scoring
+    // Scoring (not user-configurable — internal strategy logic)
     // ─────────────────────────────────────────────────────────────────────────
     private BigDecimal calculateLongSweepScore(
             EnrichedStrategyContext context,
@@ -863,44 +782,44 @@ public class LsrStrategyService implements StrategyExecutor {
     // ─────────────────────────────────────────────────────────────────────────
     // Filters
     // ─────────────────────────────────────────────────────────────────────────
-    private boolean passesLongSweepFilters(FeatureStore fs) {
+    private boolean passesLongSweepFilters(FeatureStore fs, LsrParams p) {
         BigDecimal rsi = strategyHelper.safe(fs.getRsi());
-        if (rsi.compareTo(LONG_SWEEP_RSI_MIN) < 0 || rsi.compareTo(LONG_SWEEP_RSI_MAX) > 0) return false;
+        if (rsi.compareTo(p.getLongSweepRsiMin()) < 0 || rsi.compareTo(p.getLongSweepRsiMax()) > 0) return false;
 
         if (!strategyHelper.hasValue(fs.getBodyToRangeRatio())
-                || fs.getBodyToRangeRatio().compareTo(LONG_SWEEP_BODY_MIN) < 0) return false;
+                || fs.getBodyToRangeRatio().compareTo(p.getLongSweepBodyMin()) < 0) return false;
         if (!strategyHelper.hasValue(fs.getCloseLocationValue())
-                || fs.getCloseLocationValue().compareTo(LONG_SWEEP_CLV_MIN) < 0) return false;
+                || fs.getCloseLocationValue().compareTo(p.getLongSweepClvMin()) < 0) return false;
         if (!strategyHelper.hasValue(fs.getRelativeVolume20())
-                || fs.getRelativeVolume20().compareTo(LONG_SWEEP_RVOL_MIN) < 0) return false;
+                || fs.getRelativeVolume20().compareTo(p.getLongSweepRvolMin()) < 0) return false;
 
         return true;
     }
 
-    private boolean passesLongContinuationFilters(FeatureStore fs) {
+    private boolean passesLongContinuationFilters(FeatureStore fs, LsrParams p) {
         BigDecimal rsi = strategyHelper.safe(fs.getRsi());
-        if (rsi.compareTo(LONG_CONT_RSI_MIN) < 0 || rsi.compareTo(LONG_CONT_RSI_MAX) > 0) return false;
+        if (rsi.compareTo(p.getLongContRsiMin()) < 0 || rsi.compareTo(p.getLongContRsiMax()) > 0) return false;
 
         if (!strategyHelper.hasValue(fs.getBodyToRangeRatio())
-                || fs.getBodyToRangeRatio().compareTo(LONG_CONT_BODY_MIN) < 0) return false;
+                || fs.getBodyToRangeRatio().compareTo(p.getLongContBodyMin()) < 0) return false;
         if (!strategyHelper.hasValue(fs.getCloseLocationValue())
-                || fs.getCloseLocationValue().compareTo(LONG_CONT_CLV_MIN) < 0) return false;
+                || fs.getCloseLocationValue().compareTo(p.getLongContClvMin()) < 0) return false;
         if (!strategyHelper.hasValue(fs.getRelativeVolume20())
-                || fs.getRelativeVolume20().compareTo(LONG_CONT_RVOL_MIN) < 0) return false;
+                || fs.getRelativeVolume20().compareTo(p.getLongContRvolMin()) < 0) return false;
 
         return true;
     }
 
-    private boolean passesShortPremiumFilters(FeatureStore fs) {
+    private boolean passesShortPremiumFilters(FeatureStore fs, LsrParams p) {
         BigDecimal rsi = strategyHelper.safe(fs.getRsi());
-        if (rsi.compareTo(SHORT_RSI_MIN) < 0) return false;
+        if (rsi.compareTo(p.getShortRsiMin()) < 0) return false;
 
         if (!strategyHelper.hasValue(fs.getBodyToRangeRatio())
-                || fs.getBodyToRangeRatio().compareTo(SHORT_BODY_MIN) < 0) return false;
+                || fs.getBodyToRangeRatio().compareTo(p.getShortBodyMin()) < 0) return false;
         if (!strategyHelper.hasValue(fs.getCloseLocationValue())
-                || fs.getCloseLocationValue().compareTo(SHORT_CLV_MAX) > 0) return false;
+                || fs.getCloseLocationValue().compareTo(p.getShortClvMax()) > 0) return false;
         if (!strategyHelper.hasValue(fs.getRelativeVolume20())
-                || fs.getRelativeVolume20().compareTo(SHORT_RVOL_MIN) < 0) return false;
+                || fs.getRelativeVolume20().compareTo(p.getShortRvolMin()) < 0) return false;
 
         return true;
     }
@@ -922,15 +841,15 @@ public class LsrStrategyService implements StrategyExecutor {
                 && vol.getJumpRiskScore().compareTo(context.getRuntimeConfig().getMaxJumpRiskScore()) > 0;
     }
 
-    private boolean isAtrSpikeVetoed(FeatureStore fs) {
+    private boolean isAtrSpikeVetoed(FeatureStore fs, LsrParams p) {
         return strategyHelper.hasValue(fs.getAtrRatio())
-                && fs.getAtrRatio().compareTo(ATR_RATIO_EXHAUSTION) >= 0;
+                && fs.getAtrRatio().compareTo(p.getAtrRatioExhaustion()) >= 0;
     }
 
-    private boolean isAdxOutsideActiveZone(FeatureStore fs) {
+    private boolean isAdxOutsideActiveZone(FeatureStore fs, LsrParams p) {
         if (!strategyHelper.hasValue(fs.getAdx())) return true;
         BigDecimal adx = fs.getAdx();
-        return adx.compareTo(ADX_ENTRY_MIN) < 0 || adx.compareTo(ADX_ENTRY_MAX) > 0;
+        return adx.compareTo(p.getAdxEntryMin()) < 0 || adx.compareTo(p.getAdxEntryMax()) > 0;
     }
 
     private BigDecimal resolveAtr(FeatureStore fs) {

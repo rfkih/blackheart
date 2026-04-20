@@ -25,4 +25,12 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     WHERE a.account_id = :accountId
     """, nativeQuery = true)
     Optional<Account> findByAccountId(@Param("accountId") UUID accountId);
+
+    @Query(value = """
+    SELECT a.*
+    FROM accounts a
+    WHERE a.user_id = :userId
+    ORDER BY a.created_time ASC
+    """, nativeQuery = true)
+    List<Account> findByUserId(@Param("userId") UUID userId);
 }

@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Data
@@ -16,7 +17,18 @@ import java.util.UUID;
 @AllArgsConstructor
 public class BacktestRunRequest {
 
+    /**
+     * Default account strategy ID used when no per-strategy mapping is provided.
+     * For single-strategy backtests this is the only ID needed.
+     */
     private UUID accountStrategyId;
+
+    /**
+     * Per-strategy account strategy ID mapping for multi-strategy backtests.
+     * Key = strategy code (e.g. "LSR"), value = accountStrategyId whose saved params to use.
+     * Falls back to {@code accountStrategyId} for any strategy code not present in this map.
+     */
+    private Map<String, UUID> strategyAccountStrategyIds;
 
     private String strategyName;
 

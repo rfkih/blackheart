@@ -58,7 +58,7 @@ public class PortfolioService {
         List<Account> accountList = accountRepository.findByIsActive("1");
         accountList.parallelStream().forEach(account -> {
             try {
-                log.info("account {}", account);
+                log.info("account Id {}", account.getAccountId());
                 updateAndGetBinanceAssetBalance(account);
             } catch (Exception e) {
                 log.error("Error processing User: {} in reloadAsset()", account.getUsername(), e);

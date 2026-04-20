@@ -2,9 +2,12 @@ package id.co.blackheart.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 @Getter
@@ -22,11 +25,21 @@ public class BacktestRun extends BaseEntity {
     private UUID backtestRunId;
 
     /**
-     * Link to strategy assignment if this backtest was launched from a saved account strategy.
+     * Default account strategy ID. Used for single-strategy backtests, or as fallback
+     * in multi-strategy runs where a strategy code has no entry in strategyAccountStrategyIds.
      * Can be null for ad-hoc backtests.
      */
     @Column(name = "account_strategy_id")
     private UUID accountStrategyId;
+
+    /**
+     * Per-strategy account strategy ID mapping for multi-strategy backtests.
+     * Key = strategy code, value = accountStrategyId whose saved params to use.
+     * Falls back to accountStrategyId for codes not present here.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_account_strategy_ids", columnDefinition = "jsonb")
+    private Map<String, UUID> strategyAccountStrategyIds;
 
     /**
      * Stable strategy identifier used by StrategyExecutorFactory.
