@@ -1,6 +1,7 @@
 package id.co.blackheart.service.pnl;
 
 import id.co.blackheart.dto.response.DailyPnlResponse;
+import id.co.blackheart.dto.response.EquityPointResponse;
 import id.co.blackheart.dto.response.PnlSummaryResponse;
 import id.co.blackheart.dto.response.StrategyPnlResponse;
 import id.co.blackheart.model.Account;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -28,6 +30,7 @@ import java.util.stream.Collectors;
 public class PnlService {
 
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
+    private static final BigDecimal DEFAULT_INITIAL_CAPITAL = BigDecimal.valueOf(10_000);
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     private final TradesRepository tradesRepository;
@@ -129,6 +132,123 @@ public class PnlService {
                     .winRate(winRate)
                     .build();
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * Build the equity curve for one account over the requested window.
+     *
+     * Equity is modeled as: {@code baseline + cumulativeRealizedPnl}.
+     * Cumulative pnl is carried across the window boundary so the equity at
+     * {@code from} reflects every trade closed before that moment, not just
+     * trades inside the window.
+     *
+     * Drawdown is the percentage drop from the running peak (≤ 0).
+     *
+     * @throws SecurityException if {@code accountId} doesn't belong to {@code userId}.
+     */
+    public List<EquityPointResponse> getEquityCurve(
+            UUID userId,
+            UUID accountId,
+            long fromMs,
+            long toMs,
+            BigDecimal initialCapital
+    ) {
+        // Authorization: callers can only see their own accounts.
+        boolean owns = accountRepository.findByUserId(userId).stream()
+                .anyMatch(a -> accountId.equals(a.getAccountId()));
+        if (!owns) {
+            throw new SecurityException("Account does not belong to caller");
+        }
+
+        if (toMs < fromMs) {
+            return Collections.emptyList();
+        }
+
+        BigDecimal baseline = (initialCapital != null && initialCapital.signum() > 0)
+                ? initialCapital
+                : DEFAULT_INITIAL_CAPITAL;
+
+        LocalDateTime fromDt = Instant.ofEpochMilli(fromMs).atZone(ZoneOffset.UTC).toLocalDateTime();
+        LocalDateTime toDt = Instant.ofEpochMilli(toMs).atZone(ZoneOffset.UTC).toLocalDateTime();
+
+        List<Trades> closed = tradesRepository.findClosedByAccountIdUpTo(accountId, toDt);
+
+        // Walk all closed trades up to `to` so cumulative pnl is accurate at the
+        // window's start; only emit points whose exit time falls inside the window.
+        BigDecimal cumulative = BigDecimal.ZERO;
+        BigDecimal cumulativeAtFrom = BigDecimal.ZERO;
+        boolean fromBoundaryRecorded = false;
+        List<EquityPointResponse> points = new ArrayList<>();
+        BigDecimal peak = baseline;
+
+        for (Trades t : closed) {
+            BigDecimal pnl = t.getRealizedPnlAmount() != null ? t.getRealizedPnlAmount() : BigDecimal.ZERO;
+            LocalDateTime exit = t.getExitTime();
+            if (exit == null) continue;
+
+            // Carry pnl that closed BEFORE the window into the starting baseline.
+            if (exit.isBefore(fromDt)) {
+                cumulative = cumulative.add(pnl);
+                continue;
+            }
+
+            // First trade in-window: anchor a point at `from` representing the
+            // equity right at the window's left edge.
+            if (!fromBoundaryRecorded) {
+                cumulativeAtFrom = cumulative;
+                BigDecimal equityAtFrom = baseline.add(cumulativeAtFrom);
+                if (equityAtFrom.compareTo(peak) > 0) peak = equityAtFrom;
+                points.add(EquityPointResponse.builder()
+                        .time(fromMs)
+                        .equity(equityAtFrom.setScale(8, RoundingMode.HALF_UP))
+                        .drawdown(percentDrop(equityAtFrom, peak))
+                        .build());
+                fromBoundaryRecorded = true;
+            }
+
+            cumulative = cumulative.add(pnl);
+            BigDecimal equity = baseline.add(cumulative);
+            if (equity.compareTo(peak) > 0) peak = equity;
+
+            points.add(EquityPointResponse.builder()
+                    .time(exit.toInstant(ZoneOffset.UTC).toEpochMilli())
+                    .equity(equity.setScale(8, RoundingMode.HALF_UP))
+                    .drawdown(percentDrop(equity, peak))
+                    .build());
+        }
+
+        // No trades closed in-window: emit a flat anchor so the chart still has
+        // something to draw at the requested baseline.
+        if (!fromBoundaryRecorded) {
+            BigDecimal equityAtFrom = baseline.add(cumulative);
+            points.add(EquityPointResponse.builder()
+                    .time(fromMs)
+                    .equity(equityAtFrom.setScale(8, RoundingMode.HALF_UP))
+                    .drawdown(BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP))
+                    .build());
+        }
+
+        // Trailing anchor at `to` so the line extends to the right edge of the window.
+        EquityPointResponse last = points.get(points.size() - 1);
+        if (!Objects.equals(last.getTime(), toMs)) {
+            points.add(EquityPointResponse.builder()
+                    .time(toMs)
+                    .equity(last.getEquity())
+                    .drawdown(last.getDrawdown())
+                    .build());
+        }
+
+        return points;
+    }
+
+    private BigDecimal percentDrop(BigDecimal equity, BigDecimal peak) {
+        if (peak.signum() <= 0) {
+            return BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+        }
+        return equity.subtract(peak)
+                .divide(peak, 6, RoundingMode.HALF_UP)
+                .multiply(HUNDRED)
+                .setScale(4, RoundingMode.HALF_UP);
     }
 
     private BigDecimal computeUnrealizedPnl(List<Trades> openTrades) {

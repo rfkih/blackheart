@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
 
@@ -57,6 +58,34 @@ public class PnlController {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(pnlService.getByStrategy(userId, fromDate, toDate))
+                .build());
+    }
+
+    /**
+     * Equity curve for one account over a millisecond window.
+     * Each sample is {@code baseline + cumulativeRealizedPnl} at that moment,
+     * with running-peak drawdown.
+     *
+     * Query params:
+     * <ul>
+     *   <li>{@code accountId} (UUID, required) — must belong to the caller.</li>
+     *   <li>{@code from} (epoch ms, required) — window start.</li>
+     *   <li>{@code to}   (epoch ms, required) — window end.</li>
+     *   <li>{@code initialCapital} (BigDecimal, optional) — baseline equity in USDT;
+     *       defaults to 10,000 when omitted or non-positive.</li>
+     * </ul>
+     */
+    @GetMapping("/equity")
+    public ResponseEntity<ResponseDto> getEquity(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam UUID accountId,
+            @RequestParam long from,
+            @RequestParam long to,
+            @RequestParam(required = false) BigDecimal initialCapital) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(pnlService.getEquityCurve(userId, accountId, from, to, initialCapital))
                 .build());
     }
 

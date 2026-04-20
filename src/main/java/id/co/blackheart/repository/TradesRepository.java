@@ -115,4 +115,23 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
             """, nativeQuery = true)
     List<Trades> findOpenByAccountIds(@Param("accountIds") List<UUID> accountIds);
 
+    /**
+     * All closed trades for one account with exit_time ≤ cutoff, sorted ASCENDING.
+     * Used by the equity-curve endpoint so cumulative realized PnL can be carried
+     * across the requested window boundary (the equity at `from` already reflects
+     * every trade closed before that moment).
+     */
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.account_id = :accountId
+              AND t.status = 'CLOSED'
+              AND t.exit_time IS NOT NULL
+              AND t.exit_time <= :cutoff
+            ORDER BY t.exit_time ASC
+            """, nativeQuery = true)
+    List<Trades> findClosedByAccountIdUpTo(
+            @Param("accountId") UUID accountId,
+            @Param("cutoff") LocalDateTime cutoff
+    );
+
 }

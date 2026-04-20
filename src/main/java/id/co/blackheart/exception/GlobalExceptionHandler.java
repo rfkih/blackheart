@@ -91,6 +91,16 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    @ExceptionHandler(SecurityException.class)
+    public ResponseEntity<ResponseDto> handleSecurity(SecurityException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ResponseDto.builder()
+                .responseCode(HttpStatus.FORBIDDEN.value() + ResponseCode.ACCESS_DENIED.getCode())
+                .responseDesc(ResponseCode.ACCESS_DENIED.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
     // ── 404 Not Found ────────────────────────────────────────────────────────
 
     @ExceptionHandler(UserNotFoundException.class)
