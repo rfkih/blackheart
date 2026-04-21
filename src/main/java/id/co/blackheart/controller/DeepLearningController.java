@@ -12,7 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("v1/deep-learning")
+@RequestMapping("/api/v1/deep-learning")
 @Slf4j
 @RequiredArgsConstructor
 @Tag(name = "DeepLearningController", description = "Controller for Deep Learning Execution")

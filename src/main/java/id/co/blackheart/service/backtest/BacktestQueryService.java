@@ -33,8 +33,11 @@ public class BacktestQueryService {
         int offset = page * effectiveSize;
         List<BacktestRun> runs = backtestRunRepository.findAllOrderByCreatedTimeDesc(effectiveSize, offset);
         long total = backtestRunRepository.countAll();
+        // Include metrics on the list — the frontend run table renders Return,
+        // Sharpe, and Max DD columns, and an all-null column reads as a data
+        // failure rather than the intended "still RUNNING" state.
         List<BacktestRunDetailResponse> content = runs.stream()
-                .map(r -> toDetail(r, false))
+                .map(r -> toDetail(r, true))
                 .collect(Collectors.toList());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("content", content);

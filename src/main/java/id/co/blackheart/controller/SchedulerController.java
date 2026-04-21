@@ -13,7 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("v1/scheduler")
+@RequestMapping("/api/v1/scheduler")
 @Slf4j
 @RequiredArgsConstructor
 @Tag(name = "SchedulerController", description = "Controller for Scheduler")

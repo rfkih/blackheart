@@ -1,5 +1,6 @@
 package id.co.blackheart.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -15,25 +16,29 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class BacktestRunRequest {
 
     /**
      * Default account strategy ID used when no per-strategy mapping is provided.
-     * For single-strategy backtests this is the only ID needed.
+     * For single-strategy backtests this is the only ID needed. The underlying
+     * {@code backtest_run.account_strategy_id} column is NOT NULL, so callers
+     * must always set this — even for multi-strategy runs (typically the first
+     * id from {@link #strategyAccountStrategyIds}).
      */
     private UUID accountStrategyId;
 
     /**
      * Per-strategy account strategy ID mapping for multi-strategy backtests.
      * Key = strategy code (e.g. "LSR"), value = accountStrategyId whose saved params to use.
-     * Falls back to {@code accountStrategyId} for any strategy code not present in this map.
+     * Falls back to {@link #accountStrategyId} for any strategy code not present in this map.
      */
     private Map<String, UUID> strategyAccountStrategyIds;
 
     private String strategyName;
 
     /**
-     * Single-strategy code. If {@code strategyCodes} is also provided, this field is ignored.
+     * Single-strategy code. If {@link #strategyCodes} is also provided, this field is ignored.
      */
     private String strategyCode;
 
@@ -63,4 +68,13 @@ public class BacktestRunRequest {
     private Boolean allowLong;
     private Boolean allowShort;
     private Integer maxOpenPositions;
+
+    /**
+     * Per-strategy parameter overrides supplied from the backtest wizard (Step 2).
+     * Key = strategy code (e.g. "LSR_V2"), value = diff map of param key → override value.
+     * Only fields that differ from backend defaults are sent.
+     * TODO: plumb into BacktestCoordinatorService so LsrParams.merge() / VcbParams.merge()
+     *       picks them up at resolve time.
+     */
+    private Map<String, Map<String, Object>> strategyParamOverrides;
 }

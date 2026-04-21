@@ -13,7 +13,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 
 
 @RestController
-@RequestMapping(value = "v1/portofolio")
+@RequestMapping(value = "/api/v1/portofolio")
 @Slf4j
 @Tag(name = "PortofolioController", description = "Controller for Portofolio")
 public class PortofolioController {

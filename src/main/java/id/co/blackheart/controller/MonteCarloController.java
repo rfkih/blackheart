@@ -11,7 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/monte-carlo")
+@RequestMapping("/api/v1/montecarlo")
 @RequiredArgsConstructor
 @Tag(name = "MonteCarloController", description = "Controller for Monte Carlo Simulation")
 public class MonteCarloController {

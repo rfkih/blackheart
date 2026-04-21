@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -21,6 +22,11 @@ public class BacktestService {
     private static final String STATUS_COMPLETED = "COMPLETED";
     private static final String STATUS_FAILED = "FAILED";
 
+    /** Binance USD-M futures default taker fee (0.04%). Used when the request omits feeRate. */
+    private static final BigDecimal DEFAULT_FEE_RATE = new BigDecimal("0.0004");
+    /** Conservative slippage default (0.05%) — applied when the request omits slippageRate. */
+    private static final BigDecimal DEFAULT_SLIPPAGE_RATE = new BigDecimal("0.0005");
+
     private final BacktestRunRepository backtestRunRepository;
     private final BacktestCoordinatorService backtestCoordinatorService;
     private final BacktestResponseMapper backtestMapperService;
@@ -30,6 +36,18 @@ public class BacktestService {
 
         String resolvedStrategyCode = resolveStrategyCode(request);
         String resolvedStrategyName = request.getStrategyName() != null ? request.getStrategyName() : resolvedStrategyCode;
+        BigDecimal resolvedFee = request.getFeeRate() != null ? request.getFeeRate() : DEFAULT_FEE_RATE;
+        BigDecimal resolvedSlippage = request.getSlippageRate() != null
+                ? request.getSlippageRate()
+                : DEFAULT_SLIPPAGE_RATE;
+
+        Map<String, Map<String, Object>> overrides = request.getStrategyParamOverrides();
+        if (overrides != null && !overrides.isEmpty()) {
+            log.info("Backtest submitted with param overrides across {} strateg(ies): {}",
+                    overrides.size(), overrides.keySet());
+            // TODO(slice-6): plumb overrides into BacktestCoordinatorService so per-strategy
+            //                LsrParams.merge() / VcbParams.merge() picks them up at resolve time.
+        }
 
         BacktestRun backtestRun = BacktestRun.builder()
                 .accountStrategyId(request.getAccountStrategyId())
@@ -43,8 +61,8 @@ public class BacktestService {
                 .endTime(request.getEndTime())
                 .initialCapital(request.getInitialCapital())
                 .riskPerTradePct(request.getRiskPerTradePct())
-                .feePct(request.getFeeRate())
-                .slippagePct(request.getSlippageRate())
+                .feePct(resolvedFee)
+                .slippagePct(resolvedSlippage)
                 .minNotional(request.getMinNotional())
                 .minQty(request.getMinQty())
                 .qtyStep(request.getQtyStep())
@@ -126,6 +144,9 @@ public class BacktestService {
         if (!hasStrategyCodes && !hasStrategyCode && !hasStrategyName) {
             throw new IllegalArgumentException("At least one of strategyCodes, strategyCode, or strategyName must be provided");
         }
+        if (request.getAccountStrategyId() == null) {
+            throw new IllegalArgumentException("accountStrategyId is required (backtest_run.account_strategy_id is NOT NULL)");
+        }
         if (request.getAsset() == null || request.getAsset().isBlank()) {
             throw new IllegalArgumentException("asset cannot be blank");
         }
@@ -141,11 +162,6 @@ public class BacktestService {
         if (request.getInitialCapital() == null || request.getInitialCapital().signum() <= 0) {
             throw new IllegalArgumentException("initialCapital must be greater than zero");
         }
-        if (request.getFeeRate() == null) {
-            throw new IllegalArgumentException("feeRate cannot be null");
-        }
-        if (request.getSlippageRate() == null) {
-            throw new IllegalArgumentException("slippageRate cannot be null");
-        }
+        // feeRate and slippageRate are optional — defaults kick in at build time.
     }
 }

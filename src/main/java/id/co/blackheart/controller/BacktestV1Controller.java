@@ -1,6 +1,8 @@
 package id.co.blackheart.controller;
 
 import id.co.blackheart.dto.request.BacktestRunRequest;
+import id.co.blackheart.dto.response.BacktestRunDetailResponse;
+import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.backtest.BacktestQueryService;
 import id.co.blackheart.service.backtest.BacktestService;
@@ -22,12 +24,20 @@ public class BacktestV1Controller {
     private final BacktestService backtestService;
     private final BacktestQueryService backtestQueryService;
 
+    /**
+     * Submit a new backtest run. Returns the same {@link BacktestRunDetailResponse}
+     * shape as {@code GET /api/v1/backtest/:id} so clients can use one mapper
+     * for both write and read paths — earlier versions returned the legacy
+     * {@code BacktestRunResponse} shape and callers ended up with undefined
+     * ids when navigating to the result page.
+     */
     @PostMapping
     public ResponseEntity<ResponseDto> runBacktest(@RequestBody BacktestRunRequest request) {
-        Object result = backtestService.runBacktest(request);
+        BacktestRunResponse submitted = backtestService.runBacktest(request);
+        BacktestRunDetailResponse detail = backtestQueryService.getRun(submitted.getBacktestRunId());
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(result)
+                .data(detail)
                 .build());
     }
 

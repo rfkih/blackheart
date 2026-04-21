@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping(value = "v1/trade")
+@RequestMapping(value = "/api/v1/trade")
 @Slf4j
 @RequiredArgsConstructor
 @Tag(name = "TradeController", description = "Controller for Trade Execution")

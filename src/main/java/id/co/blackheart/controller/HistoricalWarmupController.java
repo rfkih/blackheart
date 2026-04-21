@@ -14,7 +14,7 @@ import java.time.LocalDateTime;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/historical")
+@RequestMapping("/api/v1/historical")
 @RequiredArgsConstructor
 @Tag(name = "HistoricalWarmupController", description = "Controller for Historical Data Warmup")
 public class HistoricalWarmupController {
