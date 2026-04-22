@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -93,6 +94,18 @@ public class AccountStrategyService {
     /**
      * Creates a new account strategy, verifying the user owns the target account and that the
      * provided strategy code resolves to a real strategy definition.
+     *
+     * <p>Must respect {@code uq_account_strategy (account_id, strategy_definition_id,
+     * symbol, interval_name)}. That constraint is <b>not partial</b>, so a
+     * soft-deleted row still owns the key and would make a naive INSERT blow
+     * up with a 500. We pre-check the key and take one of three branches:
+     *
+     * <ul>
+     *   <li>Active row exists → reject with a readable 409.</li>
+     *   <li>Soft-deleted row exists → revive it in place so the row's UUID
+     *       (and any trade history referencing it) stays stable.</li>
+     *   <li>No row → INSERT as usual.</li>
+     * </ul>
      */
     @Transactional
     public AccountStrategyResponse createStrategy(UUID userId, CreateAccountStrategyRequest req) {
@@ -106,6 +119,41 @@ public class AccountStrategyService {
         StrategyDefinition def = strategyDefinitionRepository.findByStrategyCode(req.getStrategyCode())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown strategy code: " + req.getStrategyCode()));
+
+        Optional<AccountStrategy> existing = accountStrategyRepository.findByUniqueKey(
+                account.getAccountId(),
+                def.getStrategyDefinitionId(),
+                req.getSymbol(),
+                req.getIntervalName());
+
+        if (existing.isPresent()) {
+            AccountStrategy row = existing.get();
+            if (!Boolean.TRUE.equals(row.getIsDeleted())) {
+                // Active duplicate — 409 via IllegalStateException handler.
+                throw new IllegalStateException(String.format(
+                        "Strategy %s already runs on %s %s for this account. " +
+                                "Edit the existing strategy instead of creating a new one.",
+                        def.getStrategyCode(), req.getSymbol(), req.getIntervalName()));
+            }
+            // Soft-deleted row — revive in place. Primary key stays the same so
+            // any lingering FK references (trades, pnl snapshots, etc.) remain
+            // valid. We overwrite behaviour fields from the request and clear
+            // the delete markers.
+            row.setStrategyCode(def.getStrategyCode());
+            row.setEnabled(Boolean.TRUE.equals(req.getEnabled()));
+            row.setAllowLong(req.getAllowLong());
+            row.setAllowShort(req.getAllowShort());
+            row.setMaxOpenPositions(req.getMaxOpenPositions());
+            row.setCapitalAllocationPct(req.getCapitalAllocationPct());
+            row.setPriorityOrder(req.getPriorityOrder());
+            row.setCurrentStatus("STOPPED");
+            row.setIsDeleted(false);
+            row.setDeletedAt(null);
+            AccountStrategy revived = accountStrategyRepository.save(row);
+            log.info("Revived soft-deleted account strategy id={} code={} account={}",
+                    revived.getAccountStrategyId(), revived.getStrategyCode(), revived.getAccountId());
+            return toResponse(revived);
+        }
 
         AccountStrategy entity = AccountStrategy.builder()
                 .accountStrategyId(UUID.randomUUID())
