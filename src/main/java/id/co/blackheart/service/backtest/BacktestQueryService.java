@@ -28,11 +28,68 @@ public class BacktestQueryService {
     private final MarketDataRepository marketDataRepository;
     private final ObjectMapper objectMapper;
 
-    public Map<String, Object> listRuns(int page, int size) {
+    /**
+     * Whitelist of columns the client may sort by. Any value outside this
+     * set is silently coerced to {@code createdAt} — the native query's
+     * ORDER BY uses CASE-matching and falls back to created_time when no
+     * case matches, so an unknown sort key produces a safe (if boring)
+     * default rather than a server error.
+     */
+    private static final Set<String> SORTABLE_COLUMNS = Set.of(
+            "createdAt", "returnPct", "sharpe", "maxDrawdownPct",
+            "totalTrades", "winRate", "status", "symbol", "strategyCode"
+    );
+
+    public Map<String, Object> listRuns(
+            int page,
+            int size,
+            String status,
+            String strategyCode,
+            String symbol,
+            String intervalName,
+            LocalDateTime fromDate,
+            LocalDateTime toDate,
+            String sortBy,
+            String sortDir
+    ) {
         int effectiveSize = size > 0 ? size : 20;
-        int offset = page * effectiveSize;
-        List<BacktestRun> runs = backtestRunRepository.findAllOrderByCreatedTimeDesc(effectiveSize, offset);
-        long total = backtestRunRepository.countAll();
+        int offset = Math.max(0, page) * effectiveSize;
+
+        String effectiveSort = (sortBy != null && SORTABLE_COLUMNS.contains(sortBy))
+                ? sortBy
+                : "createdAt";
+        String effectiveDir = "ASC".equalsIgnoreCase(sortDir) ? "ASC" : "DESC";
+
+        // Normalise blank strings to null so the CAST(:param AS TEXT) IS NULL
+        // guard in the repository query activates correctly. Spring's binder
+        // delivers empty strings when the client sends `?status=` — those
+        // should disable the filter, not match rows where status = ''.
+        String statusFilter = blankToNull(status);
+        String strategyFilter = blankToNull(strategyCode);
+        String symbolFilter = blankToNull(symbol);
+        String intervalFilter = blankToNull(intervalName);
+
+        List<BacktestRun> runs = backtestRunRepository.findFiltered(
+                statusFilter,
+                strategyFilter,
+                symbolFilter,
+                intervalFilter,
+                fromDate,
+                toDate,
+                effectiveSort,
+                effectiveDir,
+                effectiveSize,
+                offset
+        );
+        long total = backtestRunRepository.countFiltered(
+                statusFilter,
+                strategyFilter,
+                symbolFilter,
+                intervalFilter,
+                fromDate,
+                toDate
+        );
+
         // Include metrics on the list — the frontend run table renders Return,
         // Sharpe, and Max DD columns, and an all-null column reads as a data
         // failure rather than the intended "still RUNNING" state.
@@ -44,7 +101,13 @@ public class BacktestQueryService {
         result.put("page", page);
         result.put("size", effectiveSize);
         result.put("total", total);
+        result.put("sortBy", effectiveSort);
+        result.put("sortDir", effectiveDir);
         return result;
+    }
+
+    private static String blankToNull(String v) {
+        return (v == null || v.isBlank()) ? null : v.trim();
     }
 
     public BacktestRunDetailResponse getRun(UUID id) {

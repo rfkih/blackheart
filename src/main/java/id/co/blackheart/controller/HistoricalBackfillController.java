@@ -16,13 +16,13 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/historical")
 @RequiredArgsConstructor
-@Tag(name = "HistoricalWarmupController", description = "Controller for Historical Data Warmup")
-public class HistoricalWarmupController {
+@Tag(name = "HistoricalBackfillController", description = "Controller for Historical Data Warmup")
+public class HistoricalBackfillController {
 
     private final HistoricalDataService historicalDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
 
-    @PostMapping("/warmup")
+    @PostMapping("/backill")
     public ResponseEntity<ResponseDto> warmupHistoricalData(
             @RequestParam String symbol,
             @RequestParam String interval
