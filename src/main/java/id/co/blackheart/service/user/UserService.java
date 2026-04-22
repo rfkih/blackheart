@@ -17,9 +17,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.Base64;
 import java.util.UUID;
 
 /**
@@ -44,8 +42,15 @@ public class UserService {
 
     // ── Registration ──────────────────────────────────────────────────────────
 
+    /**
+     * Registers a new user AND issues an access token in the same response, so
+     * the client can transition directly from the signup form into the
+     * authenticated app without a separate login round-trip. The response
+     * shape matches {@link #login(LoginRequest)} — callers can reuse one
+     * mapper on both paths.
+     */
     @Transactional
-    public UserResponse register(RegisterUserRequest request) {
+    public LoginResponse register(RegisterUserRequest request) {
         log.info("Registering new user: email={}", request.getEmail());
 
         if (userRepository.existsByEmail(request.getEmail())) {
@@ -55,7 +60,7 @@ public class UserService {
 
         User user = User.builder()
                 .email(request.getEmail())
-                .passwordHash(passwordEncoder.encode(decodePassword(request.getPassword())))
+                .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .fullName(request.getFullName())
                 .phoneNumber(request.getPhoneNumber())
                 .role(ROLE_USER)
@@ -69,7 +74,7 @@ public class UserService {
         User saved = userRepository.save(user);
         log.info("User registered: userId={}", saved.getUserId());
 
-        return toResponse(saved);
+        return buildLoginResponse(saved);
     }
 
     // ── Authentication ────────────────────────────────────────────────────────
@@ -82,7 +87,7 @@ public class UserService {
                 .orElseThrow(() -> new InvalidCredentialsException("Invalid email or password"));
 
 
-        if (!passwordEncoder.matches(decodePassword(request.getPassword()), user.getPasswordHash())) {
+        if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
             throw new InvalidCredentialsException("Invalid email or password");
         }
 
@@ -94,9 +99,19 @@ public class UserService {
         // Stamp last login without triggering a full entity dirty-check round-trip
         userRepository.updateLastLogin(user.getUserId(), user.getEmail(), LocalDateTime.now());
 
-        String token = jwtService.generateToken(user);
         log.info("Login successful: userId={}", user.getUserId());
+        return buildLoginResponse(user);
+    }
 
+    /**
+     * Shared response builder for login + register so both endpoints emit the
+     * exact same {@link LoginResponse} shape (accessToken, tokenType,
+     * expiresIn, user). Any drift between the two used to manifest as a
+     * cryptic frontend "cannot read userId of undefined" — keeping a single
+     * builder prevents that.
+     */
+    private LoginResponse buildLoginResponse(User user) {
+        String token = jwtService.generateToken(user);
         return LoginResponse.builder()
                 .accessToken(token)
                 .tokenType(TOKEN_TYPE)
@@ -133,22 +148,6 @@ public class UserService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    /**
-     * Decodes a Base64-encoded password sent by the frontend.
-     * The frontend must encode the raw password with {@code btoa(password)} (JS)
-     * before sending it in the request body. This prevents the plaintext from
-     * appearing in request logs while HTTPS handles transport-layer encryption.
-     *
-     * @throws InvalidCredentialsException if the value is not valid Base64
-     */
-    private String decodePassword(String base64Password) {
-        try {
-            return new String(Base64.getDecoder().decode(base64Password), StandardCharsets.UTF_8);
-        } catch (IllegalArgumentException e) {
-            throw new InvalidCredentialsException("Invalid password format");
-        }
-    }
 
     private UserResponse toResponse(User user) {
         return UserResponse.builder()
