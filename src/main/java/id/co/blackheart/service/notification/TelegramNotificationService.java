@@ -29,10 +29,17 @@ public class TelegramNotificationService {
     }
 
     public void sendMessage(String message) {
+        // No-op when the bot isn't configured (token blank) so the app stays
+        // usable locally without a Telegram secret. Same guard as the polling
+        // service — keeps us from calling /bot//sendMessage with an empty token.
+        if (botToken == null || botToken.isBlank()) return;
+        if (chatIds == null || chatIds.isBlank()) return;
+
         List<String> recipients = Arrays.stream(chatIds.split(","))
                 .map(String::trim)
                 .filter(id -> !id.isBlank())
                 .toList();
+        if (recipients.isEmpty()) return;
 
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
 

@@ -165,9 +165,15 @@ public class MarketQueryController {
         }
 
         if (s.matches("\\d{13}")) {
-            return Instant.ofEpochMilli(Long.parseLong(s))
-                    .atZone(ZoneId.systemDefault())
-                    .toLocalDateTime();
+            // Candle start_time/end_time columns are stored as UTC LocalDateTimes
+            // by the ingestion path. Pair-wise with toEpochMs() (which also uses
+            // UTC), this keeps the round-trip stable regardless of the server's
+            // default timezone — previously this used ZoneId.systemDefault()
+            // and round-tripping drifted by the offset on non-UTC hosts.
+            return LocalDateTime.ofInstant(
+                    Instant.ofEpochMilli(Long.parseLong(s)),
+                    ZoneOffset.UTC
+            );
         }
 
         try {

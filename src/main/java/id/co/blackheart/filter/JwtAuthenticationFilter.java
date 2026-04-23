@@ -22,6 +22,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Stateless JWT bearer-token authentication filter.
@@ -33,15 +37,40 @@ import java.io.IOException;
  *   <li>Header present but token invalid/expired → write 401 JSON response immediately.</li>
  *   <li>Token valid → populate {@link SecurityContextHolder} and continue.</li>
  * </ul>
+ *
+ * <p>Resolved {@link UserDetails} are cached in-process for a short TTL so the
+ * hot path doesn't hit the database on every REST call. Invalidation is by
+ * time; role/status changes become effective within {@code CACHE_TTL}.
  */
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    private static final Duration CACHE_TTL = Duration.ofSeconds(60);
+
     private final JwtService jwtService;
     private final UserDetailsServiceImpl userDetailsService;
     private final ObjectMapper objectMapper;
+
+    private final Map<String, CachedUser> userCache = new ConcurrentHashMap<>();
+
+    private record CachedUser(UserDetails details, Instant expiresAt) {
+        boolean expired(Instant now) {
+            return now.isAfter(expiresAt);
+        }
+    }
+
+    private UserDetails loadUser(String email) {
+        Instant now = Instant.now();
+        CachedUser cached = userCache.get(email);
+        if (cached != null && !cached.expired(now)) {
+            return cached.details();
+        }
+        UserDetails fresh = userDetailsService.loadUserByUsername(email);
+        userCache.put(email, new CachedUser(fresh, now.plus(CACHE_TTL)));
+        return fresh;
+    }
 
     @Override
     protected void doFilterInternal(
@@ -64,7 +93,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             final String email = jwtService.extractEmail(jwt);
 
             if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+                UserDetails userDetails = loadUser(email);
 
                 if (jwtService.isTokenValid(jwt, userDetails.getUsername())) {
                     UsernamePasswordAuthenticationToken authToken =

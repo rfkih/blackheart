@@ -8,7 +8,7 @@ import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
-import org.springframework.scheduling.annotation.Async;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -19,6 +19,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -40,11 +41,20 @@ public class HistoricalDataService {
     private final FeatureStoreRepository featureStoreRepository;
     private final TechnicalIndicatorService technicalIndicatorService;
 
+    @Qualifier("taskExecutor")
+    private final Executor taskExecutor;
+
     private final WebClient webClient = WebClient.builder()
             .baseUrl(BINANCE_BASE_URL)
             .build();
 
-    @Async("taskExecutor")
+    /**
+     * Runs synchronously on the caller. The previous {@code @Async} returned
+     * the HTTP 200 before the job started, so the controller's
+     * "completed successfully" message was a lie the moment it was printed —
+     * errors during backfill disappeared into the log. Admin endpoints should
+     * block until the work is done.
+     */
     public void backfillLastCandlesAndFeatures(String symbol, String interval) {
         backfillLastNCandlesAndRepairMissingFeatures(symbol, interval, 5000, 300, true);
     }
@@ -92,9 +102,18 @@ public class HistoricalDataService {
         );
 
         if (INTERVAL_4H.equalsIgnoreCase(interval)) {
-            CompletableFuture<Void> f1h  = CompletableFuture.runAsync(() -> warm1hFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures));
-            CompletableFuture<Void> f15m = CompletableFuture.runAsync(() -> warm15mFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures));
-            CompletableFuture<Void> f5m  = CompletableFuture.runAsync(() -> warm5mFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures));
+            // Use the configured taskExecutor instead of ForkJoinPool.commonPool —
+            // commonPool is shared with every parallel stream in the JVM, so
+            // running heavy backfill work on it can starve unrelated tasks.
+            CompletableFuture<Void> f1h  = CompletableFuture.runAsync(
+                    () -> warm1hFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures),
+                    taskExecutor);
+            CompletableFuture<Void> f15m = CompletableFuture.runAsync(
+                    () -> warm15mFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures),
+                    taskExecutor);
+            CompletableFuture<Void> f5m  = CompletableFuture.runAsync(
+                    () -> warm5mFor4hCoverage(symbol, targetCandles, warmupCandles, fillListenerFeatures),
+                    taskExecutor);
             CompletableFuture.allOf(f1h, f15m, f5m).join();
         }
     }

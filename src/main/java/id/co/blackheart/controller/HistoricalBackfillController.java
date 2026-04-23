@@ -22,8 +22,8 @@ public class HistoricalBackfillController {
     private final HistoricalDataService historicalDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
 
-    @PostMapping("/backill")
-    public ResponseEntity<ResponseDto> warmupHistoricalData(
+    @PostMapping({"/backfill", "/backill"})
+    public ResponseEntity<ResponseDto> backfillHistoricalData(
             @RequestParam String symbol,
             @RequestParam String interval
     ) {
