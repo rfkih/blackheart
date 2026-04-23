@@ -32,6 +32,9 @@ public class AccountStrategy extends BaseEntity {
     @Column(name = "strategy_code", nullable = false, length = 100)
     private String strategyCode;
 
+    @Column(name = "preset_name", length = 80)
+    private String presetName;
+
     @Column(name = "symbol", nullable = false, length = 30)
     private String symbol;
 

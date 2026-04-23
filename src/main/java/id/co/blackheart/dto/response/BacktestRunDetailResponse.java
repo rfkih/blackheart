@@ -19,6 +19,9 @@ public class BacktestRunDetailResponse {
     private String symbol;
     private String interval;
     private String status;
+    /** 0–100 while the run is PENDING/RUNNING. 100 on COMPLETED. Kept at the
+     *  last reported value on FAILED. */
+    private Integer progressPercent;
     private LocalDateTime fromDate;
     private LocalDateTime toDate;
     private BigDecimal initialCapital;

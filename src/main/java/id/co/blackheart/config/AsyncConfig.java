@@ -32,5 +32,30 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * Dedicated pool for long-running backtest executions. Isolated from
+     * {@code taskExecutor} because a multi-year 1m backtest can run for
+     * minutes and would starve the general-purpose pool (which also carries
+     * live PnL publish fan-out and backfill work).
+     *
+     * <p>Bounded queue + {@code AbortPolicy}: rather than quietly running a
+     * rejected submission on the caller's thread (which would re-block the
+     * HTTP handler — exactly what we're trying to avoid), we surface the
+     * overload as an error so the API returns a friendly 429-shaped response.
+     */
+    @Bean(name = "backtestExecutor")
+    public Executor backtestExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(32);
+        executor.setThreadNamePrefix("Backtest-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
+        executor.initialize();
+        return executor;
+    }
 }
 

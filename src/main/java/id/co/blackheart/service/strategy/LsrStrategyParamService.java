@@ -5,6 +5,7 @@ import id.co.blackheart.dto.request.LsrParamUpdateRequest;
 import id.co.blackheart.dto.response.LsrParamResponse;
 import id.co.blackheart.model.LsrStrategyParam;
 import id.co.blackheart.repository.LsrStrategyParamRepository;
+import id.co.blackheart.service.backtest.BacktestParamOverrideContext;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -58,6 +59,15 @@ public class LsrStrategyParamService {
      * of calls with sub-millisecond latency.
      */
     public LsrParams getParams(UUID accountStrategyId) {
+        // Backtest wizard overrides: when a run is active and supplied its own
+        // tuning, skip the shared Redis cache entirely — those overrides are
+        // per-run and must not leak into live execution. Layer order is
+        // (defaults < stored overrides < wizard overrides).
+        Map<String, Object> wizardOverrides = BacktestParamOverrideContext.forStrategy("LSR");
+        if (!wizardOverrides.isEmpty()) {
+            return loadAndMergeWithWizardOverrides(accountStrategyId, wizardOverrides);
+        }
+
         if (accountStrategyId == null) {
             return LsrParams.defaults();
         }
@@ -85,6 +95,25 @@ public class LsrStrategyParamService {
         }
 
         return resolved;
+    }
+
+    /**
+     * Backtest-only resolution: loads the stored override map (if any), overlays
+     * the wizard's per-run overrides on top, and merges the whole thing onto
+     * defaults in one shot. Never touches the Redis cache — results are
+     * per-run and caching them would poison live execution on subsequent
+     * reads.
+     */
+    private LsrParams loadAndMergeWithWizardOverrides(UUID accountStrategyId,
+                                                      Map<String, Object> wizardOverrides) {
+        Map<String, Object> stored = accountStrategyId == null
+                ? new HashMap<>()
+                : paramRepository.findByAccountStrategyId(accountStrategyId)
+                        .map(LsrStrategyParam::getParamOverrides)
+                        .map(HashMap::new)
+                        .orElseGet(HashMap::new);
+        stored.putAll(wizardOverrides);   // wizard wins on key collisions
+        return LsrParams.merge(stored);
     }
 
     /**

@@ -1,7 +1,9 @@
 package id.co.blackheart.config;
 
 import id.co.blackheart.model.Account;
+import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.AccountRepository;
+import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.service.user.JwtService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,9 +50,11 @@ import java.util.UUID;
 public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
     private static final String PNL_TOPIC_PREFIX = "/topic/pnl/";
+    private static final String BACKTEST_TOPIC_PREFIX = "/topic/backtest/";
 
     private final JwtService jwtService;
     private final AccountRepository accountRepository;
+    private final BacktestRunRepository backtestRunRepository;
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -134,6 +138,29 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                 );
                 throw new AccessDeniedException("Not authorized for this topic");
             }
+            return;
+        }
+
+        if (destination.startsWith(BACKTEST_TOPIC_PREFIX)) {
+            String tail = destination.substring(BACKTEST_TOPIC_PREFIX.length());
+            if (tail.isEmpty()) {
+                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing backtestRunId");
+            }
+            UUID runId;
+            try {
+                runId = UUID.fromString(tail);
+            } catch (IllegalArgumentException e) {
+                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid backtestRunId");
+            }
+            Optional<BacktestRun> run = backtestRunRepository.findByIdAndUserId(runId, principal.getUserId());
+            if (run.isEmpty()) {
+                log.warn(
+                        "STOMP SUBSCRIBE rejected — backtest run not owned by caller | destination={} callerUserId={}",
+                        destination, principal.getUserId()
+                );
+                throw new AccessDeniedException("Not authorized for this topic");
+            }
+            return;
         }
         // /user/** destinations are routed privately by Spring per-session; no gate here.
         // Anything else (public market-data topics etc.) is allowed for authenticated sessions.

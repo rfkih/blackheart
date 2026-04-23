@@ -54,22 +54,7 @@ public class AccountStrategyService {
      */
     @Transactional(readOnly = true)
     public AccountStrategyResponse getStrategyById(UUID userId, UUID accountStrategyId) {
-        AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
-                .orElseThrow(() -> new EntityNotFoundException(
-                        "Account strategy not found: " + accountStrategyId));
-
-        if (Boolean.TRUE.equals(strategy.getIsDeleted())) {
-            throw new EntityNotFoundException("Account strategy not found: " + accountStrategyId);
-        }
-
-        Account account = accountRepository.findByAccountId(strategy.getAccountId())
-                .orElseThrow(() -> new EntityNotFoundException(
-                        "Account strategy not found: " + accountStrategyId));
-
-        if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Account strategy not found: " + accountStrategyId);
-        }
-
+        AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
         return toResponse(strategy);
     }
 
@@ -92,19 +77,18 @@ public class AccountStrategyService {
     }
 
     /**
-     * Creates a new account strategy, verifying the user owns the target account and that the
-     * provided strategy code resolves to a real strategy definition.
-     *
-     * <p>Must respect {@code uq_account_strategy (account_id, strategy_definition_id,
-     * symbol, interval_name)}. That constraint is <b>not partial</b>, so a
-     * soft-deleted row still owns the key and would make a naive INSERT blow
-     * up with a 500. We pre-check the key and take one of three branches:
+     * Creates a new preset row for the given tuple. Multiple presets may
+     * coexist — only one preset per (account, strategy-definition, symbol,
+     * interval) can be {@code enabled=true} at a time, which the partial
+     * unique index {@code uq_account_strategy_active_preset} enforces at the
+     * DB level.
      *
      * <ul>
-     *   <li>Active row exists → reject with a readable 409.</li>
-     *   <li>Soft-deleted row exists → revive it in place so the row's UUID
-     *       (and any trade history referencing it) stays stable.</li>
-     *   <li>No row → INSERT as usual.</li>
+     *   <li>If the incoming preset name clashes with a sibling's name (and
+     *       that sibling is not soft-deleted), reject with 409.</li>
+     *   <li>If {@code enabled=true} was requested AND an active sibling
+     *       exists, deactivate the sibling first so the new row can take its
+     *       place atomically within the transaction.</li>
      * </ul>
      */
     @Transactional
@@ -120,39 +104,31 @@ public class AccountStrategyService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown strategy code: " + req.getStrategyCode()));
 
-        Optional<AccountStrategy> existing = accountStrategyRepository.findByUniqueKey(
+        List<AccountStrategy> siblings = accountStrategyRepository.findPresetsForTuple(
                 account.getAccountId(),
                 def.getStrategyDefinitionId(),
                 req.getSymbol(),
                 req.getIntervalName());
 
-        if (existing.isPresent()) {
-            AccountStrategy row = existing.get();
-            if (!Boolean.TRUE.equals(row.getIsDeleted())) {
-                // Active duplicate — 409 via IllegalStateException handler.
-                throw new IllegalStateException(String.format(
-                        "Strategy %s already runs on %s %s for this account. " +
-                                "Edit the existing strategy instead of creating a new one.",
-                        def.getStrategyCode(), req.getSymbol(), req.getIntervalName()));
+        String presetName = resolvePresetName(req.getPresetName(), siblings);
+
+        // Reject duplicate labels within the same tuple — otherwise users get
+        // two "aggressive" rows and can't tell them apart in the preset picker.
+        for (AccountStrategy sibling : siblings) {
+            if (presetName.equalsIgnoreCase(sibling.getPresetName())) {
+                throw new IllegalStateException(
+                        "A preset named \"" + presetName + "\" already exists for this strategy. "
+                                + "Pick a different name.");
             }
-            // Soft-deleted row — revive in place. Primary key stays the same so
-            // any lingering FK references (trades, pnl snapshots, etc.) remain
-            // valid. We overwrite behaviour fields from the request and clear
-            // the delete markers.
-            row.setStrategyCode(def.getStrategyCode());
-            row.setEnabled(Boolean.TRUE.equals(req.getEnabled()));
-            row.setAllowLong(req.getAllowLong());
-            row.setAllowShort(req.getAllowShort());
-            row.setMaxOpenPositions(req.getMaxOpenPositions());
-            row.setCapitalAllocationPct(req.getCapitalAllocationPct());
-            row.setPriorityOrder(req.getPriorityOrder());
-            row.setCurrentStatus("STOPPED");
-            row.setIsDeleted(false);
-            row.setDeletedAt(null);
-            AccountStrategy revived = accountStrategyRepository.save(row);
-            log.info("Revived soft-deleted account strategy id={} code={} account={}",
-                    revived.getAccountStrategyId(), revived.getStrategyCode(), revived.getAccountId());
-            return toResponse(revived);
+        }
+
+        boolean shouldActivate = Boolean.TRUE.equals(req.getEnabled());
+        if (shouldActivate) {
+            deactivateActiveSibling(
+                    account.getAccountId(),
+                    def.getStrategyDefinitionId(),
+                    req.getSymbol(),
+                    req.getIntervalName());
         }
 
         AccountStrategy entity = AccountStrategy.builder()
@@ -160,9 +136,10 @@ public class AccountStrategyService {
                 .accountId(account.getAccountId())
                 .strategyDefinitionId(def.getStrategyDefinitionId())
                 .strategyCode(def.getStrategyCode())
+                .presetName(presetName)
                 .symbol(req.getSymbol())
                 .intervalName(req.getIntervalName())
-                .enabled(Boolean.TRUE.equals(req.getEnabled()))
+                .enabled(shouldActivate)
                 .allowLong(req.getAllowLong())
                 .allowShort(req.getAllowShort())
                 .maxOpenPositions(req.getMaxOpenPositions())
@@ -174,8 +151,60 @@ public class AccountStrategyService {
                 .build();
 
         AccountStrategy saved = accountStrategyRepository.save(entity);
-        log.info("Created account strategy id={} code={} account={}",
-                saved.getAccountStrategyId(), saved.getStrategyCode(), saved.getAccountId());
+        log.info("Created account strategy id={} code={} preset={} account={} enabled={}",
+                saved.getAccountStrategyId(), saved.getStrategyCode(),
+                saved.getPresetName(), saved.getAccountId(), saved.getEnabled());
+        return toResponse(saved);
+    }
+
+    /**
+     * Activates the given preset for its (account, strategy-definition, symbol,
+     * interval) tuple. If a different preset is currently enabled for the same
+     * tuple it is deactivated first, inside the same transaction, so the
+     * partial unique index never sees two active rows simultaneously.
+     *
+     * <p>Refuses to activate if the TARGET is soft-deleted or if any existing
+     * active preset still has open trades — switching presets mid-trade is
+     * explicitly not allowed (different params mid-position → unsafe risk
+     * management).
+     */
+    @Transactional
+    public AccountStrategyResponse activateStrategy(UUID userId, UUID accountStrategyId) {
+        AccountStrategy target = loadOwnedActive(userId, accountStrategyId);
+
+        if (Boolean.TRUE.equals(target.getEnabled())) {
+            // Idempotent — already active.
+            return toResponse(target);
+        }
+
+        Optional<AccountStrategy> currentActive = accountStrategyRepository.findActivePreset(
+                target.getAccountId(),
+                target.getStrategyDefinitionId(),
+                target.getSymbol(),
+                target.getIntervalName());
+
+        if (currentActive.isPresent()) {
+            AccountStrategy active = currentActive.get();
+            long openTrades = tradesRepository.countOpenByAccountStrategyId(active.getAccountStrategyId());
+            if (openTrades > 0) {
+                throw new IllegalStateException(
+                        "Current preset \"" + active.getPresetName() + "\" has "
+                                + openTrades + " open trade(s). Close positions before switching presets.");
+            }
+            active.setEnabled(false);
+            accountStrategyRepository.save(active);
+            // Flush so the partial unique index sees the deactivation before
+            // we enable the new preset within the same transaction.
+            accountStrategyRepository.flush();
+        }
+
+        target.setEnabled(true);
+        AccountStrategy saved = accountStrategyRepository.save(target);
+
+        log.info("Activated preset id={} name={} (deactivated previous active={})",
+                saved.getAccountStrategyId(), saved.getPresetName(),
+                currentActive.map(AccountStrategy::getAccountStrategyId).orElse(null));
+
         return toResponse(saved);
     }
 
@@ -185,21 +214,7 @@ public class AccountStrategyService {
      */
     @Transactional
     public void softDeleteStrategy(UUID userId, UUID accountStrategyId) {
-        AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
-                .orElseThrow(() -> new EntityNotFoundException(
-                        "Account strategy not found: " + accountStrategyId));
-
-        if (Boolean.TRUE.equals(strategy.getIsDeleted())) {
-            throw new EntityNotFoundException("Account strategy not found: " + accountStrategyId);
-        }
-
-        Account account = accountRepository.findByAccountId(strategy.getAccountId())
-                .orElseThrow(() -> new EntityNotFoundException(
-                        "Account strategy not found: " + accountStrategyId));
-
-        if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Account strategy not found: " + accountStrategyId);
-        }
+        AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
 
         long openTrades = tradesRepository.countOpenByAccountStrategyId(accountStrategyId);
         if (openTrades > 0) {
@@ -215,12 +230,71 @@ public class AccountStrategyService {
         log.info("Soft-deleted account strategy id={} by userId={}", accountStrategyId, userId);
     }
 
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private AccountStrategy loadOwnedActive(UUID userId, UUID accountStrategyId) {
+        AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
+                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+
+        if (Boolean.TRUE.equals(strategy.getIsDeleted())) {
+            throw new EntityNotFoundException("Not found");
+        }
+
+        Account account = accountRepository.findByAccountId(strategy.getAccountId())
+                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException("Not found");
+        }
+        return strategy;
+    }
+
+    private void deactivateActiveSibling(
+            UUID accountId, UUID strategyDefinitionId, String symbol, String intervalName) {
+        Optional<AccountStrategy> active = accountStrategyRepository.findActivePreset(
+                accountId, strategyDefinitionId, symbol, intervalName);
+        if (active.isEmpty()) return;
+
+        AccountStrategy row = active.get();
+        long openTrades = tradesRepository.countOpenByAccountStrategyId(row.getAccountStrategyId());
+        if (openTrades > 0) {
+            throw new IllegalStateException(
+                    "Current preset \"" + row.getPresetName() + "\" has "
+                            + openTrades + " open trade(s). Close positions before creating "
+                            + "a new active preset for the same strategy.");
+        }
+        row.setEnabled(false);
+        accountStrategyRepository.save(row);
+        accountStrategyRepository.flush();
+    }
+
+    /**
+     * If the client didn't supply a preset name, synthesise one that doesn't
+     * collide with siblings. "Preset 1", "Preset 2", … — easy to rename later.
+     */
+    private String resolvePresetName(String requested, List<AccountStrategy> siblings) {
+        if (requested != null && !requested.isBlank()) {
+            return requested.trim();
+        }
+        int next = siblings.size() + 1;
+        while (next < 10_000) {
+            String candidate = "Preset " + next;
+            final String c = candidate;
+            boolean taken = siblings.stream()
+                    .anyMatch(s -> c.equalsIgnoreCase(s.getPresetName()));
+            if (!taken) return candidate;
+            next++;
+        }
+        return "Preset " + UUID.randomUUID().toString().substring(0, 6);
+    }
+
     private AccountStrategyResponse toResponse(AccountStrategy s) {
         return AccountStrategyResponse.builder()
                 .accountStrategyId(s.getAccountStrategyId())
                 .accountId(s.getAccountId())
                 .strategyDefinitionId(s.getStrategyDefinitionId())
                 .strategyCode(s.getStrategyCode())
+                .presetName(s.getPresetName())
                 .symbol(s.getSymbol())
                 .intervalName(s.getIntervalName())
                 .enabled(s.getEnabled())

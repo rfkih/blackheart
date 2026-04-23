@@ -68,4 +68,45 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
             """, nativeQuery = true)
     List<AccountStrategy> findByAccountId(@Param("accountId") UUID accountId);
 
+    /**
+     * All presets that share the given tuple. Used to show preset groupings
+     * in the UI and to flip siblings off when a new preset is activated.
+     * Includes both enabled and disabled rows but excludes soft-deletes.
+     */
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+              AND acs.strategy_definition_id = :strategyDefinitionId
+              AND acs.symbol = :symbol
+              AND acs.interval_name = :intervalName
+              AND acs.is_deleted = false
+            ORDER BY acs.enabled DESC, acs.priority_order ASC, acs.created_time ASC
+            """, nativeQuery = true)
+    List<AccountStrategy> findPresetsForTuple(
+            @Param("accountId") UUID accountId,
+            @Param("strategyDefinitionId") UUID strategyDefinitionId,
+            @Param("symbol") String symbol,
+            @Param("intervalName") String intervalName);
+
+    /**
+     * Returns the currently-active preset (if any) for the tuple. Exactly one
+     * row can match — the partial unique index
+     * {@code uq_account_strategy_active_preset} enforces it.
+     */
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+              AND acs.strategy_definition_id = :strategyDefinitionId
+              AND acs.symbol = :symbol
+              AND acs.interval_name = :intervalName
+              AND acs.is_deleted = false
+              AND acs.enabled = true
+            """, nativeQuery = true)
+    Optional<AccountStrategy> findActivePreset(
+            @Param("accountId") UUID accountId,
+            @Param("strategyDefinitionId") UUID strategyDefinitionId,
+            @Param("symbol") String symbol,
+            @Param("intervalName") String intervalName);
 }

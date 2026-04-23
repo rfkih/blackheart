@@ -93,6 +93,26 @@ public class AccountStrategyController {
                 .build());
     }
 
+    /**
+     * Activate this preset for its (account, strategy, symbol, interval) tuple.
+     * Any currently-active sibling is deactivated atomically. Fails with 409
+     * if the target is soft-deleted, or if a sibling with open trades would
+     * need to be deactivated to make room — users must close positions before
+     * switching presets mid-trade.
+     */
+    @PostMapping("/{accountStrategyId}/activate")
+    @Operation(summary = "Make this preset the active one for its (account, strategy, symbol, interval).",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> activateStrategy(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountStrategyId) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountStrategyService.activateStrategy(userId, accountStrategyId))
+                .build());
+    }
+
     private UUID extractUserId(String authHeader) {
         return jwtService.extractUserId(authHeader.substring(7));
     }

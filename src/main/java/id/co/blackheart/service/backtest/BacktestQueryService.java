@@ -204,6 +204,7 @@ public class BacktestQueryService {
                 .symbol(r.getAsset())
                 .interval(r.getInterval())
                 .status(r.getStatus())
+                .progressPercent(r.getProgressPercent())
                 .fromDate(r.getStartTime())
                 .toDate(r.getEndTime())
                 .initialCapital(r.getInitialCapital())
