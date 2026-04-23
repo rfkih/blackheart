@@ -30,6 +30,7 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
           AND acs.strategy_definition_id = :strategyDefinitionId
           AND acs.symbol = :symbol
           AND acs.interval_name = :intervalName
+          AND acs.is_deleted = false
         """, nativeQuery = true)
     Optional<AccountStrategy> findByUniqueKey(
             @Param("accountId") UUID accountId,

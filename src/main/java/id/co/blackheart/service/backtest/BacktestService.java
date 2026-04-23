@@ -5,13 +5,16 @@ import id.co.blackheart.dto.request.BacktestRunRequest;
 import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
+import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -30,9 +33,22 @@ public class BacktestService {
     private final BacktestRunRepository backtestRunRepository;
     private final BacktestCoordinatorService backtestCoordinatorService;
     private final BacktestResponseMapper backtestMapperService;
+    private final AccountStrategyOwnershipGuard ownershipGuard;
 
-    public BacktestRunResponse runBacktest(BacktestRunRequest request) {
+    public BacktestRunResponse runBacktest(UUID userId, BacktestRunRequest request) {
         validateRequest(request);
+
+        // Verify the caller owns every account strategy id they are about to use
+        // for params resolution. Without this, a user could run a backtest
+        // "from" another tenant's tuned params — information disclosure.
+        ownershipGuard.assertOwned(userId, request.getAccountStrategyId());
+        if (request.getStrategyAccountStrategyIds() != null) {
+            for (UUID perStrategyId : request.getStrategyAccountStrategyIds().values()) {
+                if (perStrategyId != null) {
+                    ownershipGuard.assertOwned(userId, perStrategyId);
+                }
+            }
+        }
 
         String resolvedStrategyCode = resolveStrategyCode(request);
         String resolvedStrategyName = request.getStrategyName() != null ? request.getStrategyName() : resolvedStrategyCode;
@@ -50,6 +66,7 @@ public class BacktestService {
         }
 
         BacktestRun backtestRun = BacktestRun.builder()
+                .userId(userId)
                 .accountStrategyId(request.getAccountStrategyId())
                 .strategyAccountStrategyIds(request.getStrategyAccountStrategyIds())
                 .strategyName(resolvedStrategyName)
@@ -161,6 +178,15 @@ public class BacktestService {
         }
         if (request.getInitialCapital() == null || request.getInitialCapital().signum() <= 0) {
             throw new IllegalArgumentException("initialCapital must be greater than zero");
+        }
+
+        // Cap backtest range at 5 years of 1m candles (~2.6M bars) to prevent
+        // a single request from pegging CPU + pulling millions of rows out of
+        // Postgres. Longer ranges on coarser intervals (e.g. 1h) pass through.
+        Duration span = Duration.between(request.getStartTime(), request.getEndTime());
+        if (span.toDays() > 365L * 5) {
+            throw new IllegalArgumentException(
+                    "Backtest range exceeds the 5-year limit. Split the run into smaller windows.");
         }
         // feeRate and slippageRate are optional — defaults kick in at build time.
     }

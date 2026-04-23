@@ -11,6 +11,7 @@ import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -131,7 +132,17 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ResponseDto.builder()
                 .responseCode(HttpStatus.FORBIDDEN.value() + ResponseCode.ACCESS_DENIED.getCode())
                 .responseDesc(ResponseCode.ACCESS_DENIED.getDescription())
-                .errorMessage(ex.getMessage())
+                .errorMessage("You do not have permission to access this resource")
+                .build());
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ResponseDto> handleAccessDenied(AccessDeniedException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ResponseDto.builder()
+                .responseCode(HttpStatus.FORBIDDEN.value() + ResponseCode.ACCESS_DENIED.getCode())
+                .responseDesc(ResponseCode.ACCESS_DENIED.getDescription())
+                .errorMessage("You do not have permission to access this resource")
                 .build());
     }
 
@@ -155,7 +166,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ResponseDto.builder()
                 .responseCode(HttpStatus.NOT_FOUND.value() + ResponseCode.NOT_FOUND.getCode())
                 .responseDesc(ResponseCode.NOT_FOUND.getDescription())
-                .errorMessage(ex.getMessage())
+                .errorMessage("Not found")
                 .build());
     }
 

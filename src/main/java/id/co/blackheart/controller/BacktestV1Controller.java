@@ -6,8 +6,10 @@ import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.backtest.BacktestQueryService;
 import id.co.blackheart.service.backtest.BacktestService;
+import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -25,6 +27,7 @@ public class BacktestV1Controller {
 
     private final BacktestService backtestService;
     private final BacktestQueryService backtestQueryService;
+    private final JwtService jwtService;
 
     /**
      * Submit a new backtest run. Returns the same {@link BacktestRunDetailResponse}
@@ -34,9 +37,12 @@ public class BacktestV1Controller {
      * ids when navigating to the result page.
      */
     @PostMapping
-    public ResponseEntity<ResponseDto> runBacktest(@RequestBody BacktestRunRequest request) {
-        BacktestRunResponse submitted = backtestService.runBacktest(request);
-        BacktestRunDetailResponse detail = backtestQueryService.getRun(submitted.getBacktestRunId());
+    public ResponseEntity<ResponseDto> runBacktest(
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody BacktestRunRequest request) {
+        UUID userId = extractUserId(authHeader);
+        BacktestRunResponse submitted = backtestService.runBacktest(userId, request);
+        BacktestRunDetailResponse detail = backtestQueryService.getRun(userId, submitted.getBacktestRunId());
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(detail)
@@ -64,6 +70,7 @@ public class BacktestV1Controller {
      */
     @GetMapping
     public ResponseEntity<ResponseDto> listRuns(
+            @RequestHeader("Authorization") String authHeader,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String status,
@@ -74,9 +81,11 @@ public class BacktestV1Controller {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
             @RequestParam(required = false, defaultValue = "createdAt") String sortBy,
             @RequestParam(required = false, defaultValue = "DESC") String sortDir) {
+        UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(backtestQueryService.listRuns(
+                        userId,
                         page, size,
                         status, strategyCode, symbol, intervalName,
                         from, to,
@@ -85,34 +94,50 @@ public class BacktestV1Controller {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ResponseDto> getRun(@PathVariable UUID id) {
+    public ResponseEntity<ResponseDto> getRun(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID id) {
+        UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(backtestQueryService.getRun(id))
+                .data(backtestQueryService.getRun(userId, id))
                 .build());
     }
 
     @GetMapping("/{id}/equity-points")
-    public ResponseEntity<ResponseDto> getEquityPoints(@PathVariable UUID id) {
+    public ResponseEntity<ResponseDto> getEquityPoints(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID id) {
+        UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(backtestQueryService.getEquityPoints(id))
+                .data(backtestQueryService.getEquityPoints(userId, id))
                 .build());
     }
 
     @GetMapping("/{id}/trades")
-    public ResponseEntity<ResponseDto> getTrades(@PathVariable UUID id) {
+    public ResponseEntity<ResponseDto> getTrades(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID id) {
+        UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(backtestQueryService.getTrades(id))
+                .data(backtestQueryService.getTrades(userId, id))
                 .build());
     }
 
     @GetMapping("/{id}/candles")
-    public ResponseEntity<ResponseDto> getCandles(@PathVariable UUID id) {
+    public ResponseEntity<ResponseDto> getCandles(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID id) {
+        UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(backtestQueryService.getCandles(id))
+                .data(backtestQueryService.getCandles(userId, id))
                 .build());
+    }
+
+    private UUID extractUserId(String authHeader) {
+        return jwtService.extractUserId(authHeader.substring(7));
     }
 }

@@ -32,12 +32,17 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
     long countAll();
 
     /**
-     * Filtered + sorted + paginated list.
+     * Filtered + sorted + paginated list, <b>scoped to the authenticated user</b>.
      *
      * <p>Every filter param is nullable — passing {@code null} disables that
      * clause via the {@code CAST(:param AS TEXT) IS NULL} idiom. String
      * filters do case-insensitive exact match (status, interval) or prefix
      * match (symbol, strategyCode) — Postgres ILIKE.
+     *
+     * <p>{@code userId} is never nullable here — the {@code user_id = :userId}
+     * predicate is applied unconditionally. Rows with {@code user_id IS NULL}
+     * (legacy rows from before tenant scoping) are therefore invisible to
+     * every caller; that is intentional.
      *
      * <p>{@code sortColumn} is validated by the service layer against a
      * whitelist before it reaches this query — never pass a user-supplied
@@ -52,7 +57,8 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
      */
     @Query(value = """
             SELECT * FROM backtest_run
-            WHERE (CAST(:status AS TEXT) IS NULL OR UPPER(status) = UPPER(CAST(:status AS TEXT)))
+            WHERE user_id = :userId
+              AND (CAST(:status AS TEXT) IS NULL OR UPPER(status) = UPPER(CAST(:status AS TEXT)))
               AND (CAST(:strategyCode AS TEXT) IS NULL OR strategy_code ILIKE CONCAT(CAST(:strategyCode AS TEXT), '%'))
               AND (CAST(:symbol AS TEXT) IS NULL OR asset ILIKE CONCAT(CAST(:symbol AS TEXT), '%'))
               AND (CAST(:intervalName AS TEXT) IS NULL OR interval_name = CAST(:intervalName AS TEXT))
@@ -81,6 +87,7 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             LIMIT :limitVal OFFSET :offsetVal
             """, nativeQuery = true)
     List<BacktestRun> findFiltered(
+            @Param("userId") UUID userId,
             @Param("status") String status,
             @Param("strategyCode") String strategyCode,
             @Param("symbol") String symbol,
@@ -95,7 +102,8 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
 
     @Query(value = """
             SELECT COUNT(*) FROM backtest_run
-            WHERE (CAST(:status AS TEXT) IS NULL OR UPPER(status) = UPPER(CAST(:status AS TEXT)))
+            WHERE user_id = :userId
+              AND (CAST(:status AS TEXT) IS NULL OR UPPER(status) = UPPER(CAST(:status AS TEXT)))
               AND (CAST(:strategyCode AS TEXT) IS NULL OR strategy_code ILIKE CONCAT(CAST(:strategyCode AS TEXT), '%'))
               AND (CAST(:symbol AS TEXT) IS NULL OR asset ILIKE CONCAT(CAST(:symbol AS TEXT), '%'))
               AND (CAST(:intervalName AS TEXT) IS NULL OR interval_name = CAST(:intervalName AS TEXT))
@@ -103,6 +111,7 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
               AND (CAST(:toDate AS TIMESTAMP) IS NULL OR created_time <= CAST(:toDate AS TIMESTAMP))
             """, nativeQuery = true)
     long countFiltered(
+            @Param("userId") UUID userId,
             @Param("status") String status,
             @Param("strategyCode") String strategyCode,
             @Param("symbol") String symbol,
@@ -110,4 +119,18 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             @Param("fromDate") LocalDateTime fromDate,
             @Param("toDate") LocalDateTime toDate
     );
+
+    /**
+     * Fetch a single run by id, scoped to its owner. Returns empty if the run
+     * exists but belongs to a different user — callers must collapse "not found"
+     * and "not yours" into the same response.
+     */
+    @Query(value = """
+            SELECT * FROM backtest_run
+            WHERE backtest_run_id = :id
+              AND user_id = :userId
+            """, nativeQuery = true)
+    java.util.Optional<BacktestRun> findByIdAndUserId(
+            @Param("id") UUID id,
+            @Param("userId") UUID userId);
 }

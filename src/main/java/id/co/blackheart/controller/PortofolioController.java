@@ -7,6 +7,7 @@ import id.co.blackheart.util.ResponseCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
@@ -20,6 +21,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 @RequestMapping(value = {"/api/v1/portofolio", "/v1/portofolio"})
 @Slf4j
 @Tag(name = "PortofolioController", description = "Controller for Portofolio")
+@PreAuthorize("hasRole('ADMIN')")
 public class PortofolioController {
 
     private static final String RELOAD_SUCCESS = "Update Portofolio Success";

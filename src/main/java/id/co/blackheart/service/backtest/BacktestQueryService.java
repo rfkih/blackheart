@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.response.*;
 import id.co.blackheart.model.*;
 import id.co.blackheart.repository.*;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,7 @@ public class BacktestQueryService {
     );
 
     public Map<String, Object> listRuns(
+            UUID userId,
             int page,
             int size,
             String status,
@@ -70,6 +72,7 @@ public class BacktestQueryService {
         String intervalFilter = blankToNull(intervalName);
 
         List<BacktestRun> runs = backtestRunRepository.findFiltered(
+                userId,
                 statusFilter,
                 strategyFilter,
                 symbolFilter,
@@ -82,6 +85,7 @@ public class BacktestQueryService {
                 offset
         );
         long total = backtestRunRepository.countFiltered(
+                userId,
                 statusFilter,
                 strategyFilter,
                 symbolFilter,
@@ -110,31 +114,54 @@ public class BacktestQueryService {
         return (v == null || v.isBlank()) ? null : v.trim();
     }
 
-    public BacktestRunDetailResponse getRun(UUID id) {
-        BacktestRun run = backtestRunRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Backtest run not found: " + id));
+    /**
+     * Fetch a run detail scoped to the caller. Collapses "not found" and
+     * "not yours" into the same 404 to avoid leaking existence.
+     */
+    public BacktestRunDetailResponse getRun(UUID userId, UUID id) {
+        BacktestRun run = requireOwnedRun(userId, id);
         return toDetail(run, true);
     }
 
-    public List<BacktestEquityPointResponse> getEquityPoints(UUID id) {
+    /**
+     * Backwards-compat overload for callers that already validated ownership
+     * (e.g. the submit path that just created the run). Do NOT call from
+     * untrusted request paths.
+     */
+    public BacktestRunDetailResponse getRun(UUID id) {
+        BacktestRun run = backtestRunRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+        return toDetail(run, true);
+    }
+
+    public List<BacktestEquityPointResponse> getEquityPoints(UUID userId, UUID id) {
+        requireOwnedRun(userId, id);
         return equityPointRepository.findByBacktestRunIdOrderByEquityDateAsc(id).stream()
                 .map(this::toEquityPoint)
                 .collect(Collectors.toList());
     }
 
-    public List<BacktestTradeDetailResponse> getTrades(UUID id) {
+    public List<BacktestTradeDetailResponse> getTrades(UUID userId, UUID id) {
+        requireOwnedRun(userId, id);
         List<BacktestTrade> trades = backtestTradeRepository.findAllByBacktestRunId(id);
         return trades.stream()
                 .map(t -> toTradeDetail(t))
                 .collect(Collectors.toList());
     }
 
-    public List<MarketDataResponse> getCandles(UUID id) {
-        BacktestRun run = backtestRunRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Backtest run not found: " + id));
+    public List<MarketDataResponse> getCandles(UUID userId, UUID id) {
+        BacktestRun run = requireOwnedRun(userId, id);
         List<MarketData> candles = marketDataRepository.findBySymbolIntervalAndRange(
                 run.getAsset(), run.getInterval(), run.getStartTime(), run.getEndTime());
         return candles.stream().map(this::toMarketData).collect(Collectors.toList());
+    }
+
+    private BacktestRun requireOwnedRun(UUID userId, UUID id) {
+        if (userId == null || id == null) {
+            throw new EntityNotFoundException("Not found");
+        }
+        return backtestRunRepository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new EntityNotFoundException("Not found"));
     }
 
     private BacktestRunDetailResponse toDetail(BacktestRun r, boolean withMetrics) {

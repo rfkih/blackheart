@@ -56,7 +56,8 @@ public enum ResponseCode {
     USER_ALREADY_EXISTS("81", "User Already Exists"),
     INVALID_CREDENTIALS("82", "Invalid Credentials"),
     ACCOUNT_DISABLED("83", "Account Disabled or Suspended"),
-    UNAUTHORIZED("84", "Unauthorized - Token missing or invalid");
+    UNAUTHORIZED("84", "Unauthorized - Token missing or invalid"),
+    RATE_LIMITED("85", "Too many requests - slow down");
 
     private final String code;
     private final String description;

@@ -2,6 +2,7 @@ package id.co.blackheart.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.filter.AuthRateLimitFilter;
 import id.co.blackheart.filter.JwtAuthenticationFilter;
 import id.co.blackheart.service.user.UserDetailsServiceImpl;
 import id.co.blackheart.util.ResponseCode;
@@ -40,6 +41,7 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final AuthRateLimitFilter authRateLimitFilter;
     private final UserDetailsServiceImpl userDetailsService;
     private final ObjectMapper objectMapper;
 
@@ -50,11 +52,16 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authenticationProvider(daoAuthProvider())
+                // Rate limiter runs before auth so bot traffic is dropped before
+                // BCrypt / user-details lookups — both are expensive and make
+                // effective DoS oracles.
+                .addFilterBefore(authRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/api/v1/users/register",
                                 "/api/v1/users/login",
+                                "/api/v1/users/logout",
                                 "/healthcheck",
                                 "/ws",
                                 "/ws/**",
@@ -91,10 +98,34 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
+        // Explicit allow-list, not wildcard; credentials enabled so the
+        // frontend's HttpOnly auth cookie is transmitted on XHRs.
         config.setAllowedOrigins(List.of("http://localhost:3000"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
+        // Permissive header list. Spec forbids "*" when credentials=true, so
+        // we spell out the superset of headers browsers / Axios ever send.
+        // Tightening too aggressively causes the preflight to silently cancel
+        // the real request and the user sees "button does nothing".
+        config.setAllowedHeaders(List.of(
+                "Authorization",
+                "Content-Type",
+                "Accept",
+                "Accept-Language",
+                "Origin",
+                "Referer",
+                "User-Agent",
+                "Cache-Control",
+                "Pragma",
+                "X-Request-ID",
+                "X-Correlation-ID",
+                "X-Requested-With",
+                "X-XSRF-TOKEN"
+        ));
+        config.setExposedHeaders(List.of("Content-Type", "X-Request-ID", "X-Correlation-ID"));
         config.setAllowCredentials(true);
+        // Cache CORS preflight for 1 h so mutations don't double up on
+        // OPTIONS round trips.
+        config.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

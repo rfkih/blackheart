@@ -58,13 +58,15 @@ public class JwtService {
     }
 
     /**
-     * Profile names where we refuse to boot with the dev-only sentinel secret.
-     * If you add a new production-shaped profile (e.g. {@code preprod}),
-     * add it here so a forgotten {@code JWT_SECRET} override can't ship with
-     * the publicly-known key.
+     * Profile names where the dev-only sentinel secret is legitimate.
+     * <b>Inverted from an earlier version.</b> The previous logic refused to
+     * boot only when the profile was one of {prod, staging, …}; a process
+     * launched with no active profile at all therefore silently shipped the
+     * publicly-known key. Now we require an explicit dev/test/local profile
+     * for the sentinel — anything else (including "no profile") is rejected.
      */
-    private static final java.util.Set<String> PRODUCTION_LIKE_PROFILES =
-            java.util.Set.of("prod", "production", "staging", "stg");
+    private static final java.util.Set<String> DEV_SAFE_PROFILES =
+            java.util.Set.of("dev", "test", "local");
 
     @PostConstruct
     void validateSecretOnStartup() {
@@ -74,14 +76,15 @@ public class JwtService {
             );
         }
         if (DEV_ONLY_SECRET_SENTINEL.equals(jwtSecret)) {
-            boolean productionLike = Arrays.stream(environment.getActiveProfiles())
+            boolean devSafe = Arrays.stream(environment.getActiveProfiles())
                     .map(String::toLowerCase)
-                    .anyMatch(PRODUCTION_LIKE_PROFILES::contains);
-            if (productionLike) {
+                    .anyMatch(DEV_SAFE_PROFILES::contains);
+            if (!devSafe) {
                 throw new IllegalStateException(
                         "Refusing to start: app.jwt.secret is the dev-only sentinel. "
-                                + "Set JWT_SECRET to a real Base64-encoded key before running in a production profile "
-                                + "(" + PRODUCTION_LIKE_PROFILES + ")."
+                                + "Either set JWT_SECRET to a real Base64-encoded 256-bit key, or "
+                                + "launch with SPRING_PROFILES_ACTIVE=dev|test|local to acknowledge "
+                                + "that this environment is non-production."
                 );
             }
             log.warn(
@@ -100,15 +103,28 @@ public class JwtService {
         Map<String, Object> claims = new HashMap<>();
         claims.put("userId", user.getUserId().toString());
         claims.put("role", user.getRole());
-        return buildToken(claims, user.getEmail());
+        return buildToken(claims, user.getEmail(), jwtExpirationMs);
     }
 
-    private String buildToken(Map<String, Object> extraClaims, String subject) {
+    /**
+     * Short-lived (60 s) JWT used exclusively for opening a STOMP WebSocket.
+     * The browser fetches this with its HttpOnly session cookie, then sends it
+     * in the STOMP CONNECT {@code Authorization} header. Short TTL keeps the
+     * exposure window narrow even if the ticket leaks via dev tools.
+     */
+    public String generateShortLivedTicket(String email, UUID userId, String role) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("userId", userId.toString());
+        claims.put("role", role);
+        return buildToken(claims, email, 60_000L);
+    }
+
+    private String buildToken(Map<String, Object> extraClaims, String subject, long ttlMs) {
         return Jwts.builder()
                 .claims(extraClaims)
                 .subject(subject)
                 .issuedAt(new Date(System.currentTimeMillis()))
-                .expiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
+                .expiration(new Date(System.currentTimeMillis() + ttlMs))
                 .signWith(getSignKey())
                 .compact();
     }

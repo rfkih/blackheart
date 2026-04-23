@@ -2,15 +2,21 @@ package id.co.blackheart.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.service.user.JwtCookieService;
 import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.service.user.UserDetailsServiceImpl;
 import id.co.blackheart.util.ResponseCode;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import java.util.Collections;
+import java.util.Enumeration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.lang.NonNull;
@@ -79,15 +85,29 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
 
-        final String authHeader = request.getHeader("Authorization");
+        // Accept JWT from either the Authorization header (CLI, API clients) or
+        // the HttpOnly auth cookie (browser sessions). The cookie path exists so
+        // the token never has to be exposed to page JS — an XSS on the frontend
+        // cannot lift it out of document.cookie.
+        final String jwt = resolveToken(request);
 
-        // No Bearer header — let the chain continue; entry point handles unauthenticated requests
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        if (jwt == null) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        final String jwt = authHeader.substring(7);
+        // Controllers that read @RequestHeader("Authorization") to pull the
+        // user id are the norm across this codebase. When the JWT came from
+        // the cookie there is no real Authorization header, and a required
+        // @RequestHeader parameter would throw MissingRequestHeaderException →
+        // 500 on every request. Wrap the request so downstream handlers see a
+        // synthetic "Bearer <token>" value. The raw cookie is never the
+        // authoritative auth input — SecurityContextHolder is — but for DX
+        // this wrapper keeps the existing controllers working unmodified.
+        final HttpServletRequest requestForChain =
+                request.getHeader("Authorization") != null
+                        ? request
+                        : new BearerHeaderWrapper(request, jwt);
 
         try {
             final String email = jwtService.extractEmail(jwt);
@@ -99,7 +119,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     UsernamePasswordAuthenticationToken authToken =
                             new UsernamePasswordAuthenticationToken(
                                     userDetails, null, userDetails.getAuthorities());
-                    authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                    authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(requestForChain));
                     SecurityContextHolder.getContext().setAuthentication(authToken);
                     log.debug("JWT authenticated: email={}, uri={}", email, request.getRequestURI());
                 } else {
@@ -113,7 +133,71 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        filterChain.doFilter(request, response);
+        filterChain.doFilter(requestForChain, response);
+    }
+
+    /**
+     * Wraps a request to inject a synthetic {@code Authorization: Bearer <token>}
+     * header when the token actually arrived via the auth cookie. Keeps the
+     * existing {@code @RequestHeader("Authorization")} controller idiom working
+     * without touching every controller.
+     */
+    private static final class BearerHeaderWrapper extends HttpServletRequestWrapper {
+        private final String authorizationHeader;
+
+        BearerHeaderWrapper(HttpServletRequest request, String jwt) {
+            super(request);
+            this.authorizationHeader = "Bearer " + jwt;
+        }
+
+        @Override
+        public String getHeader(String name) {
+            if ("Authorization".equalsIgnoreCase(name)) {
+                return authorizationHeader;
+            }
+            return super.getHeader(name);
+        }
+
+        @Override
+        public Enumeration<String> getHeaders(String name) {
+            if ("Authorization".equalsIgnoreCase(name)) {
+                return Collections.enumeration(Collections.singletonList(authorizationHeader));
+            }
+            return super.getHeaders(name);
+        }
+
+        @Override
+        public Enumeration<String> getHeaderNames() {
+            Enumeration<String> original = super.getHeaderNames();
+            java.util.Set<String> names = new java.util.LinkedHashSet<>();
+            while (original.hasMoreElements()) {
+                names.add(original.nextElement());
+            }
+            names.add("Authorization");
+            return Collections.enumeration(names);
+        }
+    }
+
+    private String resolveToken(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String candidate = authHeader.substring(7).trim();
+            if (!candidate.isEmpty()) {
+                return candidate;
+            }
+        }
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (Cookie c : cookies) {
+                if (JwtCookieService.COOKIE_NAME.equals(c.getName())) {
+                    String val = c.getValue();
+                    if (val != null && !val.isBlank()) {
+                        return val;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private void writeUnauthorized(HttpServletResponse response, String message) throws IOException {

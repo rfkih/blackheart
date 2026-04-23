@@ -25,6 +25,16 @@ public class BacktestRun extends BaseEntity {
     private UUID backtestRunId;
 
     /**
+     * FK → users.user_id. Owner of this backtest run. Populated from the
+     * authenticated JWT at submit time. All read paths filter on this column
+     * so one user cannot see another user's runs. Nullable for legacy rows
+     * created before tenant scoping was added — those rows are invisible to
+     * every user and only retained for audit/metrics.
+     */
+    @Column(name = "user_id")
+    private UUID userId;
+
+    /**
      * Default account strategy ID. Used for single-strategy backtests, or as fallback
      * in multi-strategy runs where a strategy code has no entry in strategyAccountStrategyIds.
      * Can be null for ad-hoc backtests.

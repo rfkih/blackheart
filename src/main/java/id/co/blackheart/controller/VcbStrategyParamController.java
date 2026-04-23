@@ -4,6 +4,7 @@ import id.co.blackheart.dto.request.VcbParamUpdateRequest;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.dto.response.VcbParamResponse;
 import id.co.blackheart.dto.vcb.VcbParams;
+import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.strategy.VcbStrategyParamService;
 import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.util.ResponseCode;
@@ -29,6 +30,7 @@ public class VcbStrategyParamController {
 
     private final VcbStrategyParamService paramService;
     private final JwtService jwtService;
+    private final AccountStrategyOwnershipGuard ownershipGuard;
 
     @GetMapping("/defaults")
     @Operation(summary = "Get the canonical VCB strategy default parameters",
@@ -51,7 +53,10 @@ public class VcbStrategyParamController {
     @GetMapping("/{accountStrategyId}")
     @Operation(summary = "Get effective VCB params for an account strategy (defaults + overrides)",
                security = @SecurityRequirement(name = "bearerAuth"))
-    public ResponseEntity<ResponseDto> getParams(@PathVariable UUID accountStrategyId) {
+    public ResponseEntity<ResponseDto> getParams(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountStrategyId) {
+        ownershipGuard.assertOwned(extractUserId(authHeader), accountStrategyId);
         VcbParamResponse response = paramService.getParamResponse(accountStrategyId);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -66,6 +71,7 @@ public class VcbStrategyParamController {
             @PathVariable UUID accountStrategyId,
             @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody VcbParamUpdateRequest request) {
+        ownershipGuard.assertOwned(extractUserId(authHeader), accountStrategyId);
         String callerEmail = extractEmail(authHeader);
         VcbParamResponse response = paramService.putParams(accountStrategyId, request, callerEmail);
         return ResponseEntity.ok(ResponseDto.builder()
@@ -81,6 +87,7 @@ public class VcbStrategyParamController {
             @PathVariable UUID accountStrategyId,
             @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody VcbParamUpdateRequest request) {
+        ownershipGuard.assertOwned(extractUserId(authHeader), accountStrategyId);
         String callerEmail = extractEmail(authHeader);
         VcbParamResponse response = paramService.patchParams(accountStrategyId, request, callerEmail);
         return ResponseEntity.ok(ResponseDto.builder()
@@ -95,6 +102,7 @@ public class VcbStrategyParamController {
     public ResponseEntity<ResponseDto> resetParams(
             @PathVariable UUID accountStrategyId,
             @RequestHeader("Authorization") String authHeader) {
+        ownershipGuard.assertOwned(extractUserId(authHeader), accountStrategyId);
         String callerEmail = extractEmail(authHeader);
         paramService.resetToDefaults(accountStrategyId, callerEmail);
         return ResponseEntity.ok(ResponseDto.builder()
@@ -105,5 +113,9 @@ public class VcbStrategyParamController {
 
     private String extractEmail(String authHeader) {
         return jwtService.extractEmail(authHeader.substring(7));
+    }
+
+    private UUID extractUserId(String authHeader) {
+        return jwtService.extractUserId(authHeader.substring(7));
     }
 }
