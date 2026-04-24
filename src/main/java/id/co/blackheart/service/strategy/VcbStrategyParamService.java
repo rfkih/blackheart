@@ -5,6 +5,7 @@ import id.co.blackheart.dto.response.VcbParamResponse;
 import id.co.blackheart.dto.vcb.VcbParams;
 import id.co.blackheart.model.VcbStrategyParam;
 import id.co.blackheart.repository.VcbStrategyParamRepository;
+import id.co.blackheart.service.backtest.BacktestParamOverrideContext;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,14 @@ public class VcbStrategyParamService {
     // ── Read ──────────────────────────────────────────────────────────────────
 
     public VcbParams getParams(UUID accountStrategyId) {
+        // Backtest wizard overrides take precedence over stored overrides and
+        // bypass the Redis cache entirely (per-run only; must not leak into
+        // live execution). Layer order is (defaults < stored < wizard).
+        Map<String, Object> wizardOverrides = BacktestParamOverrideContext.forStrategy("VCB");
+        if (!wizardOverrides.isEmpty()) {
+            return loadAndMergeWithWizardOverrides(accountStrategyId, wizardOverrides);
+        }
+
         if (accountStrategyId == null) {
             return VcbParams.defaults();
         }
@@ -58,6 +67,19 @@ public class VcbStrategyParamService {
         }
 
         return resolved;
+    }
+
+    /** See {@code LsrStrategyParamService.loadAndMergeWithWizardOverrides}. */
+    private VcbParams loadAndMergeWithWizardOverrides(UUID accountStrategyId,
+                                                      Map<String, Object> wizardOverrides) {
+        Map<String, Object> stored = accountStrategyId == null
+                ? new HashMap<>()
+                : paramRepository.findByAccountStrategyId(accountStrategyId)
+                        .map(VcbStrategyParam::getParamOverrides)
+                        .map(HashMap::new)
+                        .orElseGet(HashMap::new);
+        stored.putAll(wizardOverrides);
+        return VcbParams.merge(stored);
     }
 
     @Transactional(readOnly = true)

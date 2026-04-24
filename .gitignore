@@ -76,3 +76,9 @@ docker-compose.override.yml
 *.bak
 *.swp
 src/main/java/id/co/blackheart/folderresult/
+
+### Editor backup files ###
+*.java~
+*.swp
+*.swo
+.~lock.*

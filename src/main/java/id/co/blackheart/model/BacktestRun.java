@@ -25,6 +25,16 @@ public class BacktestRun extends BaseEntity {
     private UUID backtestRunId;
 
     /**
+     * FK → users.user_id. Owner of this backtest run. Populated from the
+     * authenticated JWT at submit time. All read paths filter on this column
+     * so one user cannot see another user's runs. Nullable for legacy rows
+     * created before tenant scoping was added — those rows are invisible to
+     * every user and only retained for audit/metrics.
+     */
+    @Column(name = "user_id")
+    private UUID userId;
+
+    /**
      * Default account strategy ID. Used for single-strategy backtests, or as fallback
      * in multi-strategy runs where a strategy code has no entry in strategyAccountStrategyIds.
      * Can be null for ad-hoc backtests.
@@ -106,10 +116,17 @@ public class BacktestRun extends BaseEntity {
     private Integer maxOpenPositions;
 
     /**
-     * Snapshot of runtime config at the time of backtest.
-     * For now, store JSON as text. Later you can move to JSONB in PostgreSQL.
+     * Snapshot of runtime config at the time of backtest (wizard param overrides
+     * as JSON). Later this can move to a proper JSONB column.
+     *
+     * <p><b>Do NOT re-add {@code @Lob}.</b> On Postgres, {@code @Lob String} maps
+     * to an {@code oid} Large Object which requires an active JDBC transaction
+     * to stream. Our Hikari pool runs with {@code auto-commit=true}, so reads
+     * outside an explicit {@code @Transactional} throw
+     * {@code "Large Objects may not be used in auto-commit mode"}. The
+     * {@code columnDefinition = "TEXT"} below keeps the column as plain text;
+     * Hibernate reads it as a normal {@link String}, no Lob streaming involved.
      */
-    @Lob
     @Column(name = "config_snapshot", columnDefinition = "TEXT")
     private String configSnapshot;
 
@@ -181,5 +198,15 @@ public class BacktestRun extends BaseEntity {
 
     @Column(name = "status", length = 30, nullable = false)
     private String status;
+
+    /**
+     * Rough completion percent (0–100) while the run is executing. Written by
+     * the coordinator loop through {@code BacktestProgressTracker}. Updated
+     * throttled so a 10M-candle backtest doesn't bombard the DB — at most
+     * ~100 writes per run. COMPLETED rows always land on 100; FAILED keeps
+     * the last reported value so users can see where it crashed.
+     */
+    @Column(name = "progress_percent")
+    private Integer progressPercent;
 
 }

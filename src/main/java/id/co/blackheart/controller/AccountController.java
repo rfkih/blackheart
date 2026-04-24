@@ -1,5 +1,7 @@
 package id.co.blackheart.controller;
 
+import id.co.blackheart.dto.request.CreateAccountRequest;
+import id.co.blackheart.dto.request.RotateAccountCredentialsRequest;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.user.AccountQueryService;
 import id.co.blackheart.service.user.JwtService;
@@ -7,6 +9,7 @@ import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -52,6 +55,42 @@ public class AccountController {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(accountQueryService.getAccountForUser(userId, accountId))
+                .build());
+    }
+
+    @PostMapping
+    @Operation(
+            summary = "Create a new exchange account under the authenticated user",
+            description = "Accepts API key + secret in the request body over HTTPS. "
+                    + "The logging layer redacts sensitive fields before anything is written.",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    public ResponseEntity<ResponseDto> createAccount(
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody CreateAccountRequest request) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()
+                .responseCode(HttpStatus.CREATED.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountQueryService.createAccount(userId, request))
+                .build());
+    }
+
+    @PatchMapping("/{accountId}/credentials")
+    @Operation(
+            summary = "Rotate the Binance API key + secret for an account the caller owns",
+            description = "Accepts a fresh key/secret pair over HTTPS. Both values are "
+                    + "re-encrypted at rest via EncryptedStringConverter. Ownership is "
+                    + "enforced server-side — foreign account IDs return 404.",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    public ResponseEntity<ResponseDto> rotateCredentials(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountId,
+            @Valid @RequestBody RotateAccountCredentialsRequest request) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountQueryService.rotateCredentials(userId, accountId, request))
                 .build());
     }
 

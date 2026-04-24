@@ -1,5 +1,12 @@
 package id.co.blackheart.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -15,26 +22,34 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class BacktestRunRequest {
 
     /**
      * Default account strategy ID used when no per-strategy mapping is provided.
-     * For single-strategy backtests this is the only ID needed.
+     * For single-strategy backtests this is the only ID needed. The underlying
+     * {@code backtest_run.account_strategy_id} column is NOT NULL, so callers
+     * must always set this — even for multi-strategy runs (typically the first
+     * id from {@link #strategyAccountStrategyIds}).
      */
+    @NotNull
     private UUID accountStrategyId;
 
     /**
      * Per-strategy account strategy ID mapping for multi-strategy backtests.
      * Key = strategy code (e.g. "LSR"), value = accountStrategyId whose saved params to use.
-     * Falls back to {@code accountStrategyId} for any strategy code not present in this map.
+     * Falls back to {@link #accountStrategyId} for any strategy code not present in this map.
      */
+    @Size(max = 10)
     private Map<String, UUID> strategyAccountStrategyIds;
 
+    @Size(max = 150)
     private String strategyName;
 
     /**
-     * Single-strategy code. If {@code strategyCodes} is also provided, this field is ignored.
+     * Single-strategy code. If {@link #strategyCodes} is also provided, this field is ignored.
      */
+    @Size(max = 60)
     private String strategyCode;
 
     /**
@@ -43,17 +58,44 @@ public class BacktestRunRequest {
      * first entry signal; once a trade is open only the owning strategy manages it.
      * When only one code is supplied it is treated identically to {@code strategyCode}.
      */
-    private List<String> strategyCodes;
+    @Size(max = 10)
+    private List<@NotBlank @Size(max = 60) String> strategyCodes;
 
+    @NotBlank
+    @Size(max = 30)
     private String asset;
+
+    @NotBlank
+    @Pattern(regexp = "^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$",
+             message = "interval must be one of: 1m/3m/5m/15m/30m/1h/2h/4h/6h/8h/12h/1d/3d/1w/1M")
     private String interval;
 
+    @NotNull
     private LocalDateTime startTime;
+
+    @NotNull
     private LocalDateTime endTime;
 
+    /**
+     * Bounded to keep a single request from driving a runaway backtest. Upper
+     * bound of 10M USDT is well beyond any legitimate trading-account size and
+     * catches accidental overflow numbers.
+     */
+    @NotNull
+    @DecimalMin(value = "0.01", message = "initialCapital must be at least 0.01 USDT")
+    @DecimalMax(value = "10000000", message = "initialCapital must be at most 10,000,000 USDT")
     private BigDecimal initialCapital;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "100.0", inclusive = true)
     private BigDecimal riskPerTradePct;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "0.1", inclusive = true, message = "feeRate cannot exceed 10%")
     private BigDecimal feeRate;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "0.1", inclusive = true, message = "slippageRate cannot exceed 10%")
     private BigDecimal slippageRate;
 
     private BigDecimal minNotional;
@@ -63,4 +105,14 @@ public class BacktestRunRequest {
     private Boolean allowLong;
     private Boolean allowShort;
     private Integer maxOpenPositions;
+
+    /**
+     * Per-strategy parameter overrides supplied from the backtest wizard (Step 2).
+     * Key = strategy code (e.g. "LSR_V2"), value = diff map of param key → override value.
+     * Only fields that differ from backend defaults are sent. The outer map is
+     * capped to limit blast radius — a malicious client can't flood the server
+     * with thousands of arbitrary strategy codes.
+     */
+    @Size(max = 10)
+    private Map<String, Map<String, Object>> strategyParamOverrides;
 }

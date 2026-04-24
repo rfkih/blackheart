@@ -33,4 +33,18 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     ORDER BY a.created_time ASC
     """, nativeQuery = true)
     List<Account> findByUserId(@Param("userId") UUID userId);
+
+    /**
+     * Case-insensitive existence check for username. Used by account creation
+     * to enforce the schema's unique constraint with a friendly 409 rather
+     * than a raw constraint violation stack-trace.
+     */
+    @Query(value = """
+    SELECT EXISTS (
+        SELECT 1
+        FROM accounts
+        WHERE LOWER(username) = LOWER(:username)
+    )
+    """, nativeQuery = true)
+    boolean existsByUsernameIgnoreCase(@Param("username") String username);
 }

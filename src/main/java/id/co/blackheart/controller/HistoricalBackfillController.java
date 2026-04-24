@@ -8,22 +8,28 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.Map;
 
+/**
+ * Historical data backfill is a privileged, CPU/IO-heavy operation that affects
+ * shared market-data tables. Admin-only.
+ */
 @RestController
-@RequestMapping("/api/historical")
+@RequestMapping("/api/v1/historical")
 @RequiredArgsConstructor
-@Tag(name = "HistoricalWarmupController", description = "Controller for Historical Data Warmup")
-public class HistoricalWarmupController {
+@Tag(name = "HistoricalBackfillController", description = "Controller for Historical Data Warmup")
+@PreAuthorize("hasRole('ADMIN')")
+public class HistoricalBackfillController {
 
     private final HistoricalDataService historicalDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
 
-    @PostMapping("/warmup")
-    public ResponseEntity<ResponseDto> warmupHistoricalData(
+    @PostMapping({"/backfill", "/backill"})
+    public ResponseEntity<ResponseDto> backfillHistoricalData(
             @RequestParam String symbol,
             @RequestParam String interval
     ) {

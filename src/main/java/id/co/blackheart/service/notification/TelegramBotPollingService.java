@@ -53,16 +53,32 @@ public class TelegramBotPollingService {
 
     @PostConstruct
     public void init() {
-        allowedChatIds = Arrays.stream(chatIdsConfig.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isBlank())
-                .map(Long::parseLong)
-                .collect(Collectors.toSet());
-        log.info("[TelegramBot] Allowed chat IDs: {}", allowedChatIds);
+        allowedChatIds = chatIdsConfig == null
+                ? Set.of()
+                : Arrays.stream(chatIdsConfig.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isBlank())
+                        .map(Long::parseLong)
+                        .collect(Collectors.toSet());
+        if (isBotDisabled()) {
+            log.info("[TelegramBot] Disabled — TELEGRAM_BOT_TOKEN not set; polling will no-op");
+        } else {
+            log.info("[TelegramBot] Allowed chat IDs: {}", allowedChatIds);
+        }
+    }
+
+    /**
+     * The bot stays dormant when no token is configured. Without this guard we
+     * hammered {@code https://api.telegram.org/bot/getUpdates} (literal empty
+     * token) every few seconds and filled the log with 404s.
+     */
+    private boolean isBotDisabled() {
+        return botToken == null || botToken.isBlank();
     }
 
     @Scheduled(fixedDelayString = "${telegram.bot.poll.interval-ms:5000}")
     public void pollUpdates() {
+        if (isBotDisabled()) return;
         try {
             String url = "https://api.telegram.org/bot" + botToken
                     + "/getUpdates?offset=" + updateOffset.get() + "&limit=100&timeout=0";
@@ -139,6 +155,7 @@ public class TelegramBotPollingService {
     }
 
     private void sendReply(long chatId, String text) {
+        if (isBotDisabled()) return;
         try {
             String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
 

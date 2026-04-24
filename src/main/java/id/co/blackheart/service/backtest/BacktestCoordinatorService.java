@@ -50,6 +50,12 @@ public class BacktestCoordinatorService {
     private final BacktestStateService backtestStateService;
     private final BacktestPersistenceService backtestPersistenceService;
     private final BacktestEquityPointRecorder backtestEquityPointRecorder;
+    private final BacktestProgressTracker progressTracker;
+
+    /** Report progress at most every N candles. With MIN_INTERVAL_MS also
+     *  throttling inside the tracker, this just cheaply avoids calling into
+     *  it on every single tick. */
+    private static final int PROGRESS_TICK_EVERY = 100;
 
     public BacktestExecutionSummary execute(BacktestRun backtestRun) {
         validateBacktestRun(backtestRun);
@@ -112,6 +118,10 @@ public class BacktestCoordinatorService {
 
         BacktestState state = BacktestState.initial(backtestRun);
 
+        // Prime the progress bar early — users should see the run leave 0% as
+        // soon as it enters the tight candle loop, not after the first tick fires.
+        progressTracker.report(backtestRun.getBacktestRunId(), 0.01);
+
         List<StrategyExecutorEntry> executors = resolveStrategyExecutors(backtestRun);
         StrategyRequirements requirements = executors.size() == 1
                 ? executors.getFirst().executor().getRequirements()
@@ -121,6 +131,8 @@ public class BacktestCoordinatorService {
 
         BiasData biasData = preloadBiasData(backtestRun, requirements);
 
+        final int totalCandles = monitorCandles.size();
+        int processed = 0;
         for (MarketData monitorCandle : monitorCandles) {
             backtestTradeExecutorService.fillPendingEntry(
                     backtestRun, state, monitorCandle.getOpenPrice(), monitorCandle.getStartTime()
@@ -150,6 +162,15 @@ public class BacktestCoordinatorService {
             backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getHighPrice());
             backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
             backtestEquityPointRecorder.record(state, backtestRun, monitorCandle);
+
+            processed++;
+            if (processed % PROGRESS_TICK_EVERY == 0) {
+                progressTracker.reportStep(
+                        backtestRun.getBacktestRunId(),
+                        processed,
+                        totalCandles
+                );
+            }
         }
 
         MarketData finalCandle = monitorCandles.getLast();

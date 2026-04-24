@@ -7,9 +7,37 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface AccountStrategyRepository extends JpaRepository<AccountStrategy, UUID> {
+
+    /**
+     * Looks up a row by the same tuple that backs the {@code uq_account_strategy}
+     * unique constraint — {@code (account_id, strategy_definition_id, symbol, interval_name)}.
+     *
+     * <p>Crucially this DOES NOT filter out soft-deleted rows: the constraint
+     * itself is not partial, so a previously-deleted row still owns the key
+     * and would block a naive INSERT. Callers use this to either report a
+     * friendly 409 (if the hit is active) or revive the existing row
+     * (if the hit is soft-deleted) without mutating the primary key —
+     * preserving any trade history that references it.
+     */
+    @Query(value = """
+        SELECT acs.*
+        FROM account_strategy acs
+        WHERE acs.account_id = :accountId
+          AND acs.strategy_definition_id = :strategyDefinitionId
+          AND acs.symbol = :symbol
+          AND acs.interval_name = :intervalName
+          AND acs.is_deleted = false
+        """, nativeQuery = true)
+    Optional<AccountStrategy> findByUniqueKey(
+            @Param("accountId") UUID accountId,
+            @Param("strategyDefinitionId") UUID strategyDefinitionId,
+            @Param("symbol") String symbol,
+            @Param("intervalName") String intervalName);
+
 
     @Query(value = """
         SELECT acs.*
@@ -40,4 +68,45 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
             """, nativeQuery = true)
     List<AccountStrategy> findByAccountId(@Param("accountId") UUID accountId);
 
+    /**
+     * All presets that share the given tuple. Used to show preset groupings
+     * in the UI and to flip siblings off when a new preset is activated.
+     * Includes both enabled and disabled rows but excludes soft-deletes.
+     */
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+              AND acs.strategy_definition_id = :strategyDefinitionId
+              AND acs.symbol = :symbol
+              AND acs.interval_name = :intervalName
+              AND acs.is_deleted = false
+            ORDER BY acs.enabled DESC, acs.priority_order ASC, acs.created_time ASC
+            """, nativeQuery = true)
+    List<AccountStrategy> findPresetsForTuple(
+            @Param("accountId") UUID accountId,
+            @Param("strategyDefinitionId") UUID strategyDefinitionId,
+            @Param("symbol") String symbol,
+            @Param("intervalName") String intervalName);
+
+    /**
+     * Returns the currently-active preset (if any) for the tuple. Exactly one
+     * row can match — the partial unique index
+     * {@code uq_account_strategy_active_preset} enforces it.
+     */
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+              AND acs.strategy_definition_id = :strategyDefinitionId
+              AND acs.symbol = :symbol
+              AND acs.interval_name = :intervalName
+              AND acs.is_deleted = false
+              AND acs.enabled = true
+            """, nativeQuery = true)
+    Optional<AccountStrategy> findActivePreset(
+            @Param("accountId") UUID accountId,
+            @Param("strategyDefinitionId") UUID strategyDefinitionId,
+            @Param("symbol") String symbol,
+            @Param("intervalName") String intervalName);
 }

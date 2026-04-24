@@ -1,6 +1,6 @@
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '3.2.3'
+	id 'org.springframework.boot' version '3.3.5'
 	id 'io.spring.dependency-management' version '1.1.6'
 }
 
@@ -51,11 +51,24 @@ dependencies {
         implementation 'org.springframework.cloud:spring-cloud-stream'
 		implementation 'org.springframework.kafka:spring-kafka'
 
-		implementation 'org.postgresql:postgresql:42.6.0'
-		implementation 'org.json:json:20210307'
+		// Bucket4j — per-IP/per-email rate limiting on /login and /register.
+		implementation 'com.bucket4j:bucket4j-core:8.10.1'
+
+		// Caffeine — bounded in-memory cache for the auth filter's UserDetails
+		implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+
+		implementation 'org.postgresql:postgresql:42.7.4'
+		// `org.json` retired from the hot path — Jackson (already on the
+		// classpath) replaces it. Kept as a 20231013+ bump in case a
+		// transitive consumer references it.
+		implementation 'org.json:json:20240303'
 		implementation 'commons-codec:commons-codec:1.16.1'
 
-		implementation 'org.bouncycastle:bcprov-jdk15on:1.70'
+		// BouncyCastle — `jdk18on` is the maintained coordinate for Java 17+
+		// and carries fixes for CVE-2023-33201 / CVE-2024-30171 absent in
+		// 1.70-jdk15on. `bcprov-jdk15on` is explicitly NOT included — keeping
+		// both on the classpath triggers LTS-picker hell.
+		implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
 
 		implementation 'org.ta4j:ta4j-core:0.15'
 
@@ -99,6 +112,15 @@ dependencyManagement {
 	}
 }
 
+tasks.named('bootRun') {
+	if (System.getenv('SPRING_PROFILES_ACTIVE') == null) {
+		systemProperty 'spring.profiles.active', 'dev'
+	}
+}
+
 tasks.named('test') {
 	useJUnitPlatform()
+	if (System.getenv('SPRING_PROFILES_ACTIVE') == null) {
+		systemProperty 'spring.profiles.active', 'test'
+	}
 }

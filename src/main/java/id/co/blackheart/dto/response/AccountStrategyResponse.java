@@ -15,6 +15,7 @@ public class AccountStrategyResponse {
     private UUID accountId;
     private UUID strategyDefinitionId;
     private String strategyCode;
+    private String presetName;
     private String symbol;
     private String intervalName;
     private Boolean enabled;

@@ -7,15 +7,21 @@ import id.co.blackheart.util.ResponseCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 
 
 @RestController
-@RequestMapping(value = "v1/portofolio")
+// Accept both the canonical `/api/v1/portofolio/**` path and the shorter
+// `/v1/portofolio/**` alias so existing Postman collections / curl scripts
+// keep working. Prefer the `/api`-prefixed form for new callers — it mirrors
+// the rest of the controllers in this project.
+@RequestMapping(value = {"/api/v1/portofolio", "/v1/portofolio"})
 @Slf4j
 @Tag(name = "PortofolioController", description = "Controller for Portofolio")
+@PreAuthorize("hasRole('ADMIN')")
 public class PortofolioController {
 
     private static final String RELOAD_SUCCESS = "Update Portofolio Success";

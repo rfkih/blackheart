@@ -9,6 +9,7 @@ import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.cache.CacheService;
+import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,7 @@ public class UnifiedTradeService {
     private final TradePositionRepository tradePositionRepository;
     private final AccountRepository accountRepository;
     private final CacheService cacheService;
+    private final AccountStrategyOwnershipGuard ownershipGuard;
 
     public List<TradeResponse> getTrades(UUID userId, String status, UUID accountId, int limit, int page, int size) {
         List<UUID> accountIds = resolveAccountIds(userId, accountId);
@@ -70,6 +72,12 @@ public class UnifiedTradeService {
 
     private List<UUID> resolveAccountIds(UUID userId, UUID accountId) {
         if (accountId != null) {
+            // Assert the caller actually owns this account — without this guard
+            // a client passing ?accountId=<stranger> would receive that user's
+            // entire trade history. 404 (via EntityNotFoundException thrown in
+            // the guard) is deliberately identical to "not found" so the
+            // endpoint doesn't leak account existence.
+            ownershipGuard.assertOwnsAccount(userId, accountId);
             return List.of(accountId);
         }
         return accountRepository.findByUserId(userId).stream()

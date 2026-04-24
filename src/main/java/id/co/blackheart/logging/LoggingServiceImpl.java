@@ -1,7 +1,10 @@
 package id.co.blackheart.logging;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import id.co.blackheart.util.HeaderName;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,6 +24,26 @@ public class LoggingServiceImpl implements LoggingService {
 
     private static final Set<String> RESTRICTED_HEADERS = Set.of("authorization", "user_key");
 
+    /**
+     * Field names (case-insensitive, substring match) whose values must never
+     * reach the log. Covers plain credentials, API keys, and tokens that might
+     * appear in request or response bodies.
+     *
+     * <p>Matching is a substring check so we also catch adjacent fields like
+     * {@code currentPassword}, {@code newPassword}, {@code apiSecretKey}, etc.
+     */
+    private static final Set<String> REDACTED_FIELD_NEEDLES = Set.of(
+            "password",
+            "secret",
+            "apikey",
+            "api_key",
+            "accesstoken",
+            "refreshtoken",
+            "privatekey"
+    );
+
+    private static final String REDACTED = "[REDACTED]";
+
     private static final ObjectMapper mapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -37,7 +60,7 @@ public class LoggingServiceImpl implements LoggingService {
                 map.put("parameters", buildParametersMap(request));
             }
             if (body != null) {
-                map.put("body", mapper.writeValueAsString(body));
+                map.put("body", serialiseWithRedaction(body));
             }
 
             log.info(">>REQUEST {}", mapper.writeValueAsString(map));
@@ -56,13 +79,59 @@ public class LoggingServiceImpl implements LoggingService {
             map.put("timeTakenMs", getTimeTaken(request));
             map.put("responseHeaders", buildHeadersMapRes(response));
             if (body != null) {
-                map.put("responseBody", mapper.writeValueAsString(body));
+                map.put("responseBody", serialiseWithRedaction(body));
             }
 
             log.info("<<RESPONSE {}", mapper.writeValueAsString(map));
         } catch (Exception e) {
             log.warn("Failed to log response: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Serialise a body to JSON with password/secret/token fields scrubbed.
+     * Walks the parsed tree so nested structures (login wrapper → user object,
+     * envelope → data.accessToken, etc.) get caught without field-class lists.
+     */
+    private String serialiseWithRedaction(Object body) throws Exception {
+        JsonNode tree = mapper.valueToTree(body);
+        redactSensitiveFields(tree);
+        return mapper.writeValueAsString(tree);
+    }
+
+    private void redactSensitiveFields(JsonNode node) {
+        if (node == null || node.isNull()) return;
+        if (node.isObject()) {
+            ObjectNode obj = (ObjectNode) node;
+            Iterator<Map.Entry<String, JsonNode>> fields = obj.fields();
+            List<String> keysToRedact = new ArrayList<>();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                if (isSensitiveFieldName(entry.getKey())) {
+                    keysToRedact.add(entry.getKey());
+                } else {
+                    redactSensitiveFields(entry.getValue());
+                }
+            }
+            for (String key : keysToRedact) {
+                obj.set(key, TextNode.valueOf(REDACTED));
+            }
+            return;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                redactSensitiveFields(child);
+            }
+        }
+    }
+
+    private boolean isSensitiveFieldName(String name) {
+        if (name == null || name.isEmpty()) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        for (String needle : REDACTED_FIELD_NEEDLES) {
+            if (lower.contains(needle)) return true;
+        }
+        return false;
     }
 
     private Map<String, String> buildHeadersMapReq(HttpServletRequest request) {

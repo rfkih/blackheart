@@ -8,6 +8,7 @@ import id.co.blackheart.model.MonteCarloRun;
 import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.repository.BacktestTradeRepository;
 import id.co.blackheart.repository.MonteCarloRunRepository;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,12 +31,14 @@ public class MonteCarloService {
     private final MonteCarloRunRepository monteCarloRunRepository;
     private final MonteCarloEngine monteCarloEngine;
 
-    public MonteCarloResponse run(MonteCarloRequest request) {
+    public MonteCarloResponse run(UUID userId, MonteCarloRequest request) {
         validateRequest(request);
 
-        BacktestRun backtestRun = backtestRunRepository.findById(request.getBacktestRunId())
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "BacktestRun not found: " + request.getBacktestRunId()));
+        // Ownership check: only the owner of the backtest run may simulate from it.
+        // Treat "not found" and "not yours" identically.
+        BacktestRun backtestRun = backtestRunRepository
+                .findByIdAndUserId(request.getBacktestRunId(), userId)
+                .orElseThrow(() -> new EntityNotFoundException("Not found"));
 
         if (!"COMPLETED".equalsIgnoreCase(backtestRun.getStatus())) {
             throw new IllegalStateException(

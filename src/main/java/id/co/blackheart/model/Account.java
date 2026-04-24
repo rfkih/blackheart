@@ -1,5 +1,6 @@
 package id.co.blackheart.model;
 
+import id.co.blackheart.converter.EncryptedStringConverter;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.UuidGenerator;
@@ -51,10 +52,20 @@ public class Account extends BaseEntity {
     @Column(name = "stop_loss", nullable = false, precision = 20, scale = 12)
     private BigDecimal stopLoss;
 
-    @Column(name = "api_key", nullable = false)
+    /**
+     * Binance API key. Encrypted at rest via {@link EncryptedStringConverter}
+     * (AES-256-GCM); DB column type should be widened to support the base64-encoded
+     * ciphertext envelope (~64 chars for a 40-char key).
+     */
+    @Column(name = "api_key", nullable = false, length = 1024)
+    @Convert(converter = EncryptedStringConverter.class)
     private String apiKey;
 
-    @Column(name = "api_secret", nullable = false)
+    /**
+     * Binance API secret. Encrypted at rest via {@link EncryptedStringConverter}.
+     */
+    @Column(name = "api_secret", nullable = false, length = 1024)
+    @Convert(converter = EncryptedStringConverter.class)
     private String apiSecret;
 
 }

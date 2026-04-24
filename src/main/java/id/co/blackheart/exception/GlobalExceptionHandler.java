@@ -7,8 +7,11 @@ import id.co.blackheart.exception.UserAlreadyExistsException;
 import id.co.blackheart.exception.UserNotFoundException;
 import id.co.blackheart.util.ResponseCode;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.NestedExceptionUtils;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -69,6 +72,38 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    /**
+     * Safety net for any DB unique / foreign-key violation that bypasses our
+     * in-service pre-checks (e.g. a race between two concurrent creates, or
+     * a constraint we haven't mapped yet). Returns 409 with a friendlier
+     * message instead of letting the generic 500 handler swallow it as
+     * "An unexpected error occurred".
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ResponseDto> handleDataIntegrity(DataIntegrityViolationException ex) {
+        String rootMessage = NestedExceptionUtils.getMostSpecificCause(ex).getMessage();
+        log.warn("Data integrity violation: {}", rootMessage);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ResponseDto.builder()
+                .responseCode(HttpStatus.CONFLICT.value() + ResponseCode.DATA_INTEGRITY_ERROR.getCode())
+                .responseDesc(ResponseCode.DATA_INTEGRITY_ERROR.getDescription())
+                .errorMessage(toFriendlyConstraintMessage(rootMessage))
+                .build());
+    }
+
+    /**
+     * Map Postgres constraint names to human-readable errors. Anything we
+     * don't know yet falls back to a safe generic — we never echo the raw
+     * SQL error, since that leaks schema details.
+     */
+    private String toFriendlyConstraintMessage(String rootMessage) {
+        if (rootMessage == null) return "This record conflicts with an existing one.";
+        if (rootMessage.contains("uq_account_strategy")) {
+            return "This account already runs this strategy on the same symbol and interval. " +
+                    "Edit the existing strategy instead of creating a new one.";
+        }
+        return "This record conflicts with an existing one.";
+    }
+
     // ── 401 Unauthorized ─────────────────────────────────────────────────────
 
     @ExceptionHandler(InvalidCredentialsException.class)
@@ -97,7 +132,17 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ResponseDto.builder()
                 .responseCode(HttpStatus.FORBIDDEN.value() + ResponseCode.ACCESS_DENIED.getCode())
                 .responseDesc(ResponseCode.ACCESS_DENIED.getDescription())
-                .errorMessage(ex.getMessage())
+                .errorMessage("You do not have permission to access this resource")
+                .build());
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ResponseDto> handleAccessDenied(AccessDeniedException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ResponseDto.builder()
+                .responseCode(HttpStatus.FORBIDDEN.value() + ResponseCode.ACCESS_DENIED.getCode())
+                .responseDesc(ResponseCode.ACCESS_DENIED.getDescription())
+                .errorMessage("You do not have permission to access this resource")
                 .build());
     }
 
@@ -121,7 +166,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ResponseDto.builder()
                 .responseCode(HttpStatus.NOT_FOUND.value() + ResponseCode.NOT_FOUND.getCode())
                 .responseDesc(ResponseCode.NOT_FOUND.getDescription())
-                .errorMessage(ex.getMessage())
+                .errorMessage("Not found")
                 .build());
     }
 

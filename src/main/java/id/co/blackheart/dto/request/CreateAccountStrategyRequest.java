@@ -5,6 +5,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -22,6 +23,15 @@ public class CreateAccountStrategyRequest {
 
     @NotBlank
     private String strategyCode;
+
+    /**
+     * Optional user-facing preset label. Multiple presets can exist for the
+     * same (accountId, strategyCode, symbol, interval); only one at a time
+     * is enabled. When omitted the service assigns a default like
+     * "Preset 1", "Preset 2"…
+     */
+    @Size(max = 80)
+    private String presetName;
 
     @NotBlank
     private String symbol;
