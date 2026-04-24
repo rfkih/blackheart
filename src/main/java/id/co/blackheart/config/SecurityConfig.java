@@ -7,6 +7,8 @@ import id.co.blackheart.filter.JwtAuthenticationFilter;
 import id.co.blackheart.service.user.UserDetailsServiceImpl;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -25,6 +27,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -38,12 +41,22 @@ import java.util.List;
 // endpoint would quietly be public.
 @EnableMethodSecurity(prePostEnabled = true)
 @RequiredArgsConstructor
+@Slf4j
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final AuthRateLimitFilter authRateLimitFilter;
     private final UserDetailsServiceImpl userDetailsService;
     private final ObjectMapper objectMapper;
+
+    /**
+     * Comma-separated list of allowed CORS origins. In production the deploy
+     * pipeline must set {@code CORS_ALLOWED_ORIGINS} to the real frontend
+     * origin(s). The dev fallback keeps local `next dev` on 3000 working out
+     * of the box.
+     */
+    @Value("${app.cors.allowed-origins:http://localhost:3000}")
+    private String allowedOriginsCsv;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -99,8 +112,19 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         // Explicit allow-list, not wildcard; credentials enabled so the
-        // frontend's HttpOnly auth cookie is transmitted on XHRs.
-        config.setAllowedOrigins(List.of("http://localhost:3000"));
+        // frontend's HttpOnly auth cookie is transmitted on XHRs. Origins
+        // come from `app.cors.allowed-origins` (env override:
+        // CORS_ALLOWED_ORIGINS=https://app.example.com,https://staging.example.com).
+        List<String> origins = Arrays.stream(allowedOriginsCsv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .toList();
+        if (origins.isEmpty()) {
+            origins = List.of("http://localhost:3000");
+            log.warn("CORS allowed-origins was empty; falling back to localhost:3000");
+        }
+        log.info("CORS allowed origins: {}", origins);
+        config.setAllowedOrigins(origins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         // Permissive header list. Spec forbids "*" when credentials=true, so
         // we spell out the superset of headers browsers / Axios ever send.

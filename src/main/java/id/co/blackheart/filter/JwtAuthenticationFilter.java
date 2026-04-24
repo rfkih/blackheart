@@ -1,6 +1,8 @@
 package id.co.blackheart.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.user.JwtCookieService;
 import id.co.blackheart.service.user.JwtService;
@@ -29,9 +31,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Stateless JWT bearer-token authentication filter.
@@ -54,27 +53,33 @@ import java.util.concurrent.ConcurrentHashMap;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final Duration CACHE_TTL = Duration.ofSeconds(60);
+    /**
+     * Hard cap on cached principals. A reasonable upper bound for concurrent
+     * distinct users hitting the API within one TTL — well above observed
+     * traffic. Prevents an attacker from flooding the filter with unique
+     * token payloads to exhaust heap.
+     */
+    private static final long CACHE_MAX_SIZE = 10_000L;
 
     private final JwtService jwtService;
     private final UserDetailsServiceImpl userDetailsService;
     private final ObjectMapper objectMapper;
 
-    private final Map<String, CachedUser> userCache = new ConcurrentHashMap<>();
-
-    private record CachedUser(UserDetails details, Instant expiresAt) {
-        boolean expired(Instant now) {
-            return now.isAfter(expiresAt);
-        }
-    }
+    /**
+     * Caffeine-backed bounded cache. W-TinyLFU eviction + explicit max-size
+     * prevents the unbounded-growth footgun of the previous ConcurrentHashMap
+     * (every distinct email authenticated stayed in memory forever).
+     */
+    private final Cache<String, UserDetails> userCache = Caffeine.newBuilder()
+            .maximumSize(CACHE_MAX_SIZE)
+            .expireAfterWrite(CACHE_TTL)
+            .build();
 
     private UserDetails loadUser(String email) {
-        Instant now = Instant.now();
-        CachedUser cached = userCache.get(email);
-        if (cached != null && !cached.expired(now)) {
-            return cached.details();
-        }
+        UserDetails cached = userCache.getIfPresent(email);
+        if (cached != null) return cached;
         UserDetails fresh = userDetailsService.loadUserByUsername(email);
-        userCache.put(email, new CachedUser(fresh, now.plus(CACHE_TTL)));
+        userCache.put(email, fresh);
         return fresh;
     }
 

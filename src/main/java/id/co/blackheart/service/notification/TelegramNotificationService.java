@@ -41,24 +41,43 @@ public class TelegramNotificationService {
                 .toList();
         if (recipients.isEmpty()) return;
 
+        for (String chatId : recipients) {
+            sendMessageToChat(chatId, message);
+        }
+    }
+
+    /**
+     * Sends a message to one specific chat ID — used by the per-user Telegram
+     * integration so a link/test/alert lands on the human who linked it
+     * rather than the broadcast list. No-op when the bot token is blank.
+     *
+     * <p>Does not raise on Telegram-side failures (404/unauthorized): the
+     * integration is opt-in and a misconfigured link shouldn't crash the
+     * request that triggered it. Failures are logged.
+     */
+    public void sendMessageToChat(String chatId, String message) {
+        if (botToken == null || botToken.isBlank()) {
+            log.warn("[Telegram] Bot disabled (no token); skipping send to {}", chatId);
+            return;
+        }
+        if (chatId == null || chatId.isBlank()) return;
+
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
-        for (String chatId : recipients) {
-            try {
-                Map<String, String> body = new HashMap<>();
-                body.put("chat_id", chatId);
-                body.put("text", message);
-                body.put("parse_mode", "HTML");
+        try {
+            Map<String, String> body = new HashMap<>();
+            body.put("chat_id", chatId);
+            body.put("text", message);
+            body.put("parse_mode", "HTML");
 
-                HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
-                restTemplate.postForObject(url, request, String.class);
-                log.info("[Telegram] Message sent to {}", chatId);
-            } catch (Exception e) {
-                log.error("[Telegram] Failed to send message to {}", chatId, e);
-            }
+            HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
+            restTemplate.postForObject(url, request, String.class);
+            log.info("[Telegram] Message sent to {}", chatId);
+        } catch (Exception e) {
+            log.error("[Telegram] Failed to send message to {}", chatId, e);
         }
     }
 }

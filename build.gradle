@@ -1,9 +1,5 @@
 plugins {
 	id 'java'
-	// Upgraded from 3.2.3 — 3.2.x predates a raft of spring-framework CVEs
-	// (CVE-2024-22259, CVE-2024-38820, CVE-2024-38819). 3.3.x stays on a
-	// supported branch; 3.4.x brings more breakage than a security-first
-	// bump wants to absorb in one move.
 	id 'org.springframework.boot' version '3.3.5'
 	id 'io.spring.dependency-management' version '1.1.6'
 }
@@ -56,8 +52,10 @@ dependencies {
 		implementation 'org.springframework.kafka:spring-kafka'
 
 		// Bucket4j — per-IP/per-email rate limiting on /login and /register.
-		// 8.10.x is compatible with Spring Boot 3.x and Java 21.
 		implementation 'com.bucket4j:bucket4j-core:8.10.1'
+
+		// Caffeine — bounded in-memory cache for the auth filter's UserDetails
+		implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
 
 		implementation 'org.postgresql:postgresql:42.7.4'
 		// `org.json` retired from the hot path — Jackson (already on the
@@ -114,10 +112,6 @@ dependencyManagement {
 	}
 }
 
-// Default the `dev` profile for local `./gradlew bootRun` only, unless the
-// caller has already exported SPRING_PROFILES_ACTIVE. Packaged jars are NOT
-// touched by this — production deployments still have to set the env var
-// explicitly, so the JWT-sentinel refuse-to-boot check keeps working.
 tasks.named('bootRun') {
 	if (System.getenv('SPRING_PROFILES_ACTIVE') == null) {
 		systemProperty 'spring.profiles.active', 'dev'

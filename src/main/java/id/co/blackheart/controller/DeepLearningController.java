@@ -9,13 +9,20 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * Admin-only — model inference is CPU/IO-intensive and unsuitable for open
+ * per-user invocation. Restricting to {@code ROLE_ADMIN} turns this off as a
+ * DoS amplifier while keeping it callable from ops / scheduled training jobs.
+ */
 @RestController
 @RequestMapping("/api/v1/deep-learning")
 @Slf4j
 @RequiredArgsConstructor
 @Tag(name = "DeepLearningController", description = "Controller for Deep Learning Execution")
+@PreAuthorize("hasRole('ADMIN')")
 public class DeepLearningController {
 
     private final DeepLearningService deepLearningService;
