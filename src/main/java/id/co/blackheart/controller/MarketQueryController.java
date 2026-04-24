@@ -1,5 +1,6 @@
 package id.co.blackheart.controller;
 
+import id.co.blackheart.dto.response.CurrencyRatesResponse;
 import id.co.blackheart.dto.response.IndicatorDataResponse;
 import id.co.blackheart.dto.response.LatestPriceResponse;
 import id.co.blackheart.dto.response.MarketDataResponse;
@@ -8,6 +9,7 @@ import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.service.marketquery.CurrencyRateService;
 import id.co.blackheart.service.marketquery.MarketQueryService;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +32,20 @@ public class MarketQueryController {
     private final MarketQueryService marketQueryService;
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
+    private final CurrencyRateService currencyRateService;
+
+    /**
+     * Rates for the frontend's display-currency toggle. Returned values are
+     * cached server-side so the external APIs aren't hit on every request.
+     */
+    @GetMapping("/rates")
+    public ResponseEntity<ResponseDto> getRates() {
+        CurrencyRatesResponse data = currencyRateService.getRates();
+        return ResponseEntity.ok().body(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(data)
+                .build());
+    }
 
     @GetMapping("/latest-price/{symbol}")
     public ResponseEntity<ResponseDto> getLatestPrice(@PathVariable String symbol) {

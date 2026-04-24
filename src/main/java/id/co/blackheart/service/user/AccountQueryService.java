@@ -1,6 +1,7 @@
 package id.co.blackheart.service.user;
 
 import id.co.blackheart.dto.request.CreateAccountRequest;
+import id.co.blackheart.dto.request.RotateAccountCredentialsRequest;
 import id.co.blackheart.dto.response.AccountSummaryResponse;
 import id.co.blackheart.exception.UserAlreadyExistsException;
 import id.co.blackheart.model.Account;
@@ -90,6 +91,32 @@ public class AccountQueryService {
 
         Account saved = accountRepository.save(account);
         log.info("Account created: accountId={}", saved.getAccountId());
+        return toSummary(saved);
+    }
+
+    /**
+     * Atomically replaces the stored Binance API key + secret for an account
+     * the caller owns. Both fields pass through
+     * {@link id.co.blackheart.converter.EncryptedStringConverter} so the new
+     * pair is re-encrypted at rest just like create.
+     *
+     * <p>Ownership is enforced by looking up the row and comparing
+     * {@code userId} — a 404 is returned for both "not found" and "not yours"
+     * so the endpoint doesn't leak the existence of other users' accounts.
+     */
+    @Transactional
+    public AccountSummaryResponse rotateCredentials(
+            UUID userId, UUID accountId, RotateAccountCredentialsRequest request) {
+        Account account = accountRepository.findByAccountId(accountId)
+                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException("Account not found: " + accountId);
+        }
+
+        log.info("Rotating credentials: userId={} accountId={}", userId, accountId);
+        account.setApiKey(request.getApiKey());
+        account.setApiSecret(request.getApiSecret());
+        Account saved = accountRepository.save(account);
         return toSummary(saved);
     }
 

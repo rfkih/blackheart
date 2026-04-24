@@ -63,17 +63,12 @@ public class BacktestAsyncRunner {
         try {
             BacktestRun run = markRunning(backtestRunId);
             overrides = readOverrides(run);
-            // Enter the override scope BEFORE the coordinator boots executors so
-            // every LsrStrategyParamService/VcbStrategyParamService call inside
-            // the loop sees the wizard's per-run tuning.
             BacktestParamOverrideContext.enter(overrides);
             try {
                 BacktestExecutionSummary summary = backtestCoordinatorService.execute(run);
                 markCompleted(backtestRunId, summary);
                 progressTracker.complete(backtestRunId);
             } finally {
-                // Critical: the backtest thread pool reuses threads. A leaked
-                // thread-local here would poison the NEXT run on this worker.
                 BacktestParamOverrideContext.exit();
             }
         } catch (Exception e) {
@@ -138,7 +133,7 @@ public class BacktestAsyncRunner {
         run.setStatus(STATUS_FAILED);
         // Keep the last reported percent — useful to see where it died.
         String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
-        // Truncate to fit the notes column (length = 1000).
+
         if (message.length() > 950) {
             message = message.substring(0, 950) + "…";
         }
