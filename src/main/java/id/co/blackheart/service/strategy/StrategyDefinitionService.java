@@ -36,8 +36,6 @@ public class StrategyDefinitionService {
     @Transactional(readOnly = true)
     public List<StrategyDefinitionResponse> list() {
         return repository.findAll().stream()
-                // Stable ordering — code is unique and immutable, so it makes a
-                // predictable primary sort key for the admin table.
                 .sorted(Comparator.comparing(StrategyDefinition::getStrategyCode))
                 .map(this::toResponse)
                 .toList();
@@ -56,9 +54,6 @@ public class StrategyDefinitionService {
         log.info("Creating strategy definition: code={} actor={}", code, actorEmail);
 
         repository.findByStrategyCode(code).ifPresent(existing -> {
-            // Reuses the "already exists" exception family — GlobalExceptionHandler
-            // maps it to 409, keeping the client error shape consistent with
-            // user + account collisions.
             throw new UserAlreadyExistsException(
                     "Strategy code '" + code + "' is already registered");
         });
@@ -84,8 +79,6 @@ public class StrategyDefinitionService {
         StrategyDefinition entity = repository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Strategy definition not found: " + id));
 
-        // Partial update — only apply fields that were actually sent.
-        // strategyCode is intentionally omitted: it's the stable key.
         if (request.getStrategyName() != null) {
             entity.setStrategyName(request.getStrategyName().trim());
         }
