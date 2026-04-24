@@ -336,13 +336,15 @@ public class BacktestTradeExecutorService {
             return;
         }
 
-        // TP exits are limit orders — no slippage. SL/trailing stops are market orders — slippage applies.
-        boolean isTakeProfit = "TAKE_PROFIT".equalsIgnoreCase(exitReason);
-        if (!isTakeProfit) {
-            cleanExitPrice = backtestPricingService.applyExitSlippage(
-                    cleanExitPrice, backtestRun.getSlippagePct(), position.getSide()
-            );
-        }
+        // Every live exit — SL, trailing stop, AND take-profit — goes through a
+        // market order (see LiveTradingDecisionExecutorService.executeListenerClosePosition
+        // → TradeService.binanceCloseLong/ShortPositionsMarketOrder). Previously this
+        // branch exempted TAKE_PROFIT from slippage on the assumption TP was a resting
+        // limit order, which systematically overstated backtest P&L on winning trades.
+        // Applying slippage on every exit keeps sim results honest against live fills.
+        cleanExitPrice = backtestPricingService.applyExitSlippage(
+                cleanExitPrice, backtestRun.getSlippagePct(), position.getSide()
+        );
 
         BigDecimal exitQuoteQty = remainingQty.multiply(cleanExitPrice).setScale(8, RoundingMode.HALF_UP);
         BigDecimal exitFee = exitQuoteQty.multiply(safe(backtestRun.getFeePct())).setScale(8, RoundingMode.HALF_UP);
