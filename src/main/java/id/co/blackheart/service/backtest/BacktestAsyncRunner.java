@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.backtest.BacktestExecutionSummary;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
+import id.co.blackheart.service.research.BacktestAnalysisService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +56,7 @@ public class BacktestAsyncRunner {
     private final BacktestCoordinatorService backtestCoordinatorService;
     private final BacktestProgressTracker progressTracker;
     private final ObjectMapper objectMapper;
+    private final BacktestAnalysisService analysisService;
 
     @Async("backtestExecutor")
     public void runAsync(UUID backtestRunId) {
@@ -68,6 +70,16 @@ public class BacktestAsyncRunner {
                 BacktestExecutionSummary summary = backtestCoordinatorService.execute(run);
                 markCompleted(backtestRunId, summary);
                 progressTracker.complete(backtestRunId);
+
+                // Auto-analyze: persist diagnostics to backtest_run.analysis_snapshot
+                // so the frontend + research loop have everything ready without a
+                // separate trigger. Swallow errors — a bug in the analyzer shouldn't
+                // mark a successfully-completed run as FAILED.
+                try {
+                    analysisService.analyze(backtestRunId);
+                } catch (Exception analysisEx) {
+                    log.error("Post-run analysis failed | runId={}", backtestRunId, analysisEx);
+                }
             } finally {
                 BacktestParamOverrideContext.exit();
             }

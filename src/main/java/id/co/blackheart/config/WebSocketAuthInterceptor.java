@@ -84,7 +84,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
                 throw new IllegalArgumentException("STOMP CONNECT rejected — invalid token");
             }
         } catch (Exception e) {
-            log.warn("STOMP CONNECT token validation failed: {}", e.getMessage());
+//            log.warn("STOMP CONNECT token validation failed: {}", e.getMessage());
             throw new IllegalArgumentException("STOMP CONNECT rejected — invalid token");
         }
 

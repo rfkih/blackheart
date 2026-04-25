@@ -209,4 +209,14 @@ public class BacktestRun extends BaseEntity {
     @Column(name = "progress_percent")
     private Integer progressPercent;
 
+    /**
+     * JSON payload written by the research analyzer when a run completes.
+     * Contains headline metrics + feature-bucket diagnostics + MFE-capture
+     * stats + best/worst trades. Stored as TEXT not {@code @Lob} for the same
+     * reason as {@link #configSnapshot} — avoids the Postgres oid /
+     * auto-commit trap.
+     */
+    @Column(name = "analysis_snapshot", columnDefinition = "TEXT")
+    private String analysisSnapshot;
+
 }

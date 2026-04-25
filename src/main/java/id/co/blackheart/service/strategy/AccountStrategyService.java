@@ -1,6 +1,7 @@
 package id.co.blackheart.service.strategy;
 
 import id.co.blackheart.dto.request.CreateAccountStrategyRequest;
+import id.co.blackheart.dto.request.UpdateAccountStrategyRequest;
 import id.co.blackheart.dto.response.AccountStrategyResponse;
 import id.co.blackheart.model.Account;
 import id.co.blackheart.model.AccountStrategy;
@@ -204,6 +205,77 @@ public class AccountStrategyService {
         log.info("Activated preset id={} name={} (deactivated previous active={})",
                 saved.getAccountStrategyId(), saved.getPresetName(),
                 currentActive.map(AccountStrategy::getAccountStrategyId).orElse(null));
+
+        return toResponse(saved);
+    }
+
+    /**
+     * Deactivates the given preset — flips {@code enabled=false} so the live
+     * orchestrator stops evaluating it for new entries. Does NOT touch open
+     * positions on this strategy: the live listener continues managing them
+     * (stop-loss, trailing stop, take-profit) until they close naturally.
+     *
+     * <p>Idempotent — calling on an already-stopped row is a no-op.
+     */
+    @Transactional
+    public AccountStrategyResponse deactivateStrategy(UUID userId, UUID accountStrategyId) {
+        AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
+
+        if (!Boolean.TRUE.equals(strategy.getEnabled())) {
+            return toResponse(strategy);
+        }
+
+        strategy.setEnabled(false);
+        AccountStrategy saved = accountStrategyRepository.save(strategy);
+
+        log.info("Deactivated preset id={} name={}",
+                saved.getAccountStrategyId(), saved.getPresetName());
+
+        return toResponse(saved);
+    }
+
+    /**
+     * Partial update — currently only the candle interval. Refuses if the
+     * strategy has any open trades (those were sized / stopped on the OLD
+     * interval; switching candle granularity mid-position is unsafe). When
+     * the strategy is currently {@code enabled=true} and the new interval
+     * tuple already has a different active sibling, that sibling is
+     * deactivated atomically (rejecting if the sibling has open trades),
+     * mirroring the activate flow.
+     */
+    @Transactional
+    public AccountStrategyResponse updateStrategy(
+            UUID userId, UUID accountStrategyId, UpdateAccountStrategyRequest req) {
+        AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
+
+        String newInterval = req.getIntervalName().trim();
+        if (newInterval.equalsIgnoreCase(strategy.getIntervalName())) {
+            // Idempotent — no change.
+            return toResponse(strategy);
+        }
+
+        long openTrades = tradesRepository.countOpenByAccountStrategyId(accountStrategyId);
+        if (openTrades > 0) {
+            throw new IllegalStateException(
+                    "Cannot change interval — strategy has " + openTrades
+                            + " open trade(s). Close positions first.");
+        }
+
+        if (Boolean.TRUE.equals(strategy.getEnabled())) {
+            // Moving an active preset into a new tuple: the new tuple may
+            // already have an active sibling that we'd collide with at the
+            // partial-unique-index level. Deactivate it atomically here.
+            deactivateActiveSibling(
+                    strategy.getAccountId(),
+                    strategy.getStrategyDefinitionId(),
+                    strategy.getSymbol(),
+                    newInterval);
+        }
+
+        strategy.setIntervalName(newInterval);
+        AccountStrategy saved = accountStrategyRepository.save(strategy);
+
+        log.info("Updated strategy id={} interval -> {}", saved.getAccountStrategyId(), newInterval);
 
         return toResponse(saved);
     }

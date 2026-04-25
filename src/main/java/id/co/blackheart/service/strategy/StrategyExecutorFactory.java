@@ -11,6 +11,8 @@ public class StrategyExecutorFactory {
     private final ExecutionTestService executionTestService;
     private final VcbStrategyService vcbStrategyService;
     private final LsrStrategyService lsrStrategyService;
+    private final TrendPullbackStrategyService trendPullbackStrategyService;
+    private final VolatilityBreakoutStrategyService volatilityBreakoutStrategyService;
 
     public StrategyExecutor get(String strategyName) {
         log.info("Getting strategy executor for strategy: {}", strategyName);
@@ -18,6 +20,8 @@ public class StrategyExecutorFactory {
             case "TEST" -> executionTestService;
             case "VCB" -> vcbStrategyService;
             case "LSR" -> lsrStrategyService;
+            case "TPR" -> trendPullbackStrategyService;
+            case "VBO" -> volatilityBreakoutStrategyService;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyName);
         };
     }

@@ -46,7 +46,7 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 |---|---|---|
 | Strategy execution | `service/strategy/` | `StrategyExecutor`, `StrategyExecutorFactory`, `DefaultStrategyContextEnrichmentService`, `StrategyHelper` |
 | Strategy impls | `service/strategy/` | `LsrStrategyService`, `VcbStrategyService`, `ExecutionTestService` |
-| Strategy params | `service/strategy/` | `LsrStrategyParamService`, `VcbStrategyParamService`, `AccountStrategyService` |
+| Strategy params | `service/strategy/` | `LsrStrategyParamService`, `VcbStrategyParamService`, `VboStrategyParamService`, `AccountStrategyService` |
 | Live trading | `service/live/` | `LiveOrchestratorCoordinatorService`, `LiveTradingCoordinatorService`, `LiveTradingDecisionExecutorService`, `LiveTradeListenerService`, `LivePositionSnapshotMapper` |
 | Backtest | `service/backtest/` | `BacktestCoordinatorService`, `BacktestTradeExecutorService`, `BacktestMetricsService`, `BacktestPersistenceService`, `BacktestStateService`, `BacktestEquityPointRecorder` |
 | Trade mgmt | `service/trade/` | `TradeOpenService`, `TradeCloseService`, `TradeStateSyncService` |
@@ -63,6 +63,7 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 | `AccountStrategy` | Links account → strategy; interval, capital allocation, priority, allow-long/short flags. Soft-delete via `is_deleted` + `deleted_at` (preserves FK targets for historical trades/P&L) |
 | `LsrStrategyParam` | Per-account-strategy LSR overrides; JSONB `param_overrides`, `@Version` optimistic lock |
 | `VcbStrategyParam` | Per-account-strategy VCB overrides; same structure as LSR |
+| `VboStrategyParam` | Per-account-strategy VBO overrides; same structure as LSR / VCB |
 | `Trades` | Parent trade record (status: OPEN / PARTIALLY_CLOSED / CLOSED) |
 | `TradePosition` | Child leg: SINGLE, TP1, TP2, RUNNER |
 | `MarketData` | OHLCV candlestick data |
@@ -76,6 +77,7 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 |---|---|---|
 | `LSR` / `LSR_V2` | `LsrStrategyService` | Long/Short reversal; fully parameterized via `LsrParams` |
 | `VCB` | `VcbStrategyService` | Volatility Compression Breakout v2.1; fully parameterized via `VcbParams` |
+| `VBO` | `VolatilityBreakoutStrategyService` | Volatility Breakout (BB-width compression → expansion); fully parameterized via `VboParams` |
 | `TREND_PULLBACK_SINGLE_EXIT` | (existing) | Trend-following w/ pullback entries, fixed 1.5:1 R:R |
 | `RAHT_V1` | `RahtV1` | RahtV1 strategy |
 | `TSMOM_V1` | `TsMomV1` | Time-series momentum |
@@ -87,13 +89,13 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 - **Liveness flag is `enabled`, not `currentStatus`**: `current_status` is a legacy column that **no service writes**. Every row holds its seed value (`"STOPPED"`). All active-strategy queries filter `enabled = true AND is_deleted = false`; never rely on `current_status`. The frontend status badge is derived from `enabled`.
 - **Read paths that filter `is_deleted`**: every query in `AccountStrategyRepository` (live orchestration, scheduler, UI list). Trade / P&L joins must **NOT** filter `is_deleted` — historical attribution depends on resolving deleted strategies by id.
 
-## Per-Strategy Parameter System (LSR + VCB)
-Both LSR and VCB support per-`accountStrategyId` overrides in PostgreSQL:
-- **Storage**: `lsr_strategy_param` / `vcb_strategy_param` — JSONB `param_overrides`, `@JdbcTypeCode(SqlTypes.JSON)` (Hibernate 6), `@Version` optimistic locking.
-- **Param objects**: `LsrParams` / `VcbParams` — value objects, `@Builder.Default` fields, `defaults()` factory, `merge(Map)` overlay.
-- **Cache**: Redis, `GenericJackson2JsonRedisSerializer`; key prefix `lsr:params:` / `vcb:params:`; TTL 1h. Evicted **after transaction commit** via `TransactionSynchronizationManager.afterCommit()`.
+## Per-Strategy Parameter System (LSR + VCB + VBO)
+LSR, VCB, and VBO support per-`accountStrategyId` overrides in PostgreSQL:
+- **Storage**: `lsr_strategy_param` / `vcb_strategy_param` / `vbo_strategy_param` — JSONB `param_overrides`, `@JdbcTypeCode(SqlTypes.JSON)` (Hibernate 6), `@Version` optimistic locking.
+- **Param objects**: `LsrParams` / `VcbParams` / `VboParams` — value objects, `@Builder.Default` fields, `defaults()` factory, `merge(Map)` overlay. `VboParams` additionally exposes `applyOverrides(Map)` for in-place mutation, and its merge handles boolean gate flags (`requireKcSqueeze`, `requireDonchianBreak`, `requireTrendAlignment`).
+- **Cache**: Redis, `GenericJackson2JsonRedisSerializer`; key prefix `lsr:params:` / `vcb:params:` / `vbo:params:`; TTL 1h. Evicted **after transaction commit** via `TransactionSynchronizationManager.afterCommit()`.
 - **Concurrent insert safety**: `putParams` / `patchParams` catch `DataIntegrityViolationException` and retry with UPDATE.
-- **REST**: `/api/v1/lsr-params/{accountStrategyId}` and `/api/v1/vcb-params/{accountStrategyId}` — GET, PUT, PATCH, DELETE + GET `/defaults`.
+- **REST**: `/api/v1/lsr-params/{accountStrategyId}`, `/api/v1/vcb-params/{accountStrategyId}`, `/api/v1/vbo-params/{accountStrategyId}` — GET, PUT, PATCH, DELETE + GET `/defaults`.
 - **Backtest integration**: `BacktestRun.strategyAccountStrategyIds` (JSONB `Map<String, UUID>`) maps strategy code → accountStrategyId; falls back to global `accountStrategyId`.
 
 ## Context Enrichment (Live vs Backtest)
@@ -118,6 +120,7 @@ Both LSR and VCB support per-`accountStrategyId` overrides in PostgreSQL:
 | `AccountStrategyController` | `/api/v1/account-strategies` | List/get strategies by user (excludes soft-deleted); `POST` create; `DELETE /:id` soft-delete (blocked if OPEN/PARTIALLY_CLOSED trades exist) |
 | `LsrStrategyParamController` | `/api/v1/lsr-params` | LSR param CRUD |
 | `VcbStrategyParamController` | `/api/v1/vcb-params` | VCB param CRUD |
+| `VboStrategyParamController` | `/api/v1/vbo-params` | VBO param CRUD |
 | `BacktestController` | `/api/v1/backtest` | Submit and query backtests |
 | `TradeController` | `/api/v1/trades` | Trade management |
 | `TradeQueryController` | `/api/v1/trades` | Trade queries |

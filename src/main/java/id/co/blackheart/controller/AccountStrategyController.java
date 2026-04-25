@@ -1,6 +1,7 @@
 package id.co.blackheart.controller;
 
 import id.co.blackheart.dto.request.CreateAccountStrategyRequest;
+import id.co.blackheart.dto.request.UpdateAccountStrategyRequest;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.strategy.AccountStrategyService;
 import id.co.blackheart.service.user.JwtService;
@@ -110,6 +111,43 @@ public class AccountStrategyController {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(accountStrategyService.activateStrategy(userId, accountStrategyId))
+                .build());
+    }
+
+    /**
+     * Deactivate this preset — flips {@code enabled=false} so the live
+     * orchestrator stops evaluating it for new entries. Open positions are
+     * left intact; the live listener continues managing them until they
+     * close naturally.
+     */
+    @PostMapping("/{accountStrategyId}/deactivate")
+    @Operation(summary = "Stop this preset from taking new entries (existing positions are unaffected).",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> deactivateStrategy(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountStrategyId) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountStrategyService.deactivateStrategy(userId, accountStrategyId))
+                .build());
+    }
+
+    /**
+     * Partial update — currently the candle interval. Refuses if open trades
+     * reference this strategy (mid-position TF change is unsafe).
+     */
+    @PatchMapping("/{accountStrategyId}")
+    @Operation(summary = "Update editable fields on an account strategy (currently: intervalName).",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> updateStrategy(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountStrategyId,
+            @Valid @RequestBody UpdateAccountStrategyRequest request) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountStrategyService.updateStrategy(userId, accountStrategyId, request))
                 .build());
     }
 
