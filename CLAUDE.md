@@ -125,10 +125,13 @@ LSR, VCB, and VBO support per-`accountStrategyId` overrides in PostgreSQL:
 | `TradeController` | `/api/v1/trades` | Trade management |
 | `TradeQueryController` | `/api/v1/trades` | Trade queries |
 | `TradePnlQueryController` | `/api/v1/pnl` | P&L queries |
-| `PortofolioController` | `/api/v1/portfolio` | Portfolio balances |
+| `PortfolioController` | `/api/v1/portfolio` | Portfolio balances. `GET ?accountId=<uuid>` scopes to a single owned account (verifies ownership, throws `AccessDeniedException` otherwise). Omit `accountId` to aggregate across every account the user owns: free/locked summed per asset, USDT recomputed once on the merged total so spot price is not double-applied. |
+| `PortofolioController` | `/api/v1/portofolio` (also `/v1/portofolio` alias) | **Admin-only** legacy reload endpoint (`GET /reload`). Note the spelling — typo preserved for backward compat. Not the same as `PortfolioController`. |
 | `MarketQueryController` | `/api/v1/market` | Market data queries |
-| `SchedulerController` | `/api/v1/scheduler` | Scheduler management |
+| `SchedulerController` | `/api/v1/scheduler` | Scheduler management. `IP_MONITOR` job calls `IpMonitorService.checkAndNotifyIfChanged()` on its tick. |
 | `MonteCarloController` | `/api/v1/montecarlo` | Monte Carlo simulation |
+| `ResearchController` | `/api/v1/research` | **Mixed access** (no class-level `@PreAuthorize`). Sweeps endpoints (`POST/GET/DELETE /sweeps`, `POST /sweeps/:id/cancel`) and read-only `GET /tpr/params` are user-accessible — every sweep is created with the caller's `userId` and the get/cancel/delete handlers reject when `state.getUserId()` differs from the JWT subject. Admin-only via method-level `@PreAuthorize("hasRole('ADMIN')")`: `GET /backtest/:id/analysis` (no per-run ownership check), `PUT /tpr/params`, `POST /tpr/params/reset`, `GET /log`. Add new sweep-adjacent endpoints **without** `@PreAuthorize` and rely on the service-layer ownership check; add new global/mutating endpoints **with** `@PreAuthorize("hasRole('ADMIN')")`. |
+| `ServerInfoController` | `/api/v1/server` | Server diagnostics. `GET /ip` calls ipify live (used by the broker-setup card). `GET /ip/status` returns the latest persisted `ServerIpLog` row — `{ currentIp, previousIp, event, recordedAt }` — written by the `IP_MONITOR` scheduler. The frontend `IpWhitelistBanner` polls this and warns the user when `event == "CHANGED"`. Don't make `/ip/status` call ipify; the whole point is to keep it cheap to poll. |
 
 ## Security
 - JWT Bearer auth; `JwtService` issues and validates tokens.

@@ -34,16 +34,24 @@ import java.util.UUID;
 
 /**
  * Research-loop endpoints: on-demand analysis, hot-reloadable TPR params,
- * and a research-log view for tracking version-to-version progression.
+ * a research-log view, and the parameter-sweep driver.
  *
- * <p>All three endpoints are admin-only — this is research infrastructure,
- * not production API.
+ * <p>Access split:
+ *   <ul>
+ *     <li>Sweeps endpoints are user-accessible — every sweep is created with
+ *     the caller's {@code userId} and read/cancel/delete check ownership at
+ *     the service layer, so each user only sees their own.</li>
+ *     <li>{@code GET /tpr/params} is read-only and exposed to all users
+ *     because the sweep wizard uses it to seed the TPR baseline params.</li>
+ *     <li>Everything else (analysis on arbitrary run ids, mutating TPR
+ *     params, the global research log) is admin-only via method-level
+ *     {@link PreAuthorize}.</li>
+ *   </ul>
  */
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/research")
 @RequiredArgsConstructor
-@PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "ResearchController",
      description = "Research-mode diagnostics + hot-reloadable strategy params")
 public class ResearchController {
@@ -58,6 +66,7 @@ public class ResearchController {
     // ── Per-run analysis ─────────────────────────────────────────────────────
 
     @GetMapping("/backtest/{runId}/analysis")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Fetch the diagnostic report for a completed backtest run",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> getAnalysis(
@@ -102,6 +111,7 @@ public class ResearchController {
     }
 
     @PutMapping("/tpr/params")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Replace the live TPR research params (hot reload, no restart)",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> setTprParams(@RequestBody Params params) {
@@ -113,6 +123,7 @@ public class ResearchController {
     }
 
     @PostMapping("/tpr/params/reset")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Reset TPR params to the baked-in defaults",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> resetTprParams() {
@@ -130,6 +141,7 @@ public class ResearchController {
      * at a glance (v0.1 → v0.2b → v0.3 → v0.4).
      */
     @GetMapping("/log")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Research log — one row per completed run, newest first",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> getResearchLog(
