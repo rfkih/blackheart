@@ -443,7 +443,8 @@ public class BacktestCoordinatorService {
      * (no extra DB load). When {@code strategyIntervals} is set, each
      * unique interval gets its own load + maps.
      */
-    private record IntervalContext(
+    /** Package-private for focused tests. */
+    record IntervalContext(
             String interval,
             Map<LocalDateTime, MarketData> candleByEndTime,
             Map<LocalDateTime, FeatureStore> featureByStartTime,
@@ -624,7 +625,8 @@ public class BacktestCoordinatorService {
      * Loads are cached by biasInterval — two strategies that want the same
      * bias timeframe share a single DB query.
      */
-    private Map<String, BiasData> preloadBiasDataPerStrategy(
+    /** Package-private for focused tests. */
+    Map<String, BiasData> preloadBiasDataPerStrategy(
             BacktestRun backtestRun, List<StrategyExecutorEntry> executors
     ) {
         Map<String, BiasData> byInterval = new HashMap<>();
@@ -880,7 +882,8 @@ public class BacktestCoordinatorService {
      * priority value) sort to the end with a neutral default; ties fall
      * back to declaration order via {@link Comparator#thenComparingInt}.
      */
-    private List<StrategyExecutorEntry> resolveStrategyExecutors(BacktestRun backtestRun) {
+    /** Package-private for focused tests. */
+    List<StrategyExecutorEntry> resolveStrategyExecutors(BacktestRun backtestRun) {
         List<String> codes = resolveStrategyCodeList(backtestRun);
         Map<String, Integer> priorityByCode = resolvePriorityOrders(backtestRun, codes);
 
@@ -910,7 +913,8 @@ public class BacktestCoordinatorService {
      * Strategies with no resolvable AS or null priority map to MAX_VALUE
      * (sort to end).
      */
-    private Map<String, Integer> resolvePriorityOrders(BacktestRun backtestRun, List<String> codes) {
+    /** Package-private for focused tests. */
+    Map<String, Integer> resolvePriorityOrders(BacktestRun backtestRun, List<String> codes) {
         Map<String, Integer> out = new HashMap<>();
         Map<String, UUID> idMap = backtestRun.getStrategyAccountStrategyIds();
 
@@ -984,7 +988,8 @@ public class BacktestCoordinatorService {
      * {@link id.co.blackheart.service.live.LiveOrchestratorCoordinatorService}'s
      * fan-out-stops-at-first-opener pattern.
      */
-    private boolean intervalGroupBusy(
+    /** Package-private for focused tests. */
+    boolean intervalGroupBusy(
             BacktestState state,
             List<StrategyExecutorEntry> executors,
             String interval,
@@ -1272,7 +1277,8 @@ public class BacktestCoordinatorService {
         }
     }
 
-    private record BiasData(
+    /** Package-private for focused tests. */
+    record BiasData(
             List<MarketData> biasCandles,
             Map<LocalDateTime, FeatureStore> biasFeatureByStartTime
     ) {

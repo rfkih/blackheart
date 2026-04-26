@@ -6,6 +6,7 @@ import id.co.blackheart.dto.response.AccountSummaryResponse;
 import id.co.blackheart.exception.UserAlreadyExistsException;
 import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.AccountRepository;
+import id.co.blackheart.service.audit.AuditService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,7 @@ import java.util.UUID;
 public class AccountQueryService {
 
     private final AccountRepository accountRepository;
+    private final AuditService auditService;
 
     /**
      * Risk defaults for freshly-created accounts. The NewAccountDialog
@@ -148,6 +150,11 @@ public class AccountQueryService {
         if (!userId.equals(account.getUserId())) {
             throw new EntityNotFoundException("Account not found: " + accountId);
         }
+        // Snapshot the risk fields BEFORE we mutate so the audit JSON shows
+        // the diff. Cloning the whole entity would also drag in API keys
+        // we never want in the audit log; the inline record keeps the
+        // payload narrow and forensics-friendly.
+        RiskConfigSnapshot before = RiskConfigSnapshot.of(account);
         if (req.getMaxConcurrentLongs() != null) {
             if (req.getMaxConcurrentLongs() < 0 || req.getMaxConcurrentLongs() > 20) {
                 throw new IllegalArgumentException("maxConcurrentLongs must be between 0 and 20");
@@ -180,7 +187,29 @@ public class AccountQueryService {
             }
             account.setBookVolTargetPct(t);
         }
-        return toSummary(accountRepository.save(account));
+        Account saved = accountRepository.save(account);
+        auditService.record(userId, "ACCOUNT_RISK_UPDATED", "Account",
+                accountId, before, RiskConfigSnapshot.of(saved));
+        return toSummary(saved);
+    }
+
+    /** Narrow snapshot of audit-relevant risk fields — never includes credentials. */
+    private record RiskConfigSnapshot(
+            Integer maxConcurrentLongs,
+            Integer maxConcurrentShorts,
+            Integer maxConcurrentTrades,
+            Boolean volTargetingEnabled,
+            BigDecimal bookVolTargetPct
+    ) {
+        static RiskConfigSnapshot of(Account a) {
+            return new RiskConfigSnapshot(
+                    a.getMaxConcurrentLongs(),
+                    a.getMaxConcurrentShorts(),
+                    a.getMaxConcurrentTrades(),
+                    a.getVolTargetingEnabled(),
+                    a.getBookVolTargetPct()
+            );
+        }
     }
 
     /** Inline DTO so we don't need a fresh top-level request file. */

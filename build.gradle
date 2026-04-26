@@ -58,6 +58,14 @@ dependencies {
 		implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
 
 		implementation 'org.postgresql:postgresql:42.7.4'
+
+		// Flyway — version-controlled migrations. Replaces the manual
+		// db/migration/*.sql + apply_session_migrations.sql workflow.
+		// On first run against an existing DB, baseline-on-migrate stamps
+		// the schema as V1 so pre-Flyway state is accepted; new migrations
+		// go in src/main/resources/db/flyway/V<N>__name.sql.
+		implementation 'org.flywaydb:flyway-core'
+		implementation 'org.flywaydb:flyway-database-postgresql'
 		// `org.json` retired from the hot path — Jackson (already on the
 		// classpath) replaces it. Kept as a 20231013+ bump in case a
 		// transitive consumer references it.

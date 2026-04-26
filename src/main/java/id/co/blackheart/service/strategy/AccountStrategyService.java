@@ -10,6 +10,7 @@ import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.AccountStrategyRepository;
 import id.co.blackheart.repository.StrategyDefinitionRepository;
 import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.service.audit.AuditService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +31,7 @@ public class AccountStrategyService {
     private final AccountStrategyRepository accountStrategyRepository;
     private final StrategyDefinitionRepository strategyDefinitionRepository;
     private final TradesRepository tradesRepository;
+    private final AuditService auditService;
 
     /**
      * Returns all account strategies belonging to every account owned by the given user.
@@ -155,6 +157,8 @@ public class AccountStrategyService {
         log.info("Created account strategy id={} code={} preset={} account={} enabled={}",
                 saved.getAccountStrategyId(), saved.getStrategyCode(),
                 saved.getPresetName(), saved.getAccountId(), saved.getEnabled());
+        auditService.record(userId, "STRATEGY_CREATED", "AccountStrategy",
+                saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
     }
 
@@ -206,6 +210,8 @@ public class AccountStrategyService {
                 saved.getAccountStrategyId(), saved.getPresetName(),
                 currentActive.map(AccountStrategy::getAccountStrategyId).orElse(null));
 
+        auditService.record(userId, "STRATEGY_ACTIVATED", "AccountStrategy",
+                saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
     }
 
@@ -231,6 +237,8 @@ public class AccountStrategyService {
         log.info("Deactivated preset id={} name={}",
                 saved.getAccountStrategyId(), saved.getPresetName());
 
+        auditService.record(userId, "STRATEGY_DEACTIVATED", "AccountStrategy",
+                saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
     }
 
@@ -253,6 +261,8 @@ public class AccountStrategyService {
         AccountStrategy saved = accountStrategyRepository.save(strategy);
         log.info("Re-armed kill switch | userId={} accountStrategyId={}",
                 userId, accountStrategyId);
+        auditService.record(userId, "KILL_SWITCH_REARMED", "AccountStrategy",
+                saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
     }
 
@@ -269,6 +279,11 @@ public class AccountStrategyService {
     public AccountStrategyResponse updateStrategy(
             UUID userId, UUID accountStrategyId, UpdateAccountStrategyRequest req) {
         AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
+
+        // Snapshot the relevant editable fields BEFORE mutating so the audit
+        // shows what actually changed. Cloning the whole entity here would
+        // also work; this is lighter and matches the verbs we audit.
+        AccountStrategySnapshot before = AccountStrategySnapshot.of(strategy);
 
         boolean dirty = false;
 
@@ -315,7 +330,28 @@ public class AccountStrategyService {
             return toResponse(strategy);
         }
         AccountStrategy saved = accountStrategyRepository.save(strategy);
+        auditService.record(userId, "STRATEGY_UPDATED", "AccountStrategy",
+                saved.getAccountStrategyId(), before, AccountStrategySnapshot.of(saved));
         return toResponse(saved);
+    }
+
+    /**
+     * Lightweight before/after snapshot of the editable fields. Avoids
+     * dragging the full entity (including non-serializable JPA lazy refs)
+     * into the audit JSON.
+     */
+    private record AccountStrategySnapshot(
+            String intervalName,
+            Integer priorityOrder,
+            Boolean enabled
+    ) {
+        static AccountStrategySnapshot of(AccountStrategy s) {
+            return new AccountStrategySnapshot(
+                    s.getIntervalName(),
+                    s.getPriorityOrder(),
+                    s.getEnabled()
+            );
+        }
     }
 
     /**
@@ -332,12 +368,15 @@ public class AccountStrategyService {
                     "Cannot delete strategy with " + openTrades + " open trade(s). Close positions first.");
         }
 
+        AccountStrategySnapshot before = AccountStrategySnapshot.of(strategy);
         strategy.setIsDeleted(true);
         strategy.setDeletedAt(LocalDateTime.now());
         strategy.setEnabled(false);
         accountStrategyRepository.save(strategy);
 
         log.info("Soft-deleted account strategy id={} by userId={}", accountStrategyId, userId);
+        auditService.record(userId, "STRATEGY_DELETED", "AccountStrategy",
+                accountStrategyId, before, null);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
