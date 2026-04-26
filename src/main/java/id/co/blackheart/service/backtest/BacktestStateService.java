@@ -43,14 +43,36 @@ public class BacktestStateService {
     public BigDecimal calculateCurrentEquity(BacktestState state, BigDecimal latestPrice) {
         BigDecimal equity = safe(state.getCashBalance());
 
-        BacktestTrade activeTrade = state.getActiveTrade();
-        List<BacktestTradePosition> activePositions = state.getActiveTradePositions();
-
-        if (activeTrade == null || activePositions == null || activePositions.isEmpty()) {
+        // Multi-trade aware: sum mark-to-market across EVERY strategy's
+        // active positions, not just the legacy mirror's. With multiple
+        // strategies open under the cap, the legacy mirror would reflect
+        // only the most-recently-opened trade and silently drop the rest
+        // of the book from equity / drawdown calculations.
+        java.util.Map<String, List<BacktestTradePosition>> byStrategy =
+                state.getActiveTradePositionsByStrategy();
+        if (byStrategy != null && !byStrategy.isEmpty()) {
+            for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
+                if (perStrategy == null) continue;
+                equity = equity.add(positionsMarkToMarket(perStrategy, latestPrice));
+            }
             return equity;
         }
 
-        for (BacktestTradePosition position : activePositions) {
+        // Legacy single-strategy fallback (pre-B1 code path / single
+        // strategy runs with no multi-trade entries).
+        BacktestTrade activeTrade = state.getActiveTrade();
+        List<BacktestTradePosition> activePositions = state.getActiveTradePositions();
+        if (activeTrade == null || activePositions == null || activePositions.isEmpty()) {
+            return equity;
+        }
+        return equity.add(positionsMarkToMarket(activePositions, latestPrice));
+    }
+
+    private BigDecimal positionsMarkToMarket(
+            List<BacktestTradePosition> positions, BigDecimal latestPrice
+    ) {
+        BigDecimal sum = ZERO;
+        for (BacktestTradePosition position : positions) {
             if (position == null || !"OPEN".equalsIgnoreCase(position.getStatus())) {
                 continue;
             }
@@ -63,11 +85,9 @@ public class BacktestStateService {
             }
 
             BigDecimal markToMarketValue;
-            BigDecimal unrealizedPnl;
 
             if ("LONG".equalsIgnoreCase(position.getSide())) {
                 markToMarketValue = remainingQty.multiply(latestPrice);
-                unrealizedPnl = latestPrice.subtract(entryPrice).multiply(remainingQty);
             } else {
                 /**
                  * Synthetic short model:
@@ -76,14 +96,13 @@ public class BacktestStateService {
                  * markToMarketValue cannot go negative (position liquidated at that point).
                  */
                 BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
-                unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
+                BigDecimal unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
                 markToMarketValue = reservedNotional.add(unrealizedPnl).max(ZERO);
             }
 
-            equity = equity.add(markToMarketValue);
+            sum = sum.add(markToMarketValue);
         }
-
-        return equity;
+        return sum;
     }
 
     /**

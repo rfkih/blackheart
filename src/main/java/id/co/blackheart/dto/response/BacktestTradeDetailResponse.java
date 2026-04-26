@@ -12,6 +12,19 @@ import java.util.UUID;
 public class BacktestTradeDetailResponse {
     private UUID id;
     private UUID backtestRunId;
+    /**
+     * Owning strategy code (e.g. "LSR_V2", "VCB"). Surfaced so the trades
+     * table can show "which strategy fired this trade" in multi-strategy runs.
+     */
+    private String strategyCode;
+    /** Display name — falls back to {@code strategyCode} when not set. */
+    private String strategyName;
+    /**
+     * The interval the strategy actually fired on. In multi-interval runs
+     * this can differ across trades (e.g. LSR on 15m, VCB on 1h within
+     * the same backtest).
+     */
+    private String interval;
     private String direction;
     private Long entryTime;
     private BigDecimal entryPrice;

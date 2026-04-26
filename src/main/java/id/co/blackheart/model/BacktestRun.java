@@ -247,6 +247,35 @@ public class BacktestRun extends BaseEntity {
      * optimization. Set only by {@code ResearchSweepService.evaluateHoldout};
      * a unique partial index enforces at-most-one per sweep at the DB level.
      */
+    /**
+     * Phase A — max concurrent open trades across all strategies in this
+     * backtest. Null = no cap (legacy behaviour). Enforced by the backtest
+     * executor before allowing a new entry.
+     */
+    @Column(name = "max_concurrent_strategies")
+    private Integer maxConcurrentStrategies;
+
+    /**
+     * Phase A — per-strategy capital allocation override for this run only.
+     * Key = strategy code (uppercase), value = allocation % (0–100).
+     * Strategies missing from the map fall back to
+     * {@code account_strategy.capital_allocation_pct}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_allocations", columnDefinition = "jsonb")
+    private Map<String, BigDecimal> strategyAllocations;
+
+    /**
+     * Phase B2 — per-strategy interval map for multi-timeframe runs.
+     * Key = uppercase strategy code, value = interval string (e.g. "15m").
+     * When non-null, the coordinator routes each strategy's executor only
+     * to its own interval's bar closes. When null, all strategies share
+     * the run's primary {@link #interval}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_intervals", columnDefinition = "jsonb")
+    private Map<String, String> strategyIntervals;
+
     @Column(name = "is_holdout_run", nullable = false)
     @Builder.Default
     private Boolean isHoldoutRun = Boolean.FALSE;

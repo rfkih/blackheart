@@ -51,10 +51,17 @@ public class BacktestTradeExecutorService {
             return;
         }
 
+        // Multi-trade routing — every position-mutating action is scoped to
+        // the deciding strategy so concurrent strategies don't accidentally
+        // operate on each other's open trades. Prefer the decision's
+        // strategyCode (set by the orchestrator's entry/owner loop), then
+        // the synthetic AccountStrategy's strategyCode.
+        String strategyCode = resolveDecisionStrategyCode(context, decision);
+
         switch (decision.getDecisionType()) {
-            case OPEN_LONG -> storePendingEntry(state, context, decision, "LONG");
-            case OPEN_SHORT -> storePendingEntry(state, context, decision, "SHORT");
-            case UPDATE_POSITION_MANAGEMENT -> updateOpenPositions(state, decision);
+            case OPEN_LONG -> storePendingEntry(state, context, decision, "LONG", strategyCode);
+            case OPEN_SHORT -> storePendingEntry(state, context, decision, "SHORT", strategyCode);
+            case UPDATE_POSITION_MANAGEMENT -> updateOpenPositions(state, decision, strategyCode);
             case CLOSE_LONG, CLOSE_SHORT -> {
                 if (context == null || context.getMarketData() == null) {
                     return;
@@ -63,6 +70,7 @@ public class BacktestTradeExecutorService {
                 closeAllOpenPositions(
                         backtestRun,
                         state,
+                        strategyCode,
                         context.getMarketData().getClosePrice(),
                         decision.getExitReason() != null ? decision.getExitReason() : decision.getDecisionType().name(),
                         context.getMarketData().getEndTime()
@@ -73,17 +81,52 @@ public class BacktestTradeExecutorService {
         }
     }
 
+    private String resolveDecisionStrategyCode(EnrichedStrategyContext context, StrategyDecision decision) {
+        if (decision != null && decision.getStrategyCode() != null && !decision.getStrategyCode().isBlank()) {
+            return decision.getStrategyCode();
+        }
+        if (context != null && context.getAccountStrategy() != null
+                && context.getAccountStrategy().getStrategyCode() != null) {
+            return context.getAccountStrategy().getStrategyCode();
+        }
+        // Should never happen in current code — orchestrator always sets
+        // either decision.strategyCode or context.accountStrategy.strategyCode.
+        // If we hit this, downstream multi-trade routing falls through to the
+        // legacy mirror, which under cap > 1 could operate on the wrong
+        // strategy's trade. Surface the miswiring rather than swallow it.
+        log.warn("Decision has no strategyCode and context.accountStrategy is null/missing-code "
+                + "| decisionType={} — multi-trade routing will fall back to legacy mirror",
+                decision == null ? "<null>" : decision.getDecisionType());
+        return null;
+    }
+
     private void storePendingEntry(
             BacktestState state,
             EnrichedStrategyContext context,
             StrategyDecision decision,
-            String side
+            String side,
+            String strategyCode
     ) {
-        if (state.getActiveTrade() != null || state.getPendingEntry() != null) {
+        // Per-strategy gates: a strategy can't queue a new entry if its own
+        // trade is already open or it already has a pending entry queued.
+        // Other strategies' state is irrelevant — under cap > 1 they can
+        // open concurrently. Without this scoping, the second concurrent
+        // entry signal on the same monitor bar was silently dropped.
+        if (state.hasActiveTradeFor(strategyCode) || state.hasPendingEntryFor(strategyCode)) {
             return;
         }
-        state.setPendingEntry(new BacktestState.PendingEntry(decision, side, context.getFeatureStore(), context.getBiasFeatureStore()));
-        log.debug("Backtest pending entry stored | side={} strategy={}", side, decision.getStrategyCode());
+        // Capture the strategy's resolved interval (Phase B2) so the trade
+        // row gets stamped with THIS strategy's timeframe, not the run's
+        // primary. context.getInterval() is set by buildAndEnrichContext
+        // to ic.interval(), which is the per-strategy resolved value.
+        String resolvedInterval = context != null ? context.getInterval() : null;
+        state.setPendingEntryFor(strategyCode,
+                new BacktestState.PendingEntry(decision, side,
+                        context.getFeatureStore(), context.getBiasFeatureStore(),
+                        resolvedInterval));
+        log.debug("Backtest pending entry stored | side={} strategy={} interval={}",
+                side, decision != null ? decision.getStrategyCode() : strategyCode,
+                resolvedInterval);
     }
 
     public void fillPendingEntry(
@@ -92,32 +135,50 @@ public class BacktestTradeExecutorService {
             BigDecimal openPrice,
             LocalDateTime entryTime
     ) {
-        BacktestState.PendingEntry pending = state.getPendingEntry();
-        if (pending == null) {
+        // Multi-trade aware: every strategy's pending entry fills independently
+        // on the next bar. Snapshot the codes BEFORE iteration — openTrade
+        // mutates the underlying map via state.addActiveTrade. Defensive
+        // null-check: @Builder.Default initialises the map only when
+        // BacktestState is built via the builder; a future caller using
+        // the no-args constructor would leave it null.
+        java.util.Map<String, BacktestState.PendingEntry> pendingMap =
+                state.getPendingEntriesByStrategy();
+        if (pendingMap == null || pendingMap.isEmpty()) {
             return;
         }
+        java.util.List<String> strategyCodes = new java.util.ArrayList<>(pendingMap.keySet());
+        for (String strategyCode : strategyCodes) {
+            BacktestState.PendingEntry pending = state.getPendingEntryFor(strategyCode);
+            if (pending == null) continue;
 
-        state.setPendingEntry(null);
+            state.clearPendingEntryFor(strategyCode);
 
-        if (state.getActiveTrade() != null) {
-            log.warn("Pending entry skipped | asset={} reason=Active trade already exists", backtestRun.getAsset());
-            return;
-        }
-
-        // Cancel fill if the open price has gapped through the stop loss
-        BigDecimal slPrice = pending.decision().getStopLossPrice();
-        if (slPrice != null && slPrice.compareTo(BigDecimal.ZERO) > 0) {
-            boolean gappedThroughSl = "LONG".equalsIgnoreCase(pending.side())
-                    ? openPrice.compareTo(slPrice) <= 0
-                    : openPrice.compareTo(slPrice) >= 0;
-            if (gappedThroughSl) {
-                log.warn("Pending entry cancelled | asset={} side={} reason=Gap through SL openPrice={} slPrice={}",
-                        backtestRun.getAsset(), pending.side(), openPrice, slPrice);
-                return;
+            // Per-strategy guard: only block if THIS strategy already has
+            // an active trade. Another strategy's open trade does not stop
+            // this one from filling.
+            if (state.hasActiveTradeFor(strategyCode)) {
+                log.warn("Pending entry skipped | asset={} strategy={} reason=Active trade already exists",
+                        backtestRun.getAsset(), strategyCode);
+                continue;
             }
-        }
 
-        openTrade(backtestRun, state, pending.decision(), pending.side(), pending.featureStore(), pending.biasFeatureStore(), openPrice, entryTime);
+            // Cancel fill if the open price has gapped through the stop loss
+            BigDecimal slPrice = pending.decision().getStopLossPrice();
+            if (slPrice != null && slPrice.compareTo(BigDecimal.ZERO) > 0) {
+                boolean gappedThroughSl = "LONG".equalsIgnoreCase(pending.side())
+                        ? openPrice.compareTo(slPrice) <= 0
+                        : openPrice.compareTo(slPrice) >= 0;
+                if (gappedThroughSl) {
+                    log.warn("Pending entry cancelled | asset={} strategy={} side={} reason=Gap through SL openPrice={} slPrice={}",
+                            backtestRun.getAsset(), strategyCode, pending.side(), openPrice, slPrice);
+                    continue;
+                }
+            }
+
+            openTrade(backtestRun, state, pending.decision(), pending.side(),
+                    pending.featureStore(), pending.biasFeatureStore(),
+                    pending.interval(), openPrice, entryTime);
+        }
     }
 
     private void openTrade(
@@ -127,9 +188,17 @@ public class BacktestTradeExecutorService {
             String tradeType,
             FeatureStore featureStore,
             FeatureStore biasFeatureStore,
+            String resolvedInterval,
             BigDecimal rawEntryPrice,
             LocalDateTime entryTime
     ) {
+        // Phase B2 — strategy may have fired on a different timeframe than
+        // the run's primary interval. Prefer the resolved per-strategy
+        // value; fall back to the run's primary so legacy / single-interval
+        // runs keep their existing behaviour.
+        String tradeInterval = (resolvedInterval != null && !resolvedInterval.isBlank())
+                ? resolvedInterval
+                : backtestRun.getInterval();
         BigDecimal requestedQuoteAmount = resolveRequestedQuoteAmount(decision);
 
         if (requestedQuoteAmount.compareTo(BigDecimal.ZERO) <= 0 || safe(rawEntryPrice).compareTo(BigDecimal.ZERO) <= 0) {
@@ -193,7 +262,7 @@ public class BacktestTradeExecutorService {
                 .strategyName(resolveStrategyName(backtestRun, decision))
                 .strategyVersion(decision.getStrategyVersion())
                 .asset(backtestRun.getAsset())
-                .interval(backtestRun.getInterval())
+                .interval(tradeInterval)
                 .exchange("BINANCE")
                 .side(tradeType)
                 .status(STATUS_OPEN)
@@ -281,7 +350,7 @@ public class BacktestTradeExecutorService {
                             .backtestRunId(backtestRun.getBacktestRunId())
                             .accountStrategyId(backtestRun.getAccountStrategyId())
                             .asset(backtestRun.getAsset())
-                            .interval(backtestRun.getInterval())
+                            .interval(tradeInterval)
                             .exchange("BINANCE")
                             .side(tradeType)
                             .positionRole(planned.positionRole())
@@ -314,8 +383,12 @@ public class BacktestTradeExecutorService {
         }
 
         state.setCashBalance(safe(state.getCashBalance()).subtract(totalCashRequired));
-        state.setActiveTrade(trade);
-        state.setActiveTradePositions(new ArrayList<>(positions));
+        // Phase B1 — register on the multi-trade map keyed by strategy code
+        // so the orchestrator's concurrent-strategy cap can enforce. Method
+        // also updates the legacy single-trade slot for back-compat with
+        // the 30+ call sites that read state.activeTrade directly.
+        String ownerCode = trade.getStrategyName() != null ? trade.getStrategyName() : "UNKNOWN";
+        state.addActiveTrade(ownerCode, trade, new ArrayList<>(positions));
 
         log.info("Backtest {} opened | timeOpen={} qty={} quote={} fee={} positions={}",
                 tradeType,
@@ -385,21 +458,35 @@ public class BacktestTradeExecutorService {
         BigDecimal releasedCash = safe(position.getEntryQuoteQty()).add(pnlAmount);
         state.setCashBalance(safe(state.getCashBalance()).add(releasedCash));
 
-        refreshParentTradeState(state, exitTime);
+        // Multi-trade aware: the position knows its parent trade via tradeId,
+        // and each trade has a strategyName. Resolve the owning strategy
+        // from the position so refresh updates the RIGHT trade — not just
+        // whatever the legacy mirror happens to point at.
+        String strategyCode = findStrategyCodeForPosition(state, position);
+        refreshParentTradeState(state, strategyCode, exitTime);
     }
 
     private void closeAllOpenPositions(
             BacktestRun backtestRun,
             BacktestState state,
+            String strategyCode,
             BigDecimal exitPrice,
             String exitReason,
             LocalDateTime exitTime
     ) {
-        if (state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
+        // Multi-trade routing: close ONLY the deciding strategy's positions.
+        // Reading state.getActiveTradePositions() (the legacy mirror) would
+        // close whichever strategy's trade was opened most recently — could
+        // be a different strategy entirely under cap > 1.
+        List<BacktestTradePosition> scoped = scopedActivePositions(state, strategyCode);
+        if (scoped.isEmpty()) {
             return;
         }
 
-        for (BacktestTradePosition position : state.getActiveTradePositions()) {
+        // Snapshot the list — closeSinglePositionFromListener mutates the
+        // underlying multi-trade map (removeActiveTrade on last leg) and
+        // would ConcurrentModificationException a direct iteration.
+        for (BacktestTradePosition position : new java.util.ArrayList<>(scoped)) {
             if (!STATUS_OPEN.equalsIgnoreCase(position.getStatus())) {
                 continue;
             }
@@ -415,8 +502,10 @@ public class BacktestTradeExecutorService {
         }
     }
 
-    private void updateOpenPositions(BacktestState state, StrategyDecision decision) {
-        if (state.getActiveTradePositions() == null || state.getActiveTradePositions().isEmpty()) {
+    private void updateOpenPositions(BacktestState state, StrategyDecision decision, String strategyCode) {
+        // Multi-trade routing: only update THIS strategy's positions.
+        List<BacktestTradePosition> scoped = scopedActivePositions(state, strategyCode);
+        if (scoped.isEmpty()) {
             return;
         }
 
@@ -424,7 +513,7 @@ public class BacktestTradeExecutorService {
                 ? TARGET_ALL
                 : decision.getTargetPositionRole().trim().toUpperCase();
 
-        for (BacktestTradePosition position : state.getActiveTradePositions()) {
+        for (BacktestTradePosition position : scoped) {
             if (!STATUS_OPEN.equalsIgnoreCase(position.getStatus())) {
                 continue;
             }
@@ -465,13 +554,80 @@ public class BacktestTradeExecutorService {
         }
     }
 
-    private void refreshParentTradeState(BacktestState state, LocalDateTime exitTime) {
-        BacktestTrade trade = state.getActiveTrade();
-        if (trade == null || state.getActiveTradePositions() == null) {
+    /**
+     * Strategy-scoped position lookup: returns THIS strategy's active
+     * positions when the multi-trade map is populated, falling back to the
+     * legacy single-slot mirror only when no multi-trade entries exist
+     * (single-strategy / pre-B1 path). Empty list, never null.
+     */
+    private List<BacktestTradePosition> scopedActivePositions(BacktestState state, String strategyCode) {
+        if (state == null) return java.util.Collections.emptyList();
+        java.util.Map<String, List<BacktestTradePosition>> byStrategy =
+                state.getActiveTradePositionsByStrategy();
+        if (byStrategy != null && !byStrategy.isEmpty() && strategyCode != null) {
+            List<BacktestTradePosition> p = state.getActivePositionsFor(strategyCode);
+            return p == null ? java.util.Collections.emptyList() : p;
+        }
+        List<BacktestTradePosition> legacy = state.getActiveTradePositions();
+        return legacy == null ? java.util.Collections.emptyList() : legacy;
+    }
+
+    private BacktestTrade scopedActiveTrade(BacktestState state, String strategyCode) {
+        if (state == null) return null;
+        java.util.Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
+        if (byStrategy != null && !byStrategy.isEmpty() && strategyCode != null) {
+            return state.getActiveTradeFor(strategyCode);
+        }
+        return state.getActiveTrade();
+    }
+
+    /**
+     * Reverse lookup: given a position, find which strategy owns it via the
+     * position's parent {@code backtestTradeId}. Used when a listener-driven
+     * close (stop / TP) needs to refresh the right parent trade and we
+     * don't have a strategyCode in scope. Falls back to the trade's own
+     * {@code strategyName} field when the multi-trade map doesn't contain
+     * a matching entry.
+     */
+    private String findStrategyCodeForPosition(BacktestState state, BacktestTradePosition position) {
+        if (state == null || position == null || position.getBacktestTradeId() == null) {
+            return null;
+        }
+        java.util.Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
+        if (byStrategy != null) {
+            for (java.util.Map.Entry<String, BacktestTrade> e : byStrategy.entrySet()) {
+                BacktestTrade t = e.getValue();
+                if (t != null && position.getBacktestTradeId().equals(t.getBacktestTradeId())) {
+                    return e.getKey();
+                }
+            }
+        }
+        // Fallback: the trade's strategyName, if its parent is the legacy mirror.
+        BacktestTrade legacy = state.getActiveTrade();
+        if (legacy != null && position.getBacktestTradeId().equals(legacy.getBacktestTradeId())) {
+            return legacy.getStrategyName();
+        }
+        // Position's parent isn't in the active map AND isn't the legacy
+        // mirror — would only happen on a double-close or a race condition
+        // (parent removed before this position close fires). Surface the
+        // anomaly so a real bug doesn't silently corrupt the legacy mirror's
+        // trade via the fallback path in refreshParentTradeState.
+        log.warn("Position has no resolvable owning strategy | positionId={} tradeId={} "
+                + "— refreshParentTradeState will fall back to legacy mirror",
+                position.getTradePositionId(), position.getBacktestTradeId());
+        return null;
+    }
+
+    private void refreshParentTradeState(BacktestState state, String strategyCode, LocalDateTime exitTime) {
+        // Multi-trade aware: refresh THIS strategy's trade + positions, not
+        // the legacy mirror's most-recently-added pair. The legacy mirror
+        // is updated as a side effect of state.removeActiveTrade when the
+        // last leg closes.
+        BacktestTrade trade = scopedActiveTrade(state, strategyCode);
+        List<BacktestTradePosition> allPositions = scopedActivePositions(state, strategyCode);
+        if (trade == null || allPositions.isEmpty()) {
             return;
         }
-
-        List<BacktestTradePosition> allPositions = state.getActiveTradePositions();
 
         BigDecimal totalRemainingQty = allPositions.stream()
                 .map(BacktestTradePosition::getRemainingQty)
@@ -592,8 +748,11 @@ public class BacktestTradeExecutorService {
             state.getCompletedTrades().add(trade);
             state.getCompletedTradePositions().addAll(new ArrayList<>(allPositions));
 
-            state.setActiveTrade(null);
-            state.setActiveTradePositions(new ArrayList<>());
+            // Phase B1 — clear the multi-trade slot (also refreshes the
+            // legacy single-trade fields). When other strategies still
+            // have open trades, the legacy mirror points at one of them.
+            String ownerCode = trade.getStrategyName() != null ? trade.getStrategyName() : "UNKNOWN";
+            state.removeActiveTrade(ownerCode);
         } else if (openCount < allPositions.size()) {
             trade.setStatus(STATUS_PARTIALLY_CLOSED);
         } else {

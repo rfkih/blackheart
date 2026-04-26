@@ -126,6 +126,12 @@ public class BacktestService {
                 // exactly which strategy code + defaults produced this run.
                 .gitCommitSha(buildInfoService.getGitCommitSha())
                 .appVersion(buildInfoService.getAppVersion())
+                // Phase A — multi-strategy controls. Both fields are
+                // optional; null means "no run-level cap" / "fall back to
+                // account_strategy.capital_allocation_pct" respectively.
+                .maxConcurrentStrategies(request.getMaxConcurrentStrategies())
+                .strategyAllocations(canonicaliseAllocations(request.getStrategyAllocations()))
+                .strategyIntervals(canonicaliseIntervals(request.getStrategyIntervals()))
                 .build();
 
         backtestRun = backtestRunRepository.save(backtestRun);
@@ -160,6 +166,45 @@ public class BacktestService {
             log.warn("Failed to serialise strategyParamOverrides, dropping: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Validate + uppercase-normalize the per-strategy allocation map. Each
+     * value must be in (0, 100]. Strategy codes are stored uppercase so
+     * lookups inside the executor don't need case-insensitive matching.
+     * Returns null on null/empty input.
+     */
+    private Map<String, BigDecimal> canonicaliseAllocations(Map<String, BigDecimal> raw) {
+        if (raw == null || raw.isEmpty()) return null;
+        Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> e : raw.entrySet()) {
+            if (e.getKey() == null || e.getKey().isBlank()) continue;
+            BigDecimal v = e.getValue();
+            if (v == null) continue;
+            if (v.signum() <= 0 || v.compareTo(new BigDecimal("100")) > 0) {
+                throw new IllegalArgumentException(
+                        "strategyAllocations[" + e.getKey() + "] must be in (0, 100], got " + v);
+            }
+            out.put(e.getKey().toUpperCase().trim(), v);
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    /**
+     * Validate + uppercase-normalize the per-strategy interval map. The
+     * @Pattern annotation on the DTO already validates each value matches
+     * a known interval; here we only canonicalize keys.
+     */
+    private Map<String, String> canonicaliseIntervals(Map<String, String> raw) {
+        if (raw == null || raw.isEmpty()) return null;
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, String> e : raw.entrySet()) {
+            if (e.getKey() == null || e.getKey().isBlank()) continue;
+            String v = e.getValue();
+            if (v == null || v.isBlank()) continue;
+            out.put(e.getKey().toUpperCase().trim(), v.trim());
+        }
+        return out.isEmpty() ? null : out;
     }
 
     /**

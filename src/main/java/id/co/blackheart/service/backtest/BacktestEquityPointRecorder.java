@@ -100,16 +100,35 @@ public class BacktestEquityPointRecorder {
         return backtestRun.getAccountStrategyId();
     }
 
+    /**
+     * Sum open positions across ALL active strategies in the multi-trade
+     * map, not just the legacy single-slot mirror. Falls back to the
+     * legacy slot when no multi-trade entries exist (single-strategy
+     * runs / pre-B1 path) so the count is correct in both regimes.
+     */
     private int countOpenPositions(BacktestState state) {
-        List<BacktestTradePosition> positions = state.getActiveTradePositions();
-        if (positions == null || positions.isEmpty()) {
-            return 0;
+        java.util.Map<String, List<BacktestTradePosition>> byStrategy =
+                state.getActiveTradePositionsByStrategy();
+        int count = 0;
+        if (byStrategy != null && !byStrategy.isEmpty()) {
+            for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
+                if (perStrategy == null) continue;
+                for (BacktestTradePosition position : perStrategy) {
+                    if (position != null && "OPEN".equalsIgnoreCase(position.getStatus())) {
+                        count++;
+                    }
+                }
+            }
+            return count;
         }
-
-        return (int) positions.stream()
-                .filter(position -> position != null)
-                .filter(position -> "OPEN".equalsIgnoreCase(position.getStatus()))
-                .count();
+        List<BacktestTradePosition> legacy = state.getActiveTradePositions();
+        if (legacy == null) return 0;
+        for (BacktestTradePosition position : legacy) {
+            if (position != null && "OPEN".equalsIgnoreCase(position.getStatus())) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private BigDecimal safe(BigDecimal value) {
