@@ -8,6 +8,7 @@ import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.service.backtest.BacktestService;
+import id.co.blackheart.service.statistics.SharpeStatistics;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -86,6 +88,11 @@ public class ResearchSweepService {
      *  research grids. */
     private static final int MAX_COMBOS_PER_ROUND = 256;
     private static final int MAX_ROUNDS = 5;
+    /** Hard cap on total backtests across all combos × all walk-forward
+     *  legs. With train/OOS each combo runs 2 backtests; future K-fold WF
+     *  multiplies further. 2000 keeps a single sweep under ~17 hours at
+     *  30s per backtest — beyond that, the user should split the work. */
+    private static final int MAX_TOTAL_RUNS = 2000;
     private static final BigDecimal DEFAULT_ELITE_PCT = new BigDecimal("0.25");
     /** Combos with fewer than this many trades are excluded from elite
      *  selection. Prevents successive halving from chasing 1-trade outliers
@@ -205,6 +212,17 @@ public class ResearchSweepService {
             builder.totalCombos(combos.size()).results(initial);
         }
 
+        // Compute the holdout slice's dates upfront so the UI can show them
+        // before any backtest runs. The holdout is the tail of the window —
+        // sweep optimization stops at holdoutFromDate.
+        if (spec.getHoldoutFractionPct() != null && spec.getHoldoutFractionPct().signum() > 0) {
+            long total = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
+            long holdoutSeconds = (long) (total * spec.getHoldoutFractionPct().doubleValue() / 100.0);
+            LocalDateTime holdoutStart = spec.getToDate().minusSeconds(holdoutSeconds);
+            builder.holdoutFromDate(holdoutStart);
+            builder.holdoutToDate(spec.getToDate());
+        }
+
         SweepState state = builder.build();
         sweeps.put(sweepId, state);
         cancelFlags.put(sweepId, new AtomicBoolean(false));
@@ -212,6 +230,78 @@ public class ResearchSweepService {
 
         sweepExecutor.execute(() -> run(state));
         return state;
+    }
+
+    /**
+     * One-shot holdout evaluation. After a sweep COMPLETES, the user picks
+     * a winner from the OOS-ranked leaderboard and calls this to get the
+     * unbiased estimate: a single backtest with the chosen params, run over
+     * the holdout slice that the sweep was forbidden from touching.
+     *
+     * <p>Discipline gates (any failure aborts):
+     * <ul>
+     *   <li>Sweep must be COMPLETED — can't evaluate while still optimizing.</li>
+     *   <li>Sweep must have had a holdout reserved — i.e. holdoutFractionPct
+     *       was set at submit time. Without that the "holdout slice" is a
+     *       meaningless renaming of the OOS slice.</li>
+     *   <li>Caller must own the sweep.</li>
+     *   <li>No prior holdout run for this sweep — once you touch holdout,
+     *       it's spent. A second evaluation would defeat the entire point.
+     *       The DB unique partial index enforces this even if a race got past
+     *       the service-layer check.</li>
+     * </ul>
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public BacktestRun evaluateHoldout(UUID userId, UUID sweepId, Map<String, Object> paramSet) {
+        SweepState state = sweeps.get(sweepId);
+        if (state == null
+                || (state.getUserId() != null && !state.getUserId().equals(userId))) {
+            throw new jakarta.persistence.EntityNotFoundException("Sweep not found: " + sweepId);
+        }
+        if (!STATUS_COMPLETED.equalsIgnoreCase(state.getStatus())) {
+            throw new IllegalStateException(
+                    "Sweep is " + state.getStatus() + " — wait for COMPLETED before evaluating holdout");
+        }
+        if (state.getHoldoutFromDate() == null || state.getHoldoutToDate() == null) {
+            throw new IllegalStateException(
+                    "Sweep was submitted without a holdout reservation — re-submit with holdoutFractionPct set");
+        }
+        if (state.getHoldoutBacktestRunId() != null) {
+            throw new IllegalStateException(
+                    "This sweep's holdout has already been evaluated (run "
+                            + state.getHoldoutBacktestRunId() + "). Holdout is one-shot by design.");
+        }
+        if (paramSet == null || paramSet.isEmpty()) {
+            throw new IllegalArgumentException("paramSet required");
+        }
+
+        SweepSpec spec = state.getSpec();
+        BacktestRunRequest req = buildRequest(spec, paramSet);
+        req.setStartTime(state.getHoldoutFromDate());
+        req.setEndTime(state.getHoldoutToDate());
+
+        BacktestRunResponse submitted = backtestService.runBacktest(userId, req);
+        UUID runId = submitted.getBacktestRunId();
+
+        // Targeted UPDATE — touches only the holdout marker columns so we
+        // can't race the async worker writing progress/status into the
+        // same row. A full {@code save(row)} would overwrite worker writes
+        // captured between our load and save. The unique partial index on
+        // (holdout_for_sweep_id WHERE is_holdout_run) is the database-level
+        // safety net against double-evaluation; the
+        // {@code WHERE is_holdout_run = FALSE} guard makes this UPDATE
+        // idempotent (re-running on an already-marked row is a no-op).
+        int updated = runRepository.markAsHoldoutRun(runId, sweepId);
+        if (updated == 0) {
+            log.warn("Holdout marker UPDATE affected zero rows | runId={} sweepId={}", runId, sweepId);
+        }
+
+        state.setHoldoutBacktestRunId(runId);
+        persist(state);
+
+        log.info("Sweep {} holdout evaluation submitted | runId={} window={}→{}",
+                sweepId, runId, state.getHoldoutFromDate(), state.getHoldoutToDate());
+        return runRepository.findById(runId).orElse(null);
     }
 
     /**
@@ -253,13 +343,16 @@ public class ResearchSweepService {
     }
 
     public SweepState getSweep(UUID sweepId) {
-        return sweeps.get(sweepId);
+        SweepState state = sweeps.get(sweepId);
+        if (state != null) enrichDsrThreshold(state);
+        return state;
     }
 
     public List<SweepState> listSweeps(UUID userId) {
         List<SweepState> out = new ArrayList<>();
         for (SweepState s : sweeps.values()) {
             if (userId == null || s.getUserId() == null || userId.equals(s.getUserId())) {
+                enrichDsrThreshold(s);
                 out.add(s);
             }
         }
@@ -486,6 +579,16 @@ public class ResearchSweepService {
 
     private void executeOne(SweepState state, SweepResult result) throws Exception {
         SweepSpec spec = state.getSpec();
+        if ("WALK_FORWARD_K".equalsIgnoreCase(spec.getSplitMode())) {
+            executeWalkForwardK(state, result, spec);
+        } else if ("TRAIN_OOS".equalsIgnoreCase(spec.getSplitMode())) {
+            executeTrainOos(state, result, spec);
+        } else {
+            executeSingle(state, result, spec);
+        }
+    }
+
+    private void executeSingle(SweepState state, SweepResult result, SweepSpec spec) throws Exception {
         BacktestRunRequest req = buildRequest(spec, result.getParamSet());
 
         long startNanos = System.nanoTime();
@@ -514,6 +617,258 @@ public class ResearchSweepService {
         result.setProgressPercent(completed.getProgressPercent());
 
         populateMetrics(result, completed);
+    }
+
+    /**
+     * Train/OOS split execution: run two backtests sequentially with the
+     * same params, the first over the train window and the second over the
+     * out-of-sample tail. The OOS leg's metrics mirror to the legacy
+     * top-level fields on {@link SweepResult} so existing leaderboard sort,
+     * DSR computation, and frontend rendering automatically rank by OOS —
+     * which is the whole point of the split.
+     *
+     * <p>Wall time per combo doubles, but in exchange the leaderboard stops
+     * being a fancy in-sample overfitter.
+     */
+    private void executeTrainOos(SweepState state, SweepResult result, SweepSpec spec) throws Exception {
+        long startNanos = System.nanoTime();
+        result.setStatus(STATUS_RUNNING);
+        persist(state);
+
+        // The "sweep end" is the start of the holdout slice (or spec.toDate
+        // when holdout is disabled). The holdout slice is reserved — sweep
+        // optimization is forbidden from running over it. evaluateHoldout()
+        // is the only entry point that touches it.
+        java.time.LocalDateTime sweepEnd = state.getHoldoutFromDate() != null
+                ? state.getHoldoutFromDate()
+                : spec.getToDate();
+
+        BigDecimal pct = spec.getOosFractionPct();
+        if (pct == null) pct = new BigDecimal("30");
+        long totalWindowSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
+        // OOS fraction is relative to the FULL window (including holdout)
+        // so 30% means 30% of the user's submitted range — not 30% of
+        // whatever's left after holdout. Keeps the mental model simple.
+        long oosSeconds = (long) (totalWindowSeconds * pct.doubleValue() / 100.0);
+        java.time.LocalDateTime splitAt = sweepEnd.minusSeconds(oosSeconds);
+
+        // Train leg.
+        BacktestRunRequest trainReq = buildRequest(spec, result.getParamSet());
+        trainReq.setStartTime(spec.getFromDate());
+        trainReq.setEndTime(splitAt);
+        BacktestRunResponse trainSubmit = backtestService.runBacktest(state.getUserId(), trainReq);
+        UUID trainRunId = trainSubmit.getBacktestRunId();
+        result.setTrainBacktestRunId(trainRunId);
+        result.setBacktestRunId(trainRunId); // legacy field follows the live leg
+        result.setProgressPercent(0);
+        persist(state);
+
+        BacktestRun trainCompleted = waitForRun(trainRunId, state, result);
+        if (trainCompleted == null) {
+            result.setStatus(STATUS_FAILED);
+            result.setErrorMessage("Train leg did not complete in "
+                    + (PER_RUN_TIMEOUT_MS / 1000) + "s");
+            result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
+            return;
+        }
+        applyTrainMetrics(result, trainCompleted);
+        if (!STATUS_COMPLETED.equalsIgnoreCase(trainCompleted.getStatus())) {
+            // Train failed — skip OOS, surface the train failure on the row.
+            result.setStatus(STATUS_FAILED);
+            result.setErrorMessage("Train leg failed: "
+                    + (trainCompleted.getNotes() != null ? trainCompleted.getNotes() : "unknown"));
+            result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
+            return;
+        }
+
+        // OOS leg — same params, the OOS slice (which ends at sweepEnd, NOT
+        // at spec.getToDate(), so the locked holdout stays untouched). From
+        // here on the legacy top-level fields track the OOS run, so
+        // leaderboard sort/DSR all operate on out-of-sample numbers.
+        BacktestRunRequest oosReq = buildRequest(spec, result.getParamSet());
+        oosReq.setStartTime(splitAt);
+        oosReq.setEndTime(sweepEnd);
+        BacktestRunResponse oosSubmit = backtestService.runBacktest(state.getUserId(), oosReq);
+        UUID oosRunId = oosSubmit.getBacktestRunId();
+        result.setOosBacktestRunId(oosRunId);
+        result.setBacktestRunId(oosRunId);
+        result.setProgressPercent(0);
+        persist(state);
+
+        BacktestRun oosCompleted = waitForRun(oosRunId, state, result);
+        if (oosCompleted == null) {
+            result.setStatus(STATUS_FAILED);
+            result.setErrorMessage("OOS leg did not complete in "
+                    + (PER_RUN_TIMEOUT_MS / 1000) + "s");
+            result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
+            return;
+        }
+
+        result.setStatus(STATUS_COMPLETED.equalsIgnoreCase(oosCompleted.getStatus())
+                ? STATUS_COMPLETED : STATUS_FAILED);
+        result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
+        result.setProgressPercent(oosCompleted.getProgressPercent());
+        applyOosMetrics(result, oosCompleted);
+    }
+
+    /**
+     * K-fold anchored walk-forward execution. The available window (excluding
+     * any locked holdout) splits into a train-head chunk followed by K
+     * non-overlapping OOS slices. For each fold, train spans
+     * {@code [start, OOS_i.start)} (expanding) and OOS is the i-th slice.
+     *
+     * <p>Per combo this runs 2K backtests. The mean OOS Sharpe mirrors to
+     * {@link SweepResult#getSharpeRatio()} so the leaderboard ranks by
+     * it automatically; stddev across folds is exposed separately as a
+     * regime-sensitivity diagnostic.
+     */
+    private void executeWalkForwardK(SweepState state, SweepResult result, SweepSpec spec) throws Exception {
+        long startNanos = System.nanoTime();
+        result.setStatus(STATUS_RUNNING);
+        persist(state);
+
+        int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
+        java.time.LocalDateTime sweepEnd = state.getHoldoutFromDate() != null
+                ? state.getHoldoutFromDate()
+                : spec.getToDate();
+        // Same OOS-fraction semantics as TRAIN_OOS / validation. Defaults
+        // to 30% when the user didn't supply one (matches TRAIN_OOS default).
+        double oosFraction = (spec.getOosFractionPct() != null
+                ? spec.getOosFractionPct().doubleValue() : 30.0) / 100.0;
+        java.util.List<WalkForwardWindowing.Fold> foldPlan =
+                WalkForwardWindowing.buildFolds(spec.getFromDate(), sweepEnd, k, oosFraction);
+
+        java.util.List<WindowResult> folds = new java.util.ArrayList<>(k);
+        java.util.List<Double> oosSharpes = new java.util.ArrayList<>(k);
+
+        for (int i = 0; i < k; i++) {
+            WalkForwardWindowing.Fold plan = foldPlan.get(i);
+            java.time.LocalDateTime trainFrom = plan.trainFromDate();
+            java.time.LocalDateTime trainTo = plan.trainToDate();
+            java.time.LocalDateTime oosFrom = plan.oosFromDate();
+            java.time.LocalDateTime oosTo = plan.oosToDate();
+
+            WindowResult fold = WindowResult.builder()
+                    .foldIndex(i + 1)
+                    .trainFromDate(trainFrom)
+                    .trainToDate(trainTo)
+                    .oosFromDate(oosFrom)
+                    .oosToDate(oosTo)
+                    .build();
+
+            // Train leg.
+            BacktestRunRequest trainReq = buildRequest(spec, result.getParamSet());
+            trainReq.setStartTime(trainFrom);
+            trainReq.setEndTime(trainTo);
+            BacktestRunResponse trainSubmit = backtestService.runBacktest(state.getUserId(), trainReq);
+            UUID trainRunId = trainSubmit.getBacktestRunId();
+            fold.setTrainBacktestRunId(trainRunId);
+            result.setBacktestRunId(trainRunId);
+            persist(state);
+
+            BacktestRun trainCompleted = waitForRun(trainRunId, state, result);
+            if (trainCompleted == null
+                    || !STATUS_COMPLETED.equalsIgnoreCase(trainCompleted.getStatus())) {
+                fold.setStatus(STATUS_FAILED);
+                folds.add(fold);
+                continue; // bad fold doesn't poison the rest
+            }
+            fold.setTrainSharpeRatio(trainCompleted.getSharpeRatio());
+
+            // OOS leg.
+            BacktestRunRequest oosReq = buildRequest(spec, result.getParamSet());
+            oosReq.setStartTime(oosFrom);
+            oosReq.setEndTime(oosTo);
+            BacktestRunResponse oosSubmit = backtestService.runBacktest(state.getUserId(), oosReq);
+            UUID oosRunId = oosSubmit.getBacktestRunId();
+            fold.setOosBacktestRunId(oosRunId);
+            result.setBacktestRunId(oosRunId);
+            persist(state);
+
+            BacktestRun oosCompleted = waitForRun(oosRunId, state, result);
+            if (oosCompleted == null
+                    || !STATUS_COMPLETED.equalsIgnoreCase(oosCompleted.getStatus())) {
+                fold.setStatus(STATUS_FAILED);
+                folds.add(fold);
+                continue;
+            }
+            fold.setOosSharpeRatio(oosCompleted.getSharpeRatio());
+            fold.setOosPsr(oosCompleted.getPsr());
+            fold.setOosNetPnl(oosCompleted.getNetProfit());
+            fold.setOosTradeCount(oosCompleted.getTotalTrades());
+            fold.setStatus(STATUS_COMPLETED);
+            folds.add(fold);
+
+            if (oosCompleted.getSharpeRatio() != null) {
+                oosSharpes.add(oosCompleted.getSharpeRatio().doubleValue());
+            }
+            // Mirror the most-recent fold's OOS run as the "current" backtest
+            // so the legacy populateMetrics() snapshot at the end has data.
+        }
+
+        result.setWindowResults(folds);
+        result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
+        result.setProgressPercent(100);
+
+        // Aggregate across folds. Mean OOS Sharpe mirrors to legacy slots so
+        // leaderboard sort + DSR threshold operate on it; stddev is the
+        // regime-sensitivity diagnostic surfaced alongside.
+        if (oosSharpes.isEmpty()) {
+            result.setStatus(STATUS_FAILED);
+            result.setErrorMessage("All " + k + " walk-forward folds failed");
+            return;
+        }
+        double[] arr = oosSharpes.stream().mapToDouble(Double::doubleValue).toArray();
+        BigDecimal mean = BigDecimal.valueOf(SharpeStatistics.mean(arr))
+                .setScale(4, RoundingMode.HALF_UP);
+        BigDecimal sd = arr.length >= 2
+                ? BigDecimal.valueOf(SharpeStatistics.stddev(arr)).setScale(4, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        result.setMeanOosSharpe(mean);
+        result.setStddevOosSharpe(sd);
+        // Mirror to the legacy fields the leaderboard sort + DSR cohort use.
+        result.setSharpeRatio(mean);
+
+        // Pull the rest of the headline metrics from the last successful OOS
+        // run so non-Sharpe columns (winRate, profitFactor, avgR, etc.) still
+        // populate. The leaderboard already shows averages where it matters
+        // (Sharpe); the rest are illustrative for the most-recent fold.
+        WindowResult lastSuccessful = null;
+        for (int i = folds.size() - 1; i >= 0; i--) {
+            if (STATUS_COMPLETED.equalsIgnoreCase(folds.get(i).getStatus())) {
+                lastSuccessful = folds.get(i);
+                break;
+            }
+        }
+        if (lastSuccessful != null && lastSuccessful.getOosBacktestRunId() != null) {
+            BacktestRun lastRun = runRepository.findById(lastSuccessful.getOosBacktestRunId()).orElse(null);
+            if (lastRun != null) {
+                populateMetrics(result, lastRun);
+                // populateMetrics overwrites sharpeRatio with the single-fold
+                // value — restore the cohort mean.
+                result.setSharpeRatio(mean);
+                result.setPsr(lastRun.getPsr());
+            }
+        }
+
+        result.setStatus(STATUS_COMPLETED);
+    }
+
+    private void applyTrainMetrics(SweepResult result, BacktestRun run) {
+        result.setTrainTradeCount(run.getTotalTrades());
+        result.setTrainNetPnl(run.getNetProfit());
+        result.setTrainSharpeRatio(run.getSharpeRatio());
+        result.setTrainPsr(run.getPsr());
+    }
+
+    private void applyOosMetrics(SweepResult result, BacktestRun run) {
+        result.setOosTradeCount(run.getTotalTrades());
+        result.setOosNetPnl(run.getNetProfit());
+        result.setOosSharpeRatio(run.getSharpeRatio());
+        result.setOosPsr(run.getPsr());
+        // Mirror to legacy top-level fields so leaderboard, DSR threshold,
+        // and existing UI sort all operate on OOS automatically.
+        populateMetrics(result, run);
     }
 
     /**
@@ -576,9 +931,50 @@ public class ResearchSweepService {
             result.setNetPnl(asDecimal(h.get("netPnl")));
             result.setMaxDrawdown(asDecimal(h.get("maxDrawdown")));
             result.setMaxConsecutiveLosses(asInt(h.get("maxConsecutiveLosses")));
+            // Sharpe + PSR aren't in the analyzer snapshot — they live on
+            // backtest_run directly (written by BacktestPersistenceService).
+            // Pull the freshest copy of the row so newer runs surface them.
+            result.setSharpeRatio(run.getSharpeRatio());
+            result.setPsr(run.getPsr());
         } catch (Exception e) {
             log.warn("Failed to parse analysis snapshot for run {}", run.getBacktestRunId(), e);
         }
+    }
+
+    /**
+     * Compute the cohort's expected-max-Sharpe under N null trials and stash
+     * it on the {@link SweepState} for the controller to return alongside
+     * the leaderboard. Idempotent — same inputs always produce the same
+     * value, so it's safe to invoke on every read without locking.
+     *
+     * <p>The threshold answers the multiple-comparisons question every sweep
+     * implicitly raises: "given I just ran N param combos, how high a
+     * Sharpe should I expect to see <i>by chance</i> even if none of them
+     * had real edge?" Combos exceeding the threshold are evidence beyond
+     * selection bias; combos at or below are statistically indistinguishable
+     * from the best of N coin flips.
+     *
+     * <p>Uses annualized Sharpes throughout — same units as the leaderboard
+     * already displays, so users can compare a combo's Sharpe directly to
+     * the threshold by eye.
+     */
+    private void enrichDsrThreshold(SweepState state) {
+        if (state == null || state.getResults() == null) return;
+        double[] sharpes = state.getResults().stream()
+                .filter(r -> "COMPLETED".equalsIgnoreCase(r.getStatus()))
+                .map(SweepResult::getSharpeRatio)
+                .filter(java.util.Objects::nonNull)
+                .mapToDouble(BigDecimal::doubleValue)
+                .toArray();
+        if (sharpes.length < 2) {
+            state.setDsrThresholdSharpe(null);
+            state.setDsrCohortStddev(null);
+            return;
+        }
+        double sigma = SharpeStatistics.stddev(sharpes);
+        double srStar = SharpeStatistics.expectedMaxSharpe(sigma, sharpes.length);
+        state.setDsrCohortStddev(BigDecimal.valueOf(sigma).setScale(4, RoundingMode.HALF_UP));
+        state.setDsrThresholdSharpe(BigDecimal.valueOf(srStar).setScale(4, RoundingMode.HALF_UP));
     }
 
     // ── Request building ────────────────────────────────────────────────────
@@ -741,6 +1137,32 @@ public class ResearchSweepService {
     private static final java.util.Set<String> RESEARCH_CAPABLE_CODES =
             java.util.Set.of("TPR", "VCB", "LSR");
 
+    /**
+     * Best-effort estimate of how many combos the sweep will produce. For
+     * flat grids this is exact (cross product); for research-mode (rounds
+     * with refinement) it's the round-1 size × the maximum theoretical
+     * fan-out, which is a conservative upper bound. Used purely to enforce
+     * {@link #MAX_TOTAL_RUNS} at submit time.
+     */
+    private int estimateTotalCombos(SweepSpec spec) {
+        int rounds = spec.getRounds() == null ? 1 : spec.getRounds();
+        if (rounds > 1 && spec.getParamRanges() != null) {
+            // Round 1 from ranges, then up to MAX_COMBOS_PER_ROUND per
+            // refinement round. Realistic upper bound on what we'd run.
+            int round1 = expandFromRanges(spec.getParamRanges()).size();
+            return round1 + (rounds - 1) * MAX_COMBOS_PER_ROUND;
+        }
+        if (spec.getParamGrid() != null && !spec.getParamGrid().isEmpty()) {
+            int total = 1;
+            for (List<Object> values : spec.getParamGrid().values()) {
+                total *= Math.max(1, values.size());
+                if (total > MAX_TOTAL_RUNS) return total; // saturate to short-circuit
+            }
+            return total;
+        }
+        return 0;
+    }
+
     private void validate(SweepSpec spec) {
         if (spec == null) throw new IllegalArgumentException("spec required");
         if (isBlank(spec.getStrategyCode())) throw new IllegalArgumentException("strategyCode required");
@@ -764,6 +1186,109 @@ public class ResearchSweepService {
         }
         if (spec.getInitialCapital() == null || spec.getInitialCapital().signum() <= 0) {
             throw new IllegalArgumentException("initialCapital must be positive");
+        }
+        // Train/OOS split validation. The fraction is bounded so neither leg
+        // ends up degenerate — at 5% the OOS sample is too short to score, at
+        // 60% the train sample is too short to fit. We also require each
+        // window to be at least 7-30 days so the strategy has a chance to
+        // open positions; otherwise the metrics are mostly noise.
+        boolean trainOosMode = "TRAIN_OOS".equalsIgnoreCase(spec.getSplitMode());
+        boolean walkForwardMode = "WALK_FORWARD_K".equalsIgnoreCase(spec.getSplitMode());
+        BigDecimal holdoutPct = spec.getHoldoutFractionPct();
+        if (holdoutPct != null && !trainOosMode && !walkForwardMode) {
+            throw new IllegalArgumentException(
+                    "holdoutFractionPct only applies with splitMode TRAIN_OOS or WALK_FORWARD_K");
+        }
+        if (trainOosMode) {
+            BigDecimal oosPct = spec.getOosFractionPct();
+            if (oosPct == null) oosPct = new BigDecimal("30");
+            if (oosPct.compareTo(new BigDecimal("10")) < 0
+                    || oosPct.compareTo(new BigDecimal("50")) > 0) {
+                throw new IllegalArgumentException(
+                        "oosFractionPct must be between 10 and 50, got " + oosPct);
+            }
+            BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
+            if (hPct.signum() < 0
+                    || hPct.compareTo(new BigDecimal("40")) > 0) {
+                throw new IllegalArgumentException(
+                        "holdoutFractionPct must be between 0 and 40, got " + hPct);
+            }
+            // Combined sanity: train slice must be at least 30% of the window
+            // so the optimization has something to fit on.
+            BigDecimal trainPct = new BigDecimal("100").subtract(oosPct).subtract(hPct);
+            if (trainPct.compareTo(new BigDecimal("30")) < 0) {
+                throw new IllegalArgumentException(
+                        "Train slice would be only " + trainPct + "% of the window — "
+                                + "lower oosFractionPct or holdoutFractionPct so train >= 30%");
+            }
+
+            long totalSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
+            long holdoutSeconds = (long) (totalSeconds * hPct.doubleValue() / 100.0);
+            long oosSeconds = (long) (totalSeconds * oosPct.doubleValue() / 100.0);
+            long trainSeconds = totalSeconds - oosSeconds - holdoutSeconds;
+
+            if (oosSeconds < Duration.ofDays(7).getSeconds()) {
+                throw new IllegalArgumentException(
+                        "OOS window is shorter than 7 days — widen the date range or lower oosFractionPct");
+            }
+            if (trainSeconds < Duration.ofDays(30).getSeconds()) {
+                throw new IllegalArgumentException(
+                        "Train window is shorter than 30 days — widen the date range");
+            }
+            if (hPct.signum() > 0 && holdoutSeconds < Duration.ofDays(7).getSeconds()) {
+                throw new IllegalArgumentException(
+                        "Holdout window is shorter than 7 days — widen the date range or lower holdoutFractionPct");
+            }
+        }
+        // K-fold walk-forward validation. Train head + K OOS slices tile the
+        // available (non-holdout) window. The OOS coverage is controlled by
+        // oosFractionPct (default 30%) — train head is whatever remains.
+        if (walkForwardMode) {
+            int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
+            if (k < 2 || k > 8) {
+                throw new IllegalArgumentException(
+                        "walkForwardWindows must be between 2 and 8, got " + k);
+            }
+            BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
+            if (hPct.signum() < 0 || hPct.compareTo(new BigDecimal("40")) > 0) {
+                throw new IllegalArgumentException(
+                        "holdoutFractionPct must be between 0 and 40, got " + hPct);
+            }
+            // OOS fraction shares semantics with TRAIN_OOS mode: % of the
+            // available (non-holdout) window covered by OOS evaluation.
+            // Default 30% when not provided.
+            BigDecimal oosPctRaw = spec.getOosFractionPct() != null
+                    ? spec.getOosFractionPct() : new BigDecimal("30");
+            if (oosPctRaw.compareTo(new BigDecimal("10")) < 0
+                    || oosPctRaw.compareTo(new BigDecimal("70")) > 0) {
+                throw new IllegalArgumentException(
+                        "oosFractionPct must be between 10 and 70 for K-fold, got " + oosPctRaw);
+            }
+            long totalSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
+            long holdoutSeconds = (long) (totalSeconds * hPct.doubleValue() / 100.0);
+            long availableSeconds = totalSeconds - holdoutSeconds;
+            double oosFraction = oosPctRaw.doubleValue() / 100.0;
+
+            WalkForwardWindowing.SliceSizing sizing =
+                    WalkForwardWindowing.computeSliceSizing(availableSeconds, k, oosFraction);
+            WalkForwardWindowing.validateSliceSizes(sizing);
+
+            if (hPct.signum() > 0 && holdoutSeconds < Duration.ofDays(7).getSeconds()) {
+                throw new IllegalArgumentException(
+                        "Holdout window is shorter than 7 days — lower holdoutFractionPct or widen the date range");
+            }
+        }
+        // Total-runs hard cap. Walk-forward modes multiply run count per
+        // combo, so we estimate before submission and reject grids that
+        // would queue runaway-cluster work.
+        int runsPerCombo = walkForwardMode
+                ? 2 * (spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows())
+                : (trainOosMode ? 2 : 1);
+        int estimatedCombos = estimateTotalCombos(spec);
+        if ((long) estimatedCombos * runsPerCombo > MAX_TOTAL_RUNS) {
+            throw new IllegalArgumentException(
+                    "Sweep would queue " + ((long) estimatedCombos * runsPerCombo)
+                            + " backtests (cap " + MAX_TOTAL_RUNS + "). Lower the grid, lower K, or split into smaller sweeps.");
         }
         int rounds = spec.getRounds() == null ? 1 : spec.getRounds();
         Set<String> knownKeys = knownParamKeysFor(spec.getStrategyCode());

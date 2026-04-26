@@ -178,6 +178,7 @@ public class BacktestQueryService {
                     .maxDrawdownPct(r.getMaxDrawdownPct())
                     .sharpe(r.getSharpeRatio())
                     .sortino(r.getSortinoRatio())
+                    .psr(r.getPsr())
                     .totalTrades(r.getTotalTrades())
                     .winningTrades(r.getTotalWins())
                     .losingTrades(r.getTotalLosses())
@@ -213,6 +214,8 @@ public class BacktestQueryService {
                 .createdAt(r.getCreatedTime())
                 .completedAt("COMPLETED".equalsIgnoreCase(r.getStatus()) ? r.getUpdatedTime() : null)
                 .paramSnapshot(paramSnapshot)
+                .gitCommitSha(r.getGitCommitSha())
+                .appVersion(r.getAppVersion())
                 .metrics(metrics)
                 .build();
     }

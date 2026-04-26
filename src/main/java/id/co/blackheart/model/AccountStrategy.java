@@ -68,4 +68,30 @@ public class AccountStrategy extends BaseEntity {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    /**
+     * Drawdown kill-switch — when the strategy's rolling 30-day drawdown
+     * exceeds this percentage, RiskGuardService trips the switch and
+     * blocks new entries until manually re-armed. Default 25%; range
+     * enforced at the controller layer.
+     */
+    @Column(name = "dd_kill_threshold_pct", nullable = false, precision = 5, scale = 2)
+    @Builder.Default
+    private BigDecimal ddKillThresholdPct = new BigDecimal("25.00");
+
+    /**
+     * Sticky trip state. {@code true} means new entries are blocked for
+     * this strategy. Resetting requires an explicit re-arm — we don't
+     * auto-clear because the trip itself signals "human, look at this".
+     */
+    @Column(name = "is_kill_switch_tripped", nullable = false)
+    @Builder.Default
+    private Boolean isKillSwitchTripped = Boolean.FALSE;
+
+    @Column(name = "kill_switch_tripped_at")
+    private LocalDateTime killSwitchTrippedAt;
+
+    /** Human-readable trip reason (e.g. "30-day DD 32.4% exceeded threshold 25%"). */
+    @Column(name = "kill_switch_reason", columnDefinition = "TEXT")
+    private String killSwitchReason;
+
 }

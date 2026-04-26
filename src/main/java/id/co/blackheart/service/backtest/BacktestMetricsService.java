@@ -5,6 +5,7 @@ import id.co.blackheart.dto.backtest.BacktestState;
 import id.co.blackheart.model.BacktestEquityPoint;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
+import id.co.blackheart.service.statistics.SharpeStatistics;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -100,6 +101,7 @@ public class BacktestMetricsService {
                 .totalReturnPercent(totalReturnPercent)
                 .sharpeRatio(calculateSharpeRatio(state))
                 .sortinoRatio(calculateSortinoRatio(state))
+                .psr(calculatePsr(state))
                 .avgWin(avgWin)
                 .avgLoss(avgLoss)
                 .expectancy(expectancy)
@@ -201,6 +203,43 @@ public class BacktestMetricsService {
         return mean.divide(downsideDev, 10, RoundingMode.HALF_UP)
                 .multiply(annualizationFactor)
                 .setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Probabilistic Sharpe Ratio — P(true Sharpe > 0) given the observed
+     * per-period Sharpe, sample size, and the moments of the return series.
+     * Computed on the same daily return series Sharpe uses, but with the
+     * <i>per-period</i> Sharpe (no √252 annualization) since PSR's
+     * statistical machinery operates on raw periods.
+     *
+     * <p>Returns {@code null} when the sample is too small to be meaningful
+     * (&lt; 10 daily returns) — better to render "—" than an unreliable
+     * 0.50-ish value that suggests certainty we don't have.
+     */
+    private BigDecimal calculatePsr(BacktestState state) {
+        if (state.getEquityPoints() == null || state.getEquityPoints().size() < 10) {
+            return null;
+        }
+
+        double[] returns = state.getEquityPoints().stream()
+                .map(BacktestEquityPoint::getDailyReturnPct)
+                .filter(Objects::nonNull)
+                .mapToDouble(BigDecimal::doubleValue)
+                .toArray();
+        if (returns.length < 10) return null;
+
+        double mean = SharpeStatistics.mean(returns);
+        double sd = SharpeStatistics.stddev(returns);
+        if (sd <= 0.0) return null;
+
+        double srPerPeriod = mean / sd;
+        double skew = SharpeStatistics.skewness(returns);
+        double kurt = SharpeStatistics.kurtosis(returns);
+
+        double psr = SharpeStatistics.psr(srPerPeriod, 0.0, returns.length, skew, kurt);
+        if (Double.isNaN(psr) || Double.isInfinite(psr)) return null;
+
+        return BigDecimal.valueOf(psr).setScale(6, RoundingMode.HALF_UP);
     }
 
     /**

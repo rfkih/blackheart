@@ -128,6 +128,56 @@ public class AccountQueryService {
                 .exchange(a.getExchange())
                 .isActive(a.getIsActive())
                 .createdTime(a.getCreatedTime())
+                .maxConcurrentLongs(a.getMaxConcurrentLongs())
+                .maxConcurrentShorts(a.getMaxConcurrentShorts())
+                .volTargetingEnabled(a.getVolTargetingEnabled())
+                .bookVolTargetPct(a.getBookVolTargetPct())
                 .build();
+    }
+
+    /**
+     * Update the per-account risk-policy levers — concurrency caps and
+     * vol-targeting toggle/target. Validates the toggle pair (target must
+     * be in [1, 50] when on) and rejects negative concurrency caps.
+     */
+    @Transactional
+    public AccountSummaryResponse updateRiskConfig(UUID userId, UUID accountId, RiskConfigRequest req) {
+        Account account = accountRepository.findByAccountId(accountId)
+                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException("Account not found: " + accountId);
+        }
+        if (req.getMaxConcurrentLongs() != null) {
+            if (req.getMaxConcurrentLongs() < 0 || req.getMaxConcurrentLongs() > 20) {
+                throw new IllegalArgumentException("maxConcurrentLongs must be between 0 and 20");
+            }
+            account.setMaxConcurrentLongs(req.getMaxConcurrentLongs());
+        }
+        if (req.getMaxConcurrentShorts() != null) {
+            if (req.getMaxConcurrentShorts() < 0 || req.getMaxConcurrentShorts() > 20) {
+                throw new IllegalArgumentException("maxConcurrentShorts must be between 0 and 20");
+            }
+            account.setMaxConcurrentShorts(req.getMaxConcurrentShorts());
+        }
+        if (req.getVolTargetingEnabled() != null) {
+            account.setVolTargetingEnabled(req.getVolTargetingEnabled());
+        }
+        if (req.getBookVolTargetPct() != null) {
+            BigDecimal t = req.getBookVolTargetPct();
+            if (t.signum() <= 0 || t.compareTo(new BigDecimal("50")) > 0) {
+                throw new IllegalArgumentException("bookVolTargetPct must be in (0, 50]");
+            }
+            account.setBookVolTargetPct(t);
+        }
+        return toSummary(accountRepository.save(account));
+    }
+
+    /** Inline DTO so we don't need a fresh top-level request file. */
+    @lombok.Data
+    public static class RiskConfigRequest {
+        private Integer maxConcurrentLongs;
+        private Integer maxConcurrentShorts;
+        private Boolean volTargetingEnabled;
+        private BigDecimal bookVolTargetPct;
     }
 }

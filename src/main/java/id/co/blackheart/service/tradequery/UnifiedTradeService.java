@@ -10,6 +10,7 @@ import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.cache.CacheService;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
+import id.co.blackheart.service.trade.TradeAttributionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,7 @@ public class UnifiedTradeService {
     private final AccountRepository accountRepository;
     private final CacheService cacheService;
     private final AccountStrategyOwnershipGuard ownershipGuard;
+    private final TradeAttributionService tradeAttributionService;
 
     public List<TradeResponse> getTrades(UUID userId, String status, UUID accountId, int limit, int page, int size) {
         List<UUID> accountIds = resolveAccountIds(userId, accountId);
@@ -68,6 +70,21 @@ public class UnifiedTradeService {
         }
 
         return toTradeResponse(trade, true);
+    }
+
+    /**
+     * P&L attribution decomposition for a closed trade. Returns null when
+     * the trade is still open or the row predates Phase 2c (no intent
+     * captured) — frontend renders "—" in that case rather than fake numbers.
+     */
+    public TradeAttributionService.Attribution getTradeAttribution(UUID userId, UUID tradeId) {
+        Trades trade = tradesRepository.findByTradeId(tradeId)
+                .orElseThrow(() -> new IllegalArgumentException("Trade not found: " + tradeId));
+        List<UUID> accountIds = resolveAccountIds(userId, null);
+        if (!accountIds.contains(trade.getAccountId())) {
+            throw new IllegalArgumentException("Trade not found: " + tradeId);
+        }
+        return tradeAttributionService.attribute(trade).orElse(null);
     }
 
     private List<UUID> resolveAccountIds(UUID userId, UUID accountId) {

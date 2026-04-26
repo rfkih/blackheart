@@ -96,4 +96,22 @@ public class Trades extends BaseEntity {
     @Column(name = "exit_time")
     private LocalDateTime exitTime;
 
+    /**
+     * Decision-time intent (Phase 2c). Captured by the live executor
+     * BEFORE vol-targeting scales the size, used at trade close to
+     * decompose realized P&L into signal alpha + execution drift +
+     * sizing residual. Nullable on legacy rows.
+     *
+     * <p>{@code intendedSize} mirrors the side's natural unit:
+     * USDT for LONG (notional), BTC qty for SHORT (position).
+     */
+    @Column(name = "intended_entry_price", precision = 24, scale = 12)
+    private BigDecimal intendedEntryPrice;
+
+    @Column(name = "intended_size", precision = 24, scale = 12)
+    private BigDecimal intendedSize;
+
+    @Column(name = "decision_time")
+    private LocalDateTime decisionTime;
+
 }

@@ -10,6 +10,9 @@ import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
+import id.co.blackheart.service.risk.BookVolTargetingService;
+import id.co.blackheart.service.risk.RiskGuardService;
+import id.co.blackheart.service.strategy.StrategyDecisionInvariants;
 import id.co.blackheart.service.trade.TradeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +43,8 @@ public class LiveTradingDecisionExecutorService {
     private final TradePositionRepository tradePositionRepository;
     private final PortfolioService portfolioService;
     private final TradeService tradeService;
+    private final RiskGuardService riskGuardService;
+    private final BookVolTargetingService bookVolTargetingService;
 
     public void execute(
             Trades activeTrade,
@@ -48,6 +53,51 @@ public class LiveTradingDecisionExecutorService {
     ) throws JsonProcessingException {
         if (decision == null || decision.getDecisionType() == null || context == null) {
             return;
+        }
+
+        // Log-only guard. Catches contract violations like the LSR/VCB SHORT
+        // sizing bug at the boundary between strategy and executor — without
+        // blocking the live loop while we build confidence in the validator.
+        BigDecimal entryRef = context.getMarketData() != null
+                ? context.getMarketData().getClosePrice()
+                : null;
+        List<String> violations = StrategyDecisionInvariants.validate(decision, entryRef);
+        if (!violations.isEmpty()) {
+            log.warn("[StrategyInvariant] {} {} violations: {}",
+                    decision.getStrategyCode(), decision.getDecisionType(), violations);
+        }
+
+        // Risk guard: rolling-DD kill switch + per-account concurrency cap.
+        // Only gates new entries; CLOSE_*/UPDATE_* always pass through so
+        // we can still get out of existing positions even when tripped.
+        if (decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT) {
+            UUID accountStrategyId = decision.getAccountStrategyId();
+            if (accountStrategyId == null && context.getAccountStrategy() != null) {
+                accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
+            }
+            if (accountStrategyId != null) {
+                String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                        ? SIDE_LONG : SIDE_SHORT;
+                RiskGuardService.GuardVerdict verdict = riskGuardService.canOpen(accountStrategyId, side);
+                if (!verdict.allowed()) {
+                    log.warn("[RiskGuard] BLOCKED {} | strategy={} reason={}",
+                            decision.getDecisionType(), decision.getStrategyCode(), verdict.reason());
+                    return;
+                }
+
+                // Phase 2c — capture decision intent BEFORE vol-targeting
+                // mutates. The trade row will store these so realized P&L
+                // can be decomposed into signal-alpha / exec-drift /
+                // sizing-residual at close.
+                captureIntent(side, decision, context);
+
+                // Phase 2b — book vol-targeting. Scales the strategy's
+                // computed size so realized vol hits target and correlated
+                // bets shrink. Off by default per Account; when off the
+                // service returns the size unchanged.
+                applyVolTargeting(accountStrategyId, side, decision);
+            }
         }
 
         switch (decision.getDecisionType()) {
@@ -177,7 +227,7 @@ public class LiveTradingDecisionExecutorService {
 
         BigDecimal tradeAmount = decision.getNotionalSize() != null
                 ? decision.getNotionalSize()
-                : calculateLongTradeAmount(balance, account);
+                : calculateLongTradeAmount(balance, account, context.getAccountStrategy());
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid LONG trade amount. tradeAmount={}", tradeAmount);
@@ -212,7 +262,7 @@ public class LiveTradingDecisionExecutorService {
 
         BigDecimal tradeAmount = decision.getPositionSize() != null
                 ? decision.getPositionSize()
-                : calculateShortTradeAmount(balance, account);
+                : calculateShortTradeAmount(balance, account, context.getAccountStrategy());
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid SHORT trade amount. tradeAmount={}", tradeAmount);
@@ -287,27 +337,96 @@ public class LiveTradingDecisionExecutorService {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Account account) {
-        if (usdtBalance == null || account == null || account.getRiskAmount() == null) {
-            return BigDecimal.ZERO;
+    /**
+     * Phase 2c — stash decision intent on the decision so TradeOpenService
+     * can persist it. Called BEFORE {@link #applyVolTargeting} so the size
+     * captured here is the strategy's pre-targeting intent, not the scaled
+     * result. Idempotent — strategies that already set intended* are left
+     * alone (which lets future strategy implementations override the proxy).
+     */
+    private void captureIntent(String side, StrategyDecision decision, EnrichedStrategyContext context) {
+        if (decision.getIntendedSize() == null) {
+            BigDecimal currentSize = SIDE_LONG.equalsIgnoreCase(side)
+                    ? decision.getNotionalSize()
+                    : decision.getPositionSize();
+            decision.setIntendedSize(currentSize);
+        }
+        if (decision.getIntendedEntryPrice() == null
+                && context.getMarketData() != null) {
+            decision.setIntendedEntryPrice(context.getMarketData().getClosePrice());
+        }
+    }
+
+    /**
+     * Apply book vol-targeting to the entry size in-place on the decision.
+     * LONG reads/writes {@code notionalSize} (USDT); SHORT reads/writes
+     * {@code positionSize} (BTC). When the service returns the size
+     * unchanged (toggle off, thin sample, missing capital baseline) the
+     * decision is left alone.
+     */
+    private void applyVolTargeting(UUID accountStrategyId, String side, StrategyDecision decision) {
+        BigDecimal baseSize = SIDE_LONG.equalsIgnoreCase(side)
+                ? decision.getNotionalSize()
+                : decision.getPositionSize();
+        if (baseSize == null || baseSize.signum() <= 0) return;
+
+        BookVolTargetingService.SizingScale result =
+                bookVolTargetingService.scale(accountStrategyId, side, baseSize);
+        if (result.scaledSize() == null
+                || result.scaledSize().compareTo(baseSize) == 0) {
+            return;
         }
 
-        BigDecimal tradeAmount = usdtBalance
-                .multiply(account.getRiskAmount())
-                .setScale(8, RoundingMode.DOWN);
+        log.info("[VolTargeting] {} {} | base={} → scaled={} ({})",
+                decision.getStrategyCode(), side, baseSize, result.scaledSize(), result.reason());
+        if (SIDE_LONG.equalsIgnoreCase(side)) {
+            decision.setNotionalSize(result.scaledSize());
+        } else {
+            decision.setPositionSize(result.scaledSize());
+        }
+    }
 
+    /**
+     * Fallback sizing when a strategy didn't populate {@code notionalSize}.
+     * Single-knob: trade amount is {@code usdtBalance × allocFraction}.
+     * No further per-trade-risk multiplier — capital_allocation_pct IS the
+     * sizing knob (50 → 50% of balance per trade). Returns ZERO when no
+     * allocation is set; the executor then skips the entry as "invalid
+     * trade amount". MIN_USDT_NOTIONAL floor keeps Binance min-order rules
+     * happy on small allocations.
+     */
+    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Account account,
+                                                id.co.blackheart.model.AccountStrategy accountStrategy) {
+        if (usdtBalance == null) return BigDecimal.ZERO;
+        BigDecimal alloc = allocFraction(accountStrategy);
+        if (alloc.signum() <= 0) return BigDecimal.ZERO;
+
+        BigDecimal tradeAmount = usdtBalance.multiply(alloc).setScale(8, RoundingMode.DOWN);
         return tradeAmount.compareTo(MIN_USDT_NOTIONAL) < 0 ? MIN_USDT_NOTIONAL : tradeAmount;
     }
 
-    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Account account) {
-        if (btcBalance == null || account == null || account.getRiskAmount() == null) {
-            return BigDecimal.ZERO;
-        }
+    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Account account,
+                                                 id.co.blackheart.model.AccountStrategy accountStrategy) {
+        if (btcBalance == null) return BigDecimal.ZERO;
+        BigDecimal alloc = allocFraction(accountStrategy);
+        if (alloc.signum() <= 0) return BigDecimal.ZERO;
 
-        BigDecimal tradeAmount = btcBalance
-                .multiply(account.getRiskAmount())
-                .setScale(8, RoundingMode.DOWN);
-
+        BigDecimal tradeAmount = btcBalance.multiply(alloc).setScale(8, RoundingMode.DOWN);
         return tradeAmount.compareTo(MIN_BTC_NOTIONAL) < 0 ? MIN_BTC_NOTIONAL : tradeAmount;
+    }
+
+    /**
+     * Strategy's allocation as a fraction in (0, 1]. Mirrors
+     * {@code StrategyHelper.resolveCapitalAllocationFraction} — strict
+     * semantics: null/zero → ZERO (no trade). The schema has
+     * capital_allocation_pct NOT NULL so this should only happen on
+     * legacy / partial rows.
+     */
+    private static BigDecimal allocFraction(id.co.blackheart.model.AccountStrategy as) {
+        if (as == null) return BigDecimal.ZERO;
+        BigDecimal alloc = as.getCapitalAllocationPct();
+        if (alloc == null || alloc.signum() <= 0) return BigDecimal.ZERO;
+        BigDecimal capped = alloc.min(new BigDecimal("100"));
+        return capped.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
     }
 }

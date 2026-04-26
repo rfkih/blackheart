@@ -26,4 +26,6 @@ public class BacktestExecutionSummary {
     private BigDecimal avgLoss;
     private BigDecimal maxDrawdownAmount;
     private BigDecimal sortinoRatio;
+    /** Probabilistic Sharpe Ratio in [0, 1] — null when sample is too small. */
+    private BigDecimal psr;
 }

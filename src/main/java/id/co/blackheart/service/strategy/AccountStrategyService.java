@@ -235,6 +235,28 @@ public class AccountStrategyService {
     }
 
     /**
+     * Clear the drawdown kill-switch trip state. Caller is expected to have
+     * already looked at why it tripped (the reason is on the row + in logs).
+     * Doesn't auto-clear because the trip itself is the "human, look at this"
+     * signal — letting it self-clear on the next winning trade defeats the
+     * point. Idempotent on a not-tripped row.
+     */
+    @Transactional
+    public AccountStrategyResponse rearmKillSwitch(UUID userId, UUID accountStrategyId) {
+        AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
+        if (!Boolean.TRUE.equals(strategy.getIsKillSwitchTripped())) {
+            return toResponse(strategy);
+        }
+        strategy.setIsKillSwitchTripped(Boolean.FALSE);
+        strategy.setKillSwitchTrippedAt(null);
+        strategy.setKillSwitchReason(null);
+        AccountStrategy saved = accountStrategyRepository.save(strategy);
+        log.info("Re-armed kill switch | userId={} accountStrategyId={}",
+                userId, accountStrategyId);
+        return toResponse(saved);
+    }
+
+    /**
      * Partial update — currently only the candle interval. Refuses if the
      * strategy has any open trades (those were sized / stopped on the OLD
      * interval; switching candle granularity mid-position is unsafe). When
@@ -378,6 +400,10 @@ public class AccountStrategyService {
                 .currentStatus(s.getCurrentStatus())
                 .createdTime(s.getCreatedTime())
                 .updatedTime(s.getUpdatedTime())
+                .ddKillThresholdPct(s.getDdKillThresholdPct())
+                .isKillSwitchTripped(s.getIsKillSwitchTripped())
+                .killSwitchTrippedAt(s.getKillSwitchTrippedAt())
+                .killSwitchReason(s.getKillSwitchReason())
                 .build();
     }
 }

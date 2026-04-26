@@ -30,5 +30,8 @@ public class BacktestRunDetailResponse {
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
     private Object paramSnapshot;
+    /** Reproducibility manifest — git SHA + app version captured at submit. */
+    private String gitCommitSha;
+    private String appVersion;
     private BacktestMetricsResponse metrics;
 }

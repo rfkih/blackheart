@@ -288,6 +288,27 @@ public class BacktestTrade extends BaseEntity {
     @Column(name = "exit_time")
     private LocalDateTime exitTime;
 
+    /**
+     * Phase 2c — decision-time intent captured by the backtest executor
+     * BEFORE simulated slippage moves the price. Used at trade close to
+     * decompose realized P&L into signal alpha + execution drift +
+     * sizing residual. See TradeAttributionService. Nullable on legacy
+     * rows; attribution returns empty for those.
+     *
+     * <p>Backtest mode never applies vol-targeting (that's a live-only
+     * pass) so {@code intendedSize} == decision-time size. Sizing
+     * residual is therefore always 0 for backtest trades — the diagnostic
+     * cleanly isolates simulated slippage as execution drift.
+     */
+    @Column(name = "intended_entry_price", precision = 24, scale = 12)
+    private BigDecimal intendedEntryPrice;
+
+    @Column(name = "intended_size", precision = 24, scale = 12)
+    private BigDecimal intendedSize;
+
+    @Column(name = "decision_time")
+    private LocalDateTime decisionTime;
+
     @Column(name = "holding_minutes")
     private Long holdingMinutes;
 

@@ -6,9 +6,11 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+
 
 /** Top-level sweep record — returned from the create + detail endpoints. */
 @Data
@@ -47,4 +49,30 @@ public class SweepState {
     /** Ordered by {@code createdAt} of the underlying backtest — not by rank.
      *  Leaderboard ranking is done client-side (or by the controller on demand). */
     private List<SweepResult> results;
+
+    /**
+     * Cohort-level Deflated-Sharpe context, computed on read from the
+     * combo Sharpes. {@code dsrThresholdSharpe} is the expected maximum
+     * Sharpe under N independent null trials (true SR = 0). Top combos
+     * exceeding this threshold are evidence beyond multiple-comparison
+     * luck; combos at or below it are statistically indistinguishable
+     * from picking the best of N coin flips. Null on sweeps with fewer
+     * than two completed combos. Both values are annualized for display.
+     */
+    private BigDecimal dsrThresholdSharpe;
+    /** Stddev of the cohort's annualized Sharpes — diagnostic for the
+     *  DSR threshold calculation. */
+    private BigDecimal dsrCohortStddev;
+
+    /** When {@link SweepSpec#getHoldoutFractionPct()} is set, the start of
+     *  the locked holdout slice (= effective sweep window end). Surfaced so
+     *  the UI can render "Sweep optimized over X→Y, holdout reserved for Y→Z". */
+    private LocalDateTime holdoutFromDate;
+    private LocalDateTime holdoutToDate;
+
+    /** {@link id.co.blackheart.model.BacktestRun#getBacktestRunId()} of the
+     *  one-shot holdout evaluation, set after the user calls
+     *  {@code POST /sweeps/:id/evaluate-holdout}. Null until then. The DB
+     *  enforces at-most-one via a unique partial index. */
+    private UUID holdoutBacktestRunId;
 }

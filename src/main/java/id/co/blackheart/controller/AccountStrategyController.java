@@ -151,6 +151,25 @@ public class AccountStrategyController {
                 .build());
     }
 
+    /**
+     * Clear the drawdown kill-switch on this strategy. The endpoint is
+     * deliberately explicit — the trip is the "look at this" signal, and
+     * the user must consciously acknowledge it before live trading
+     * resumes for the strategy.
+     */
+    @PostMapping("/{accountStrategyId}/rearm")
+    @Operation(summary = "Re-arm the drawdown kill-switch after manual review.",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> rearmKillSwitch(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountStrategyId) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountStrategyService.rearmKillSwitch(userId, accountStrategyId))
+                .build());
+    }
+
     private UUID extractUserId(String authHeader) {
         return jwtService.extractUserId(authHeader.substring(7));
     }

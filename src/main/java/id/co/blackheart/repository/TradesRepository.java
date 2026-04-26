@@ -141,4 +141,59 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
             @Param("cutoff") LocalDateTime cutoff
     );
 
+    /**
+     * Closed trades for one strategy with exit_time within the given
+     * window, ordered ASC. Used by RiskGuardService to walk the cumulative
+     * P&L sequence and compute peak-to-trough drawdown.
+     */
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.account_strategy_id = :accountStrategyId
+              AND t.status = 'CLOSED'
+              AND t.exit_time IS NOT NULL
+              AND t.exit_time >= :since
+            ORDER BY t.exit_time ASC
+            """, nativeQuery = true)
+    List<Trades> findClosedByAccountStrategyIdSince(
+            @Param("accountStrategyId") UUID accountStrategyId,
+            @Param("since") LocalDateTime since
+    );
+
+    /**
+     * Concurrent-direction count across every strategy on the account.
+     * Used by RiskGuardService to enforce {@code Account.maxConcurrentLongs}
+     * / {@code maxConcurrentShorts} before approving a new entry.
+     */
+    @Query(value = """
+            SELECT COUNT(*) FROM trades t
+            WHERE t.account_id = :accountId
+              AND UPPER(t.side) = UPPER(:side)
+              AND t.status IN ('OPEN', 'PARTIALLY_CLOSED')
+            """, nativeQuery = true)
+    long countOpenByAccountIdAndSide(
+            @Param("accountId") UUID accountId,
+            @Param("side") String side
+    );
+
+    /**
+     * All closed trades for one symbol that have intended-entry intent
+     * recorded (Phase 2c). Used by SlippageCalibrationService to fit a
+     * realized-fill cost model from the user's own history rather than a
+     * hardcoded default. Capped at the most-recent {@code limitVal} rows
+     * to keep the service O(window) regardless of total history depth.
+     */
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.asset = :asset
+              AND t.intended_entry_price IS NOT NULL
+              AND t.avg_entry_price IS NOT NULL
+              AND t.entry_time IS NOT NULL
+            ORDER BY t.entry_time DESC
+            LIMIT :limitVal
+            """, nativeQuery = true)
+    List<Trades> findRecentWithIntent(
+            @Param("asset") String asset,
+            @Param("limitVal") int limitVal
+    );
+
 }

@@ -112,6 +112,10 @@ public class BacktestPersistenceService {
             backtestRun.setSortinoRatio(summary.getSortinoRatio());
         }
 
+        if (summary.getPsr() != null) {
+            backtestRun.setPsr(summary.getPsr());
+        }
+
         if (summary.getAvgWin() != null) {
             backtestRun.setAvgWin(summary.getAvgWin());
         }

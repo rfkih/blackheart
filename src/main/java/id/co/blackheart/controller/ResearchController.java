@@ -239,6 +239,27 @@ public class ResearchController {
                 .build());
     }
 
+    @PostMapping("/sweeps/{sweepId}/evaluate-holdout")
+    @Operation(summary = "One-shot unbiased evaluation on the locked holdout slice. "
+            + "Server rejects second attempts; pick your winner carefully.",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> evaluateHoldout(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID sweepId,
+            @RequestBody Map<String, Object> body) {
+        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> paramSet = (Map<String, Object>) body.get("paramSet");
+        BacktestRun run = sweepService.evaluateHoldout(userId, sweepId, paramSet);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(ResponseDto.builder()
+                .responseCode(HttpStatus.ACCEPTED.value() + ResponseCode.SUCCESS.getCode())
+                .data(Map.of(
+                        "backtestRunId", run.getBacktestRunId(),
+                        "sweepId", sweepId
+                ))
+                .build());
+    }
+
     @DeleteMapping("/sweeps/{sweepId}")
     @Operation(summary = "Delete a finished sweep — removes both memory record and disk file",
                security = @SecurityRequirement(name = "bearerAuth"))

@@ -164,6 +164,12 @@ LSR, VCB, and VBO support per-`accountStrategyId` overrides in PostgreSQL:
 - `DefaultStrategyContextEnrichmentService` skips live DB queries when `source == "backtest"` — do not break this guard.
 - `previousFeatureStore` must be populated for strategies declaring `requirePreviousFeatureStore = true`; live loads from DB, backtest sets it manually.
 - Live bias candle must use `findLatestCompletedBySymbolAndInterval` (completed), not `findLatestBySymbolAndInterval` (may return forming candle).
+
+### Point-in-Time Discipline (audited 2026-04-26)
+- Strategy execution gates on `BinanceWebSocketClient.isProcessable` which requires the Binance `k.x` closed-candle flag — entry decisions never see a forming bar.
+- Bias-timeframe enrichment uses `findLatestCompletedBySymbolAndInterval(boundary=now)` with `start_time < now` — completed-only.
+- `FeatureStoreRepository.findLatestBySymbolAndInterval` (no completed filter) is **decision-unsafe** and only used by `SentimentPublisherService` (informational broadcast). The Javadoc on that method now warns explicitly against decision-path use; honor it. Add a completed-filter variant if a new caller emerges.
+- When wiring a new strategy or feature read on the live path, the rule is: anything that influences an entry/exit price level OR a sizing decision must read completed-only data. Anything informational (UI, alerts) can use the latest-including-forming variant.
 - Live entry sizing fields in `LiveTradingDecisionExecutorService`: `executeOpenLong` reads `decision.getNotionalSize()` (USDT, checked against the USDT portfolio balance); `executeOpenShort` reads `decision.getPositionSize()` (BTC qty, checked against the BTC portfolio balance). Strategies must set the correct field in the correct currency or the executor silently falls back to its own sizing. For SHORT, use `StrategyHelper.calculateShortPositionSize` (BTC), **not** `calculateEntryNotional(SIDE_SHORT)` which returns USDT and will always fail the BTC balance guard.
 - `buildPositionSnapshot` in `LiveTradingCoordinatorService` returns `hasOpenPosition=false` when no OPEN `TradePosition` rows exist, regardless of parent `Trades` status.
 

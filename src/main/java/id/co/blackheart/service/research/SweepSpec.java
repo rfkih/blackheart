@@ -98,4 +98,66 @@ public class SweepSpec {
      * values stay locked across all rounds.
      */
     private Map<String, Object> fixedParams;
+
+    /**
+     * Train/OOS split mode for honest out-of-sample evaluation. One of:
+     * <ul>
+     *   <li>{@code "NONE"} (default) — single backtest per combo over the
+     *   full window; legacy behavior. Leaderboard ranks on in-sample
+     *   metrics, which overfits.</li>
+     *   <li>{@code "TRAIN_OOS"} — per combo, run two backtests sequentially:
+     *   a train window covering {@code (1 - oosFractionPct/100)} of the
+     *   range starting from {@link #fromDate}, then an OOS window covering
+     *   the remaining {@link #oosFractionPct}%. The leaderboard ranks by
+     *   OOS performance and the {@code dsrThresholdSharpe} is computed
+     *   over OOS Sharpes — the statistically correct cohort.</li>
+     *   <li>{@code "WALK_FORWARD_K"} — K anchored walk-forward folds. Each
+     *   combo runs K backtest pairs (train + OOS) where train slices expand
+     *   to include all prior data and OOS slices are non-overlapping
+     *   chronological tiles. Leaderboard ranks by mean OOS Sharpe across
+     *   folds; per-fold stddev surfaces regime sensitivity. Honest but
+     *   K× the wall time per combo; gated by the 2000-run cap.</li>
+     * </ul>
+     * Null is treated as {@code "NONE"} for backward compat with sweeps
+     * persisted to disk before this field existed.
+     */
+    private String splitMode;
+
+    /**
+     * Number of walk-forward folds when {@link #splitMode} is
+     * {@code WALK_FORWARD_K}. Default 4 — produces a stable enough
+     * mean/stddev for regime-sensitivity verdicts without ballooning
+     * wall time. Range [2, 8] enforced at submit time.
+     */
+    private Integer walkForwardWindows;
+
+    /**
+     * Percentage of the window reserved for out-of-sample evaluation when
+     * {@link #splitMode} is {@code TRAIN_OOS}. Default 30 — the convention
+     * for "test on the most recent third". Range: [10, 50] enforced at
+     * submit time.
+     *
+     * <p>When {@link #holdoutFractionPct} is also set the OOS slice is
+     * carved out of the <i>non-holdout</i> portion of the window, so a
+     * 50/30/20 (train/oos/holdout) split is the default fund-grade
+     * configuration: train on 50%, score on 30%, evaluate winner on the
+     * locked 20%.
+     */
+    private BigDecimal oosFractionPct;
+
+    /**
+     * Percentage of the full window reserved as a locked holdout. The
+     * holdout slice is the <i>tail</i> of the window and is NEVER touched
+     * during sweep optimization — no train run, no OOS run, no peeking.
+     * After the sweep completes, the user picks a winner from the OOS
+     * leaderboard and runs ONE evaluation on the holdout via
+     * {@code POST /api/v1/research/sweeps/:id/evaluate-holdout}; that run's
+     * metrics are the unbiased estimate of the strategy's edge.
+     *
+     * <p>Default null = disabled (legacy behavior). When set, must be
+     * paired with {@code splitMode == TRAIN_OOS}; range [10, 40] enforced
+     * at submit time. The DB index on {@code backtest_run.holdout_for_sweep_id}
+     * enforces at-most-one holdout run per sweep.
+     */
+    private BigDecimal holdoutFractionPct;
 }
