@@ -21,11 +21,12 @@ public class PortfolioController {
 
     @GetMapping
     public ResponseEntity<ResponseDto> getPortfolio(
-            @RequestHeader("Authorization") String authHeader) {
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam(value = "accountId", required = false) UUID accountId) {
         UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(portfolioBalanceService.getBalance(userId))
+                .data(portfolioBalanceService.getBalance(userId, accountId))
                 .build());
     }
 

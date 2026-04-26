@@ -67,6 +67,24 @@ public class BacktestMetricsService {
                 .divide(run.getInitialCapital(), 6, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal("100"));
 
+        BigDecimal avgWin = winningTrades == 0
+                ? BigDecimal.ZERO
+                : grossProfit.divide(BigDecimal.valueOf(winningTrades), 6, RoundingMode.HALF_UP);
+
+        BigDecimal avgLoss = losingTrades == 0
+                ? BigDecimal.ZERO
+                : grossLoss.divide(BigDecimal.valueOf(losingTrades), 6, RoundingMode.HALF_UP);
+
+        // Expectancy in USDT per trade. Uses signed avgLoss so a positive
+        // expectancy is "wins more than cover losses", matching how PnL is
+        // computed elsewhere — grossLoss is already an absolute value, so we
+        // subtract the loss-side weight rather than add it.
+        BigDecimal expectancy = totalTrades == 0
+                ? BigDecimal.ZERO
+                : netProfit.divide(BigDecimal.valueOf(totalTrades), 6, RoundingMode.HALF_UP);
+
+        BigDecimal maxDrawdownAmount = calculateMaxDrawdownAmount(state);
+
         return BacktestExecutionSummary.builder()
                 .finalCapital(finalCapital)
                 .totalTrades(totalTrades)
@@ -78,8 +96,13 @@ public class BacktestMetricsService {
                 .netProfit(netProfit)
                 .profitFactor(profitFactor)
                 .maxDrawdownPercent(state.getMaxDrawdownPercent())
+                .maxDrawdownAmount(maxDrawdownAmount)
                 .totalReturnPercent(totalReturnPercent)
                 .sharpeRatio(calculateSharpeRatio(state))
+                .sortinoRatio(calculateSortinoRatio(state))
+                .avgWin(avgWin)
+                .avgLoss(avgLoss)
+                .expectancy(expectancy)
                 .build();
     }
 
@@ -132,5 +155,72 @@ public class BacktestMetricsService {
         return mean.divide(stdDev, 10, RoundingMode.HALF_UP)
                 .multiply(annualizationFactor)
                 .setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Sortino mirrors Sharpe but penalises downside-only volatility — std dev
+     * is computed over negative daily returns only. If no losing day occurred
+     * we return ZERO (rather than infinity) to keep the field render-safe;
+     * a strategy with zero losing days for the cohort is more meaningfully
+     * judged by other metrics anyway.
+     */
+    private BigDecimal calculateSortinoRatio(BacktestState state) {
+        if (state.getEquityPoints() == null || state.getEquityPoints().size() < 2) {
+            return BigDecimal.ZERO;
+        }
+
+        List<BigDecimal> dailyReturns = state.getEquityPoints().stream()
+                .map(BacktestEquityPoint::getDailyReturnPct)
+                .filter(Objects::nonNull)
+                .toList();
+
+        if (dailyReturns.size() < 2) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal mean = dailyReturns.stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .divide(BigDecimal.valueOf(dailyReturns.size()), 10, RoundingMode.HALF_UP);
+
+        // Downside deviation: square only the negative returns, average over
+        // the full sample size (standard Sortino convention).
+        BigDecimal downsideSumSq = dailyReturns.stream()
+                .filter(r -> r.compareTo(BigDecimal.ZERO) < 0)
+                .map(r -> r.pow(2))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (downsideSumSq.compareTo(BigDecimal.ZERO) == 0) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal downsideVariance = downsideSumSq.divide(
+                BigDecimal.valueOf(dailyReturns.size()), 10, RoundingMode.HALF_UP);
+        BigDecimal downsideDev = BigDecimal.valueOf(Math.sqrt(downsideVariance.doubleValue()));
+        BigDecimal annualizationFactor = BigDecimal.valueOf(Math.sqrt(252));
+
+        return mean.divide(downsideDev, 10, RoundingMode.HALF_UP)
+                .multiply(annualizationFactor)
+                .setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Max drawdown in absolute USDT — peak total-equity minus the lowest
+     * total-equity reached after that peak. Walks the equity-point series so
+     * we don't need a parallel field on {@code BacktestState}.
+     */
+    private BigDecimal calculateMaxDrawdownAmount(BacktestState state) {
+        if (state.getEquityPoints() == null || state.getEquityPoints().isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal peak = BigDecimal.ZERO;
+        BigDecimal maxDd = BigDecimal.ZERO;
+        for (BacktestEquityPoint p : state.getEquityPoints()) {
+            BigDecimal eq = p.getTotalEquity();
+            if (eq == null) continue;
+            if (eq.compareTo(peak) > 0) peak = eq;
+            BigDecimal dd = peak.subtract(eq);
+            if (dd.compareTo(maxDd) > 0) maxDd = dd;
+        }
+        return maxDd.setScale(8, RoundingMode.HALF_UP);
     }
 }
