@@ -25,6 +25,11 @@ public class AccountSummaryResponse {
     /** Phase 2a — concurrency caps (long / short). */
     private Integer maxConcurrentLongs;
     private Integer maxConcurrentShorts;
+    /**
+     * Total concurrent-trade cap across all strategies. Null = no total
+     * cap (per-direction caps apply alone).
+     */
+    private Integer maxConcurrentTrades;
     /** Phase 2b — vol-targeting toggle + target. */
     private Boolean volTargetingEnabled;
     private BigDecimal bookVolTargetPct;

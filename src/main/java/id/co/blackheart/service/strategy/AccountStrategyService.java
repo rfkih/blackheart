@@ -270,35 +270,51 @@ public class AccountStrategyService {
             UUID userId, UUID accountStrategyId, UpdateAccountStrategyRequest req) {
         AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
 
-        String newInterval = req.getIntervalName().trim();
-        if (newInterval.equalsIgnoreCase(strategy.getIntervalName())) {
-            // Idempotent — no change.
+        boolean dirty = false;
+
+        // ── Interval change (optional) ──────────────────────────────────
+        if (req.getIntervalName() != null && !req.getIntervalName().isBlank()) {
+            String newInterval = req.getIntervalName().trim();
+            if (!newInterval.equalsIgnoreCase(strategy.getIntervalName())) {
+                long openTrades = tradesRepository.countOpenByAccountStrategyId(accountStrategyId);
+                if (openTrades > 0) {
+                    throw new IllegalStateException(
+                            "Cannot change interval — strategy has " + openTrades
+                                    + " open trade(s). Close positions first.");
+                }
+
+                if (Boolean.TRUE.equals(strategy.getEnabled())) {
+                    // Moving an active preset into a new tuple: the new tuple may
+                    // already have an active sibling that we'd collide with at the
+                    // partial-unique-index level. Deactivate it atomically here.
+                    deactivateActiveSibling(
+                            strategy.getAccountId(),
+                            strategy.getStrategyDefinitionId(),
+                            strategy.getSymbol(),
+                            newInterval);
+                }
+
+                strategy.setIntervalName(newInterval);
+                dirty = true;
+                log.info("Updated strategy id={} interval -> {}", strategy.getAccountStrategyId(), newInterval);
+            }
+        }
+
+        // ── Priority order (optional) ───────────────────────────────────
+        // No open-trade guard needed: priority only affects future entry
+        // fan-out, not in-flight position management.
+        if (req.getPriorityOrder() != null
+                && !req.getPriorityOrder().equals(strategy.getPriorityOrder())) {
+            strategy.setPriorityOrder(req.getPriorityOrder());
+            dirty = true;
+            log.info("Updated strategy id={} priorityOrder -> {}",
+                    strategy.getAccountStrategyId(), req.getPriorityOrder());
+        }
+
+        if (!dirty) {
             return toResponse(strategy);
         }
-
-        long openTrades = tradesRepository.countOpenByAccountStrategyId(accountStrategyId);
-        if (openTrades > 0) {
-            throw new IllegalStateException(
-                    "Cannot change interval — strategy has " + openTrades
-                            + " open trade(s). Close positions first.");
-        }
-
-        if (Boolean.TRUE.equals(strategy.getEnabled())) {
-            // Moving an active preset into a new tuple: the new tuple may
-            // already have an active sibling that we'd collide with at the
-            // partial-unique-index level. Deactivate it atomically here.
-            deactivateActiveSibling(
-                    strategy.getAccountId(),
-                    strategy.getStrategyDefinitionId(),
-                    strategy.getSymbol(),
-                    newInterval);
-        }
-
-        strategy.setIntervalName(newInterval);
         AccountStrategy saved = accountStrategyRepository.save(strategy);
-
-        log.info("Updated strategy id={} interval -> {}", saved.getAccountStrategyId(), newInterval);
-
         return toResponse(saved);
     }
 

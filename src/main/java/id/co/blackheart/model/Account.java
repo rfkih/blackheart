@@ -81,6 +81,17 @@ public class Account extends BaseEntity {
     private Integer maxConcurrentShorts;
 
     /**
+     * Total concurrent open trades across all strategies on this account
+     * — both directions combined. Null means "no total cap" and the
+     * per-direction caps ({@link #maxConcurrentLongs} /
+     * {@link #maxConcurrentShorts}) apply alone. When set, the live
+     * orchestrator gates new entries on (active+pending) {@literal <} this value
+     * before any strategy-specific check runs.
+     */
+    @Column(name = "max_concurrent_trades")
+    private Integer maxConcurrentTrades;
+
+    /**
      * Phase 2b — book vol-targeting toggle. When false (default), every
      * strategy's entry size flows through unchanged from its strategy
      * service. When true, BookVolTargetingService scales the size so the

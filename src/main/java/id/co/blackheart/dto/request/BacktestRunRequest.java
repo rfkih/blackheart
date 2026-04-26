@@ -65,9 +65,16 @@ public class BacktestRunRequest {
     @Size(max = 30)
     private String asset;
 
+    /**
+     * Primary interval for the backtest. Restricted to 5m/15m/1h/4h —
+     * the engine ticks on a 5m monitor candle so anything finer would miss
+     * bar closes, and timeframes coarser than 4h aren't part of the
+     * supported strategy set. Live trading still supports 1m via WebSocket;
+     * this restriction is backtest-only.
+     */
     @NotBlank
-    @Pattern(regexp = "^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$",
-             message = "interval must be one of: 1m/3m/5m/15m/30m/1h/2h/4h/6h/8h/12h/1d/3d/1w/1M")
+    @Pattern(regexp = "^(5m|15m|1h|4h)$",
+             message = "interval must be one of: 5m / 15m / 1h / 4h")
     private String interval;
 
     @NotNull
@@ -146,5 +153,8 @@ public class BacktestRunRequest {
      * {@link #interval} field.
      */
     @Size(max = 10)
-    private Map<String, @Pattern(regexp = "^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$") String> strategyIntervals;
+    private Map<String,
+            @Pattern(regexp = "^(5m|15m|1h|4h)$",
+                     message = "per-strategy interval must be one of: 5m / 15m / 1h / 4h")
+            String> strategyIntervals;
 }

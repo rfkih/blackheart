@@ -131,7 +131,12 @@ public class BacktestCoordinatorService {
                         .map(e -> e.executor().getRequirements())
                         .toList());
 
-        BiasData biasData = preloadBiasData(backtestRun, requirements);
+        // Per-strategy bias data — live parity. Each strategy's enrichment
+        // (DefaultStrategyContextEnrichmentService) queries its OWN bias
+        // interval; the prior code merged requirements and loaded a single
+        // bias series, which fed wrong data to every strategy except the
+        // one whose biasInterval was picked first by mergeRequirements.
+        Map<String, BiasData> biasByStrategy = preloadBiasDataPerStrategy(backtestRun, executors);
 
         // Phase B2 — per-strategy interval contexts. When the run was
         // submitted with a strategyIntervals map, each strategy fires only
@@ -154,23 +159,23 @@ public class BacktestCoordinatorService {
                     backtestRun, state, monitorCandle.getOpenPrice(), monitorCandle.getStartTime()
             );
 
-            boolean anyPositionClosed = handleListenerStep(backtestRun, state, monitorCandle);
+            handleListenerStep(backtestRun, state, monitorCandle);
 
-            // Run strategy even when a position was closed if there are still open positions
-            // (e.g. TP1 fired on TP1_RUNNER — runner needs UPDATE_POSITION_MANAGEMENT on same bar).
-            // When all positions closed via listener, skip strategy to avoid same-bar re-entry.
-            if (!anyPositionClosed || hasAnyOpenTrade(state)) {
-                handleStrategyStep(
-                        backtestRun,
-                        state,
-                        monitorCandle,
-                        executors,
-                        requirements,
-                        biasData,
-                        perStrategyContext,
-                        allocationByStrategy
-                );
-            }
+            // Live parity: strategy step ALWAYS runs after the listener
+            // step. Live's WebSocket close events fire the strategy
+            // independently — no cross-step gate prevents same-bar
+            // re-entry after a stop/TP exit, and one strategy's close
+            // never silences another strategy's signal.
+            handleStrategyStep(
+                    backtestRun,
+                    state,
+                    monitorCandle,
+                    executors,
+                    requirements,
+                    biasByStrategy,
+                    perStrategyContext,
+                    allocationByStrategy
+            );
 
             backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getLowPrice());
             backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getHighPrice());
@@ -212,7 +217,7 @@ public class BacktestCoordinatorService {
         return summary;
     }
 
-    private boolean handleListenerStep(
+    private void handleListenerStep(
             BacktestRun backtestRun,
             BacktestState state,
             MarketData monitorCandle
@@ -232,10 +237,8 @@ public class BacktestCoordinatorService {
             allActivePositions.addAll(state.getActiveTradePositions());
         }
         if (allActivePositions.isEmpty()) {
-            return false;
+            return;
         }
-
-        boolean anyClosed = false;
 
         for (BacktestTradePosition position : allActivePositions) {
             if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
@@ -271,11 +274,7 @@ public class BacktestCoordinatorService {
                     listenerDecision.getExitReason(),
                     monitorCandle.getEndTime()
             );
-
-            anyClosed = true;
         }
-
-        return anyClosed;
     }
 
     /**
@@ -291,7 +290,7 @@ public class BacktestCoordinatorService {
             MarketData monitorCandle,
             List<StrategyExecutorEntry> executors,
             StrategyRequirements requirements,
-            BiasData biasData,
+            Map<String, BiasData> biasByStrategy,
             Map<String, IntervalContext> perStrategyContext,
             Map<String, BigDecimal> allocationByStrategy
     ) {
@@ -320,11 +319,12 @@ public class BacktestCoordinatorService {
             boolean strategyHasTrade = hasOpenTradeFor(state, only.code());
 
             AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, only.code(), ic.interval(), allocationByStrategy);
+            BiasData onlyBias = biasFor(biasByStrategy, only.code());
             EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
                     backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
                     positionSnapshot, openPositionCount, strategyHasTrade,
                     buildExecutionMetadata(backtestRun, strategyHasTrade),
-                    syntheticAs, requirements, biasData, ic.sortedFeatures(), monitorCandle);
+                    syntheticAs, requirements, onlyBias, ic.sortedFeatures(), monitorCandle);
 
             StrategyDecision decision = only.executor().execute(enrichedContext);
             log.debug("Strategy decision reason={}", decision.getReason());
@@ -332,10 +332,19 @@ public class BacktestCoordinatorService {
             return;
         }
 
-        // ── Multi-strategy orchestrator (Phase B1 cap + B2 multi-interval) ──
-        int cap = backtestRun.getMaxConcurrentStrategies() != null
-                ? backtestRun.getMaxConcurrentStrategies()
-                : 1;
+        // ── Multi-strategy orchestrator (Phase B1 + B2 multi-interval) ──
+        //
+        // Cap semantics match LiveOrchestratorCoordinatorService: at most one
+        // active trade (or queued pending entry) per (account, interval)
+        // tuple. Live enforces this implicitly by stopping fan-out at the
+        // first opener within an interval-group; backtest enforces it via
+        // the intervalGroupBusy() check in the entry loop below.
+        //
+        // The legacy backtestRun.maxConcurrentStrategies field is no longer
+        // consulted — kept on the entity for backwards-compat with persisted
+        // runs, but ineffective. Per-interval routing yields up to N
+        // concurrent trades naturally (where N = number of distinct
+        // intervals in use), matching how the live engine behaves.
 
         // (1) Existing owners manage their trades — but ONLY when this
         // monitor tick aligns with the owner's strategy interval.
@@ -357,11 +366,12 @@ public class BacktestCoordinatorService {
 
             AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, ownerEntry.code(), ic.interval(), allocationByStrategy);
             StrategyRequirements ownerRequirements = ownerEntry.executor().getRequirements();
+            BiasData ownerBias = biasFor(biasByStrategy, ownerEntry.code());
             EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
                     backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
                     ownerSnapshot, ownerOpenCount, true,
                     buildExecutionMetadata(backtestRun, true),
-                    syntheticAs, ownerRequirements, biasData, ic.sortedFeatures(), monitorCandle);
+                    syntheticAs, ownerRequirements, ownerBias, ic.sortedFeatures(), monitorCandle);
 
             StrategyDecision decision = ownerEntry.executor().execute(enrichedContext);
             log.debug("Orchestrator active-trade | owner={} interval={} reason={}",
@@ -369,28 +379,32 @@ public class BacktestCoordinatorService {
             backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
         }
 
-        // (2) Strategies without a trade can fire entries — gated by cap
-        // AND by whether their own timeframe has a bar closing at this tick.
+        // (2) Strategies without a trade can fire entries — gated by the
+        // per-interval-group cap (live parity) AND by whether their own
+        // timeframe has a bar closing at this tick.
         for (StrategyExecutorEntry entry : executors) {
             if (state.hasActiveTradeFor(entry.code())) continue;
             // Skip strategies that already have a pending entry queued —
             // storePendingEntry would silently reject anyway, but filtering
             // here avoids running the strategy executor for nothing.
             if (state.hasPendingEntryFor(entry.code())) continue;
-            // Cap check counts BOTH active trades and pending entries:
-            // pending entries fill on the next bar and become active, so
-            // they're part of the future concurrent-strategy count. Without
-            // this, multiple strategies signaling entries on the same monitor
-            // candle could each queue a pending and all fill next bar,
-            // bypassing maxConcurrentStrategies.
-            int futureActive = state.countActiveTrades() + state.countPendingEntries();
-            if (futureActive >= cap) {
-                log.debug("Orchestrator entry skipped | strategy={} reason=cap (active={} pending={} cap={})",
-                        entry.code(), state.countActiveTrades(), state.countPendingEntries(), cap);
-                break;
-            }
+
             IntervalContext ic = perStrategyContext.get(entry.code());
             if (ic == null) continue;
+
+            // Per-interval-group cap (matches live's
+            // LiveOrchestratorCoordinatorService.fanOutForEntry semantic):
+            // skip if any other strategy on THIS interval already holds an
+            // active trade or pending entry. With sequential iteration, the
+            // first strategy in declaration order to fire an entry on this
+            // interval claims the slot — subsequent strategies on the same
+            // interval are skipped this tick.
+            if (intervalGroupBusy(state, executors, ic.interval(), perStrategyContext)) {
+                log.debug("Orchestrator entry skipped | strategy={} reason=interval-group-busy interval={}",
+                        entry.code(), ic.interval());
+                continue;
+            }
+
             MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
             if (strategyCandle == null) continue;
             FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
@@ -403,11 +417,12 @@ public class BacktestCoordinatorService {
 
             AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, entry.code(), ic.interval(), allocationByStrategy);
             StrategyRequirements entryRequirements = entry.executor().getRequirements();
+            BiasData entryBias = biasFor(biasByStrategy, entry.code());
             EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
                     backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
                     entrySnapshot, 0, false,
                     buildExecutionMetadata(backtestRun, false),
-                    syntheticAs, entryRequirements, biasData,
+                    syntheticAs, entryRequirements, entryBias,
                     ic.sortedFeatures(), monitorCandle);
 
             StrategyDecision decision = entry.executor().execute(enrichedContext);
@@ -599,6 +614,78 @@ public class BacktestCoordinatorService {
                 || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
     }
 
+    /**
+     * Live-parity bias loading: each strategy's enrichment receives its OWN
+     * bias data based on its own {@code requirements.biasInterval}. The
+     * legacy mergeRequirements + single preloadBiasData path served the
+     * same bias series to all strategies, which silently fed the wrong
+     * data to every strategy except the first.
+     * <p>
+     * Loads are cached by biasInterval — two strategies that want the same
+     * bias timeframe share a single DB query.
+     */
+    private Map<String, BiasData> preloadBiasDataPerStrategy(
+            BacktestRun backtestRun, List<StrategyExecutorEntry> executors
+    ) {
+        Map<String, BiasData> byInterval = new HashMap<>();
+        Map<String, BiasData> byStrategy = new LinkedHashMap<>();
+        BiasData empty = new BiasData(List.of(), Map.of());
+
+        for (StrategyExecutorEntry entry : executors) {
+            StrategyRequirements req = entry.executor().getRequirements();
+            if (req == null
+                    || !req.isRequireBiasTimeframe()
+                    || req.getBiasInterval() == null
+                    || req.getBiasInterval().isBlank()) {
+                byStrategy.put(entry.code(), empty);
+                continue;
+            }
+            String biasInterval = req.getBiasInterval();
+            BiasData loaded = byInterval.computeIfAbsent(biasInterval,
+                    k -> loadBiasFor(backtestRun, k));
+            byStrategy.put(entry.code(), loaded);
+        }
+        return byStrategy;
+    }
+
+    /** Look up a strategy's bias series; falls back to an empty one when missing. */
+    private BiasData biasFor(Map<String, BiasData> biasByStrategy, String strategyCode) {
+        if (biasByStrategy == null) return new BiasData(List.of(), Map.of());
+        BiasData b = biasByStrategy.get(strategyCode);
+        return b == null ? new BiasData(List.of(), Map.of()) : b;
+    }
+
+    private BiasData loadBiasFor(BacktestRun backtestRun, String biasInterval) {
+        List<MarketData> biasCandles = marketDataRepository.findBySymbolIntervalAndRange(
+                backtestRun.getAsset(), biasInterval,
+                backtestRun.getStartTime(), backtestRun.getEndTime());
+
+        List<FeatureStore> biasFeatures = featureStoreRepository.findBySymbolIntervalAndRange(
+                backtestRun.getAsset(), biasInterval,
+                backtestRun.getStartTime(), backtestRun.getEndTime());
+
+        Map<LocalDateTime, FeatureStore> biasFeatureByStartTime = biasFeatures == null
+                ? Map.of()
+                : biasFeatures.stream()
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toMap(
+                                FeatureStore::getStartTime,
+                                Function.identity(),
+                                (existing, replacement) -> existing));
+
+        List<MarketData> sortedBiasCandles = biasCandles == null
+                ? List.of()
+                : biasCandles.stream()
+                        .filter(Objects::nonNull)
+                        .sorted(Comparator.comparing(MarketData::getEndTime))
+                        .toList();
+
+        log.info("Loaded bias stream | symbol={} biasInterval={} candles={} features={}",
+                backtestRun.getAsset(), biasInterval, sortedBiasCandles.size(),
+                biasFeatures == null ? 0 : biasFeatures.size());
+        return new BiasData(sortedBiasCandles, biasFeatureByStartTime);
+    }
+
     private BiasData preloadBiasData(BacktestRun backtestRun, StrategyRequirements requirements) {
         if (requirements == null
                 || !requirements.isRequireBiasTimeframe()
@@ -731,28 +818,6 @@ public class BacktestCoordinatorService {
                 && positions.stream().anyMatch(p -> "OPEN".equalsIgnoreCase(p.getStatus()));
     }
 
-    /**
-     * Listener-step gating only — "is there ANY open trade across the entire
-     * cap that needs the strategy step to fire on this monitor tick?"
-     */
-    private boolean hasAnyOpenTrade(BacktestState state) {
-        if (state == null) return false;
-        Map<String, List<BacktestTradePosition>> byStrategy = state.getActiveTradePositionsByStrategy();
-        if (byStrategy != null && !byStrategy.isEmpty()) {
-            for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
-                if (perStrategy == null) continue;
-                for (BacktestTradePosition p : perStrategy) {
-                    if ("OPEN".equalsIgnoreCase(p.getStatus())) return true;
-                }
-            }
-            return false;
-        }
-        // Legacy mirror fallback (single-strategy runs).
-        return state.getActiveTrade() != null
-                && state.getActiveTradePositions() != null
-                && state.getActiveTradePositions().stream().anyMatch(p -> "OPEN".equalsIgnoreCase(p.getStatus()));
-    }
-
     private BacktestTrade strategyTrade(BacktestState state, String strategyCode) {
         if (state == null) return null;
         Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
@@ -808,13 +873,63 @@ public class BacktestCoordinatorService {
     }
 
     /**
-     * Resolves a {@link StrategyExecutorEntry} for every strategy code in the run,
-     * preserving the declared order (= priority order for orchestrator fan-out).
+     * Resolves a {@link StrategyExecutorEntry} for every strategy code in the
+     * run, sorted ascending by {@code AccountStrategy.priorityOrder} —
+     * matching live's {@code LiveOrchestratorCoordinatorService.process}
+     * ordering. Strategies without a resolvable persistent AS (or with no
+     * priority value) sort to the end with a neutral default; ties fall
+     * back to declaration order via {@link Comparator#thenComparingInt}.
      */
     private List<StrategyExecutorEntry> resolveStrategyExecutors(BacktestRun backtestRun) {
-        return resolveStrategyCodeList(backtestRun).stream()
-                .map(code -> new StrategyExecutorEntry(code, strategyExecutorFactory.get(code)))
+        List<String> codes = resolveStrategyCodeList(backtestRun);
+        Map<String, Integer> priorityByCode = resolvePriorityOrders(backtestRun, codes);
+
+        // Stable sort: priorityOrder asc, declaration index asc on tie.
+        return java.util.stream.IntStream.range(0, codes.size())
+                .mapToObj(idx -> {
+                    String code = codes.get(idx);
+                    return new IndexedExecutor(
+                            idx,
+                            priorityByCode.getOrDefault(code, Integer.MAX_VALUE),
+                            new StrategyExecutorEntry(code, strategyExecutorFactory.get(code))
+                    );
+                })
+                .sorted(Comparator.<IndexedExecutor>comparingInt(e -> e.priority)
+                        .thenComparingInt(e -> e.declarationIndex))
+                .map(e -> e.entry)
                 .toList();
+    }
+
+    /** Carrier used only inside {@link #resolveStrategyExecutors}'s sort. */
+    private record IndexedExecutor(int declarationIndex, int priority, StrategyExecutorEntry entry) {}
+
+    /**
+     * Look up each strategy's persistent {@code AccountStrategy.priorityOrder}.
+     * Caches the lookup (resolveAllocationsForRun also queries findById, so
+     * if/when the two paths get unified, this becomes a free lookup).
+     * Strategies with no resolvable AS or null priority map to MAX_VALUE
+     * (sort to end).
+     */
+    private Map<String, Integer> resolvePriorityOrders(BacktestRun backtestRun, List<String> codes) {
+        Map<String, Integer> out = new HashMap<>();
+        Map<String, UUID> idMap = backtestRun.getStrategyAccountStrategyIds();
+
+        for (String code : codes) {
+            UUID resolvedId = (idMap != null && code != null && idMap.containsKey(code))
+                    ? idMap.get(code)
+                    : backtestRun.getAccountStrategyId();
+            if (resolvedId == null) {
+                out.put(code, Integer.MAX_VALUE);
+                continue;
+            }
+            AccountStrategy persisted = accountStrategyRepository.findById(resolvedId).orElse(null);
+            if (persisted != null && persisted.getPriorityOrder() != null) {
+                out.put(code, persisted.getPriorityOrder());
+            } else {
+                out.put(code, Integer.MAX_VALUE);
+            }
+        }
+        return out;
     }
 
     /**
@@ -859,6 +974,31 @@ public class BacktestCoordinatorService {
                 .filter(e -> code.equalsIgnoreCase(e.code()))
                 .findFirst()
                 .orElse(null);
+    }
+
+    /**
+     * Live-parity per-interval-group cap. Returns true when any strategy on
+     * the given interval already holds an active trade or a queued pending
+     * entry — at which point no other strategy on that interval may open
+     * a new trade until the slot frees up. Mirrors
+     * {@link id.co.blackheart.service.live.LiveOrchestratorCoordinatorService}'s
+     * fan-out-stops-at-first-opener pattern.
+     */
+    private boolean intervalGroupBusy(
+            BacktestState state,
+            List<StrategyExecutorEntry> executors,
+            String interval,
+            Map<String, IntervalContext> perStrategyContext
+    ) {
+        if (interval == null) return false;
+        for (StrategyExecutorEntry entry : executors) {
+            IntervalContext ic = perStrategyContext.get(entry.code());
+            if (ic == null) continue;
+            if (!interval.equals(ic.interval())) continue;
+            if (state.hasActiveTradeFor(entry.code())) return true;
+            if (state.hasPendingEntryFor(entry.code())) return true;
+        }
+        return false;
     }
 
     /**

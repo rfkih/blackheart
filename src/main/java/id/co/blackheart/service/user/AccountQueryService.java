@@ -130,6 +130,7 @@ public class AccountQueryService {
                 .createdTime(a.getCreatedTime())
                 .maxConcurrentLongs(a.getMaxConcurrentLongs())
                 .maxConcurrentShorts(a.getMaxConcurrentShorts())
+                .maxConcurrentTrades(a.getMaxConcurrentTrades())
                 .volTargetingEnabled(a.getVolTargetingEnabled())
                 .bookVolTargetPct(a.getBookVolTargetPct())
                 .build();
@@ -159,6 +160,16 @@ public class AccountQueryService {
             }
             account.setMaxConcurrentShorts(req.getMaxConcurrentShorts());
         }
+        if (req.getMaxConcurrentTrades() != null) {
+            // Sentinel value 0 from the wire could mean "unset" — treat any
+            // value < 1 as "clear the cap" (null in DB). Upper bound mirrors
+            // the per-direction caps.
+            int t = req.getMaxConcurrentTrades();
+            if (t > 20) {
+                throw new IllegalArgumentException("maxConcurrentTrades must be between 0 and 20");
+            }
+            account.setMaxConcurrentTrades(t < 1 ? null : t);
+        }
         if (req.getVolTargetingEnabled() != null) {
             account.setVolTargetingEnabled(req.getVolTargetingEnabled());
         }
@@ -177,6 +188,12 @@ public class AccountQueryService {
     public static class RiskConfigRequest {
         private Integer maxConcurrentLongs;
         private Integer maxConcurrentShorts;
+        /**
+         * Total concurrent open trades across all strategies. {@code null}
+         * leaves the field unchanged. Pass {@code 0} (or any value &lt; 1)
+         * to clear the cap; values 1–20 set a hard total cap.
+         */
+        private Integer maxConcurrentTrades;
         private Boolean volTargetingEnabled;
         private BigDecimal bookVolTargetPct;
     }
