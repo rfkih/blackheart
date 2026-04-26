@@ -467,8 +467,10 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
         BigDecimal score = calculateShortSignalScore(f, p);
         if (score.compareTo(p.getMinSignalScore()) < 0) return null;
 
-        BigDecimal notional = strategyHelper.calculateEntryNotional(ctx, SIDE_SHORT);
-        if (notional.compareTo(ZERO) <= 0) return hold(ctx, "TPR short notional zero");
+        // SHORT executor reads `positionSize` (BTC qty) — switch to the BTC
+        // helper so the value is in the right currency.
+        BigDecimal positionSize = strategyHelper.calculateShortPositionSize(ctx);
+        if (positionSize.compareTo(ZERO) <= 0) return hold(ctx, "TPR short position size zero");
 
         log.info("TPR SHORT ENTRY | time={} close={} ema20={} stop={} tp1={} risk%={} score={}",
                 md.getEndTime(), entry, ema20, stop, tp1,
@@ -490,7 +492,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
                 .regimeScore(resolveRegimeScore(ctx))
                 .riskMultiplier(resolveRiskMultiplier(ctx))
                 .jumpRiskScore(resolveJumpRisk(ctx))
-                .positionSize(notional)
+                .positionSize(positionSize)
                 .stopLossPrice(stop)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(tp1)

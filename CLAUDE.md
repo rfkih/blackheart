@@ -161,7 +161,7 @@ LSR, VCB, and VBO support per-`accountStrategyId` overrides in PostgreSQL:
 - `DefaultStrategyContextEnrichmentService` skips live DB queries when `source == "backtest"` — do not break this guard.
 - `previousFeatureStore` must be populated for strategies declaring `requirePreviousFeatureStore = true`; live loads from DB, backtest sets it manually.
 - Live bias candle must use `findLatestCompletedBySymbolAndInterval` (completed), not `findLatestBySymbolAndInterval` (may return forming candle).
-- `executeOpenShort` in `LiveTradingDecisionExecutorService` reads `decision.getNotionalSize()` — strategies must set `notionalSize`, not `positionSize`, for SHORT entries.
+- Live entry sizing fields in `LiveTradingDecisionExecutorService`: `executeOpenLong` reads `decision.getNotionalSize()` (USDT, checked against the USDT portfolio balance); `executeOpenShort` reads `decision.getPositionSize()` (BTC qty, checked against the BTC portfolio balance). Strategies must set the correct field in the correct currency or the executor silently falls back to its own sizing. For SHORT, use `StrategyHelper.calculateShortPositionSize` (BTC), **not** `calculateEntryNotional(SIDE_SHORT)` which returns USDT and will always fail the BTC balance guard.
 - `buildPositionSnapshot` in `LiveTradingCoordinatorService` returns `hasOpenPosition=false` when no OPEN `TradePosition` rows exist, regardless of parent `Trades` status.
 
 ### Code Change Format

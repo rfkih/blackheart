@@ -361,8 +361,11 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         BigDecimal score = calculateShortSignalScore(md, f, prev);
         if (score.compareTo(p.getMinSignalScore()) < 0) return null;
 
-        BigDecimal notional = strategyHelper.calculateEntryNotional(ctx, SIDE_SHORT);
-        if (notional.compareTo(ZERO) <= 0) return hold(ctx, "VBO short notional zero");
+        // SHORT executor reads `positionSize` and matches it against the BTC
+        // balance; `calculateEntryNotional` returns USDT and would always be
+        // > BTC qty, so the executor's balance guard would silently reject.
+        BigDecimal positionSize = strategyHelper.calculateShortPositionSize(ctx);
+        if (positionSize.compareTo(ZERO) <= 0) return hold(ctx, "VBO short position size zero");
 
         log.info("VBO SHORT ENTRY | time={} close={} lowerBb={} stop={} tp1={} risk%={} score={}",
                 md.getEndTime(), entry, lowerBb, stop, tp1,
@@ -384,7 +387,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                 .regimeScore(resolveRegimeScore(ctx))
                 .riskMultiplier(resolveRiskMultiplier(ctx))
                 .jumpRiskScore(resolveJumpRisk(ctx))
-                .positionSize(notional)
+                .positionSize(positionSize)
                 .stopLossPrice(stop)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(tp1)
