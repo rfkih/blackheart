@@ -59,6 +59,16 @@ public class BacktestCoordinatorService {
      *  it on every single tick. */
     private static final int PROGRESS_TICK_EVERY = 100;
 
+    /**
+     * Top-level backtest entry point. The method is long because it owns
+     * three sequential phases — data load + validation, the candle loop,
+     * and post-loop finalisation (force-close, equity, persistence). Each
+     * phase needs the locals from the prior one, and breaking them up into
+     * helpers either pushes 6+ values through a return record or allocates
+     * mutable holders. Both shift the smell rather than fix it. The phases
+     * are clearly delimited by section comments.
+     */
+    @SuppressWarnings("java:S138")
     public BacktestExecutionSummary execute(BacktestRun backtestRun) {
         validateBacktestRun(backtestRun);
 
@@ -284,6 +294,21 @@ public class BacktestCoordinatorService {
      * one bar" behaviour because every strategy's IntervalContext points
      * at the same shared maps.
      */
+    /**
+     * Multi-strategy orchestration on every monitor tick. The two phases
+     * (existing-owners management, then per-interval entry fan-out) need to
+     * share the same per-strategy state (snapshot, count, executionMetadata,
+     * resolved interval context) and run in lock-step within one tick —
+     * that's what makes this method long. Splitting it further pushes the
+     * shared state into helper-method parameter lists, trading one Sonar
+     * smell (S138 method length) for another (S107 too many parameters).
+     * The single-strategy fast path is already extracted into
+     * {@link #handleSingleStrategyStep}; the per-strategy helpers
+     * ({@code buildPositionSnapshotFor}, {@code intervalGroupBusy},
+     * {@code biasFor}, {@code buildSyntheticAccountStrategy}) keep the
+     * remaining body declarative.
+     */
+    @SuppressWarnings({"java:S138", "java:S107"})
     private void handleStrategyStep(
             BacktestRun backtestRun,
             BacktestState state,
@@ -301,34 +326,9 @@ public class BacktestCoordinatorService {
         // downstream code stashes the map for later use.
 
         if (executors.size() == 1) {
-            // ── Single-strategy path (unchanged behaviour) ────────────────────
-            StrategyExecutorEntry only = executors.getFirst();
-            IntervalContext ic = perStrategyContext.get(only.code());
-            if (ic == null) return;
-            MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
-            if (strategyCandle == null) return;
-            FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
-            if (strategyFeature == null) {
-                log.warn("FeatureStore missing for symbol={} interval={} startTime={}",
-                        backtestRun.getAsset(), ic.interval(), strategyCandle.getStartTime());
-                return;
-            }
-
-            PositionSnapshot positionSnapshot = buildPositionSnapshotFor(state, only.code());
-            int openPositionCount = countOpenPositionsFor(state, only.code());
-            boolean strategyHasTrade = hasOpenTradeFor(state, only.code());
-
-            AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, only.code(), ic.interval(), allocationByStrategy);
-            BiasData onlyBias = biasFor(biasByStrategy, only.code());
-            EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
-                    backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
-                    positionSnapshot, openPositionCount, strategyHasTrade,
-                    buildExecutionMetadata(backtestRun, strategyHasTrade),
-                    syntheticAs, requirements, onlyBias, ic.sortedFeatures(), monitorCandle);
-
-            StrategyDecision decision = only.executor().execute(enrichedContext);
-            log.debug("Strategy decision reason={}", decision.getReason());
-            backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+            handleSingleStrategyStep(backtestRun, state, monitorCandle,
+                    executors.getFirst(), requirements,
+                    biasByStrategy, perStrategyContext, allocationByStrategy);
             return;
         }
 
@@ -435,6 +435,51 @@ public class BacktestCoordinatorService {
                 backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
             }
         }
+    }
+
+    /**
+     * Single-strategy fast path. Extracted from {@link #handleStrategyStep} so
+     * the multi-strategy orchestrator method stays under the size threshold;
+     * behaviour is identical to the pre-extraction inline block.
+     */
+    @SuppressWarnings("java:S107")
+    private void handleSingleStrategyStep(
+            BacktestRun backtestRun,
+            BacktestState state,
+            MarketData monitorCandle,
+            StrategyExecutorEntry only,
+            StrategyRequirements requirements,
+            Map<String, BiasData> biasByStrategy,
+            Map<String, IntervalContext> perStrategyContext,
+            Map<String, BigDecimal> allocationByStrategy
+    ) {
+        IntervalContext ic = perStrategyContext.get(only.code());
+        if (ic == null) return;
+        MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
+        if (strategyCandle == null) return;
+        FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
+        if (strategyFeature == null) {
+            log.warn("FeatureStore missing for symbol={} interval={} startTime={}",
+                    backtestRun.getAsset(), ic.interval(), strategyCandle.getStartTime());
+            return;
+        }
+
+        PositionSnapshot positionSnapshot = buildPositionSnapshotFor(state, only.code());
+        int openPositionCount = countOpenPositionsFor(state, only.code());
+        boolean strategyHasTrade = hasOpenTradeFor(state, only.code());
+
+        AccountStrategy syntheticAs = buildSyntheticAccountStrategy(
+                backtestRun, only.code(), ic.interval(), allocationByStrategy);
+        BiasData onlyBias = biasFor(biasByStrategy, only.code());
+        EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
+                backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
+                positionSnapshot, openPositionCount, strategyHasTrade,
+                buildExecutionMetadata(backtestRun, strategyHasTrade),
+                syntheticAs, requirements, onlyBias, ic.sortedFeatures(), monitorCandle);
+
+        StrategyDecision decision = only.executor().execute(enrichedContext);
+        log.debug("Strategy decision reason={}", decision.getReason());
+        backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
     }
 
     /**
@@ -551,7 +596,14 @@ public class BacktestCoordinatorService {
     /**
      * Builds a BaseStrategyContext, enriches it, and applies bias + previousFeatureStore.
      * Extracted to avoid duplicating this block across single/multi-strategy paths.
+     *
+     * <p>Suppression: this method is an internal aggregator across the
+     * orchestrator's per-strategy state — every parameter is genuinely
+     * needed and bundling them into a wrapper record would just shift the
+     * param noise to the wrapper's constructor. Sonar S107 is a heuristic
+     * for public APIs; this is a private helper.
      */
+    @SuppressWarnings("java:S107")
     private EnrichedStrategyContext buildAndEnrichContext(
             BacktestRun backtestRun,
             BacktestState state,

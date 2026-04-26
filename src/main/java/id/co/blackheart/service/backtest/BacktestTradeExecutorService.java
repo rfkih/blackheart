@@ -181,6 +181,14 @@ public class BacktestTradeExecutorService {
         }
     }
 
+    /**
+     * Suppression: this method is the trade-open aggregator — every parameter
+     * is genuinely needed (decision, side, both feature stores, resolved
+     * interval for stamping, fill price, fill timestamp). A wrapper record
+     * would just shift the param noise to its constructor. Sonar S107 is a
+     * heuristic for public APIs; this is a private helper.
+     */
+    @SuppressWarnings("java:S107")
     private void openTrade(
             BacktestRun backtestRun,
             BacktestState state,

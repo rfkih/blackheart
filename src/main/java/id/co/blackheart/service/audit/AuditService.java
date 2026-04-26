@@ -62,10 +62,16 @@ public class AuditService {
                     .createdAt(LocalDateTime.now())
                     .build();
             auditEventRepository.save(event);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException e) { // NOSONAR java:S2221 — see rationale in javadoc
             // Don't break the user flow on audit failure — surface it loudly
             // for ops to investigate. The mutation that the caller already
             // performed will still commit in the surrounding transaction.
+            // Catching RuntimeException broadly is deliberate: any of
+            // Jackson serialization, JPA persist, transaction-manager, or
+            // future driver failures should be logged and swallowed here,
+            // never propagated to the user. The audit log is forensic
+            // infrastructure — it must never block a write that already
+            // succeeded in the surrounding transaction.
             log.warn("Failed to record audit event | action={} entityType={} entityId={} actor={}",
                     action, entityType, entityId, actorUserId, e);
         }
