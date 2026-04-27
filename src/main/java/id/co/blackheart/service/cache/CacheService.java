@@ -26,8 +26,10 @@ public class CacheService {
     private static final String TRADE_POSITIONS_KEY_PREFIX    = "tradePositions:";
     private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "accountActiveTrades:";
     private static final String LATEST_PRICE_KEY_PREFIX       = "latestPrice:";
+    private static final String MISSING_PRICE_KEY_PREFIX      = "latestPrice:missing:";
 
     private static final Duration LATEST_PRICE_TTL       = Duration.ofMinutes(5);
+    private static final Duration MISSING_PRICE_TTL      = Duration.ofMinutes(1);
     private static final Duration TRADE_TTL              = Duration.ofHours(24);
     private static final Duration TRADE_POSITIONS_TTL    = Duration.ofHours(24);
     private static final Duration ACCOUNT_TRADE_SET_TTL  = Duration.ofHours(48);
@@ -87,6 +89,37 @@ public class CacheService {
             // Do not throw — a parse error must not crash strategy execution.
             log.warn("Failed to parse latest price from cache | symbol={} raw={}", symbol, value);
             return null;
+        }
+    }
+
+    /**
+     * Negative cache for symbols Binance has no quote for (e.g. an asset
+     * without a USDT pair). Stops the portfolio read path from re-hitting
+     * Binance on every refresh for the same dud symbol. Short TTL so a
+     * newly-listed pair recovers quickly.
+     */
+    public void markPriceUnavailable(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return;
+        }
+        String key = MISSING_PRICE_KEY_PREFIX + symbol;
+        try {
+            redisTemplate.opsForValue().set(key, "1", MISSING_PRICE_TTL);
+        } catch (Exception e) {
+            log.warn("Failed to mark price unavailable | symbol={}", symbol, e);
+        }
+    }
+
+    public boolean isPriceUnavailable(String symbol) {
+        if (symbol == null) {
+            return false;
+        }
+        String key = MISSING_PRICE_KEY_PREFIX + symbol;
+        try {
+            return Boolean.TRUE.equals(redisTemplate.hasKey(key));
+        } catch (Exception e) {
+            log.warn("Failed to check price unavailable | symbol={}", symbol, e);
+            return false;
         }
     }
 

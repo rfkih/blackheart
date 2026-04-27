@@ -60,4 +60,17 @@ public class RestTemplateConfig {
         factory.setReadTimeout(10_000);
         return new RestTemplate(factory);
     }
+
+    /**
+     * Dedicated RestTemplate for Binance public ticker calls on user-facing
+     * read paths (e.g. portfolio price prefetch). Bounded timeouts so a
+     * Binance hiccup never stalls a portfolio response.
+     */
+    @Bean("binanceRestTemplate")
+    public RestTemplate binanceRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3_000);
+        factory.setReadTimeout(5_000);
+        return new RestTemplate(factory);
+    }
 }
