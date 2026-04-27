@@ -104,6 +104,10 @@ dependencies {
 		// Bean Validation
 		implementation 'org.springframework.boot:spring-boot-starter-validation'
 
+		// Transactional email — JavaMailSender + Spring's MimeMessageHelper.
+		// SMTP target is configurable; default wiring assumes Mailtrap.
+		implementation 'org.springframework.boot:spring-boot-starter-mail'
+
 		// JWT (JJWT 0.12.x — jjwt-impl and jjwt-jackson are runtime-only)
 		implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
 		runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'

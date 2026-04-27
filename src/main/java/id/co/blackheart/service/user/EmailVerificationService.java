@@ -4,6 +4,7 @@ import id.co.blackheart.model.EmailVerificationToken;
 import id.co.blackheart.model.User;
 import id.co.blackheart.repository.EmailVerificationTokenRepository;
 import id.co.blackheart.repository.UserRepository;
+import id.co.blackheart.service.email.EmailService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,15 +17,8 @@ import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.UUID;
 
-/**
- * Email-verification orchestration. Mirrors {@link PasswordResetService}'s
- * token mechanism and the same "log the URL until SMTP is wired" delivery.
- *
- * <p>Verification is <b>not</b> a hard gate at login today — register
- * authenticates the user immediately and the dashboard surfaces a "verify
- * your email" banner until the user confirms. This keeps the flow honest
- * for solo operators while leaving room to flip the gate on later.
- */
+// Mirrors PasswordResetService. Verification is NOT a login gate today;
+// the dashboard shows a "verify your email" banner until confirmed.
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -35,6 +29,7 @@ public class EmailVerificationService {
 
     private final UserRepository userRepository;
     private final EmailVerificationTokenRepository tokenRepository;
+    private final EmailService emailService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Value("${app.email-verification.ttl-hours:24}")
@@ -69,10 +64,16 @@ public class EmailVerificationService {
                 .build();
         tokenRepository.save(token);
 
-        // TODO email: replace with transactional send.
         String verifyUrl = frontendVerifyUrl + "?token=" + token.getToken();
-        log.warn("EMAIL VERIFICATION TOKEN ISSUED | userId={} expiresAt={} url={}",
-                userId, token.getExpiresAt(), verifyUrl);
+        long ttlForEmail = ttlHours <= 0 ? DEFAULT_TTL_HOURS : ttlHours;
+        try {
+            emailService.sendEmailVerification(user.getEmail(), verifyUrl, ttlForEmail);
+        } catch (RuntimeException e) {
+            // Send failed — log the URL so ops can deliver it manually.
+            // EmailService already logged the exception detail.
+            log.warn("EMAIL VERIFICATION TOKEN ISSUED (email send failed) | userId={} expiresAt={} url={}",
+                    userId, token.getExpiresAt(), verifyUrl);
+        }
     }
 
     /**

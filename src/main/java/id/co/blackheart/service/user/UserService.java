@@ -75,9 +75,8 @@ public class UserService {
         User saved = userRepository.save(user);
         log.info("User registered: userId={}", saved.getUserId());
 
-        // Issue an email-verification token immediately. Today this just
-        // logs the verify URL for ops retrieval; once SMTP is wired in,
-        // EmailVerificationService is the single place to add the send.
+        // Issue an email-verification token immediately. EmailVerificationService
+        // sends via SMTP and falls back to a WARN-level URL log on send failure.
         try {
             emailVerificationService.issueVerificationToken(saved.getUserId());
         } catch (RuntimeException e) {

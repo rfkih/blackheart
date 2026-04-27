@@ -15,11 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-/**
- * Submission + admin-side read of contact-form messages. The submit path
- * is auth-gated (we always know who is writing); the admin reads are
- * gated at the controller via {@code @PreAuthorize}.
- */
+// Auth-gated submit + admin-only inbox reads (gating lives in the controller).
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -32,10 +28,6 @@ public class SupportMessageService {
     private final SupportMessageRepository supportMessageRepository;
     private final UserRepository userRepository;
 
-    /**
-     * Submit a new message. Always returns the saved row so the frontend
-     * can show a "thanks, ticket #abc123" confirmation.
-     */
     @Transactional
     public SupportMessage submit(UUID fromUserId, String subject, String body, String diagnostic) {
         User user = userRepository.findById(fromUserId)
@@ -55,10 +47,6 @@ public class SupportMessageService {
         return saved;
     }
 
-    /**
-     * Admin list. {@code status} is an optional filter — null returns the
-     * full inbox, newest first.
-     */
     public Page<SupportMessage> listForAdmin(String status, Pageable pageable) {
         if (status == null || status.isBlank()) {
             return supportMessageRepository.findAllByOrderByCreatedAtDesc(pageable);
@@ -66,16 +54,11 @@ public class SupportMessageService {
         return supportMessageRepository.findByStatusOrderByCreatedAtDesc(status.trim().toUpperCase(), pageable);
     }
 
-    /** Unread badge count for the admin nav. */
     public long countNew() {
         return supportMessageRepository.countByStatus(STATUS_NEW);
     }
 
-    /**
-     * Transition a message to a new status. Only NEW → READ stamps
-     * {@code readAt}; later transitions don't overwrite it (the original
-     * "first seen" timestamp is the useful audit datum).
-     */
+    // Only the first NEW → READ stamps readAt — that's the useful "first seen" datum.
     @Transactional
     public SupportMessage updateStatus(UUID id, String newStatus) {
         SupportMessage msg = supportMessageRepository.findById(id)

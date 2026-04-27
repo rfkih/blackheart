@@ -4,6 +4,7 @@ import id.co.blackheart.model.PasswordResetToken;
 import id.co.blackheart.model.User;
 import id.co.blackheart.repository.PasswordResetTokenRepository;
 import id.co.blackheart.repository.UserRepository;
+import id.co.blackheart.service.email.EmailService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,31 +19,10 @@ import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Password-reset orchestration. Issues single-use tokens with a fixed TTL
- * and verifies / consumes them on confirm.
- *
- * <p><b>Email delivery is intentionally out of scope for this service.</b>
- * The raw reset token is logged at {@code WARN} on the application log when
- * a request fires; whoever runs ops can grep the log and convey the URL to
- * the user manually until an SMTP / Mailgun / SES integration is wired in.
- * Once that integration exists, the {@code TODO email} block in
- * {@link #requestReset(String)} is the single place to add the send call.
- *
- * <p>Security properties:
- * <ul>
- *   <li>{@link #requestReset} returns the same response whether the email
- *       exists or not — prevents account enumeration via timing or status
- *       differences.</li>
- *   <li>Issuing a new token invalidates any prior unused tokens for the
- *       same user — "request reset twice" doesn't leave two live links.</li>
- *   <li>Tokens are one-shot: {@link #confirmReset} stamps {@code usedAt}
- *       on first success; replays 404.</li>
- *   <li>Tokens expire after {@link #DEFAULT_TTL_MINUTES} minutes; expired
- *       tokens 410, distinct from the 404 unknown-token case.</li>
- *   <li>Token is 32 random bytes, Base64-URL encoded — 256 bits of entropy.</li>
- * </ul>
- */
+// Single-use reset tokens with a fixed TTL. Same response for known + unknown
+// emails (no enumeration), one live token per user (re-request invalidates
+// the prior), one-shot consumption (replays 404), expired tokens 410.
+// Token is 32 random bytes, Base64-URL encoded (256 bits of entropy).
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -57,6 +37,7 @@ public class PasswordResetService {
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository tokenRepository;
     private final PasswordEncoder passwordEncoder;
+    private final EmailService emailService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Value("${app.password-reset.ttl-minutes:30}")
@@ -98,12 +79,16 @@ public class PasswordResetService {
                 .build();
         tokenRepository.save(token);
 
-        // TODO email: replace this WARN with a transactional email send via
-        // SMTP / SES / Mailgun. Until then the URL is admin-retrievable from
-        // the application log — solo-trader workflow.
         String resetUrl = frontendResetUrl + "?token=" + token.getToken();
-        log.warn("PASSWORD RESET TOKEN ISSUED | userId={} expiresAt={} url={}",
-                user.getUserId(), token.getExpiresAt(), resetUrl);
+        long ttlForEmail = ttlMinutes <= 0 ? DEFAULT_TTL_MINUTES : ttlMinutes;
+        try {
+            emailService.sendPasswordReset(user.getEmail(), resetUrl, ttlForEmail);
+        } catch (RuntimeException e) {
+            // Send failed — log the URL so ops can deliver it manually.
+            // EmailService already logged the exception detail.
+            log.warn("PASSWORD RESET TOKEN ISSUED (email send failed) | userId={} expiresAt={} url={}",
+                    user.getUserId(), token.getExpiresAt(), resetUrl);
+        }
     }
 
     /**

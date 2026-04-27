@@ -25,10 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * Support-message endpoints. Submission is open to any authenticated user;
- * the inbox + status mutations are admin-only.
- */
+// POST: any authenticated user. GET + PATCH: admin only.
 @RestController
 @RequestMapping("/api/v1/support")
 @RequiredArgsConstructor

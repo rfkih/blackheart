@@ -12,16 +12,9 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-/**
- * Single-use email-verification token. Same shape and lifecycle as
- * {@link PasswordResetToken}: issued at register-time (or via a resend
- * endpoint), delivered out-of-band, consumed once via /verify-email.
- *
- * <p>Until SMTP / SES / Mailgun is wired in, the verification URL is logged
- * at {@code WARN} so an operator can convey it to the user manually. The
- * register endpoint still authenticates the user immediately — verification
- * is a sticky reminder via dashboard banner, not a hard gate.
- */
+// Single-use email-verification token (same shape + lifecycle as
+// PasswordResetToken). Register authenticates immediately; verification
+// is a sticky dashboard reminder, not a hard gate.
 @Entity
 @Table(name = "email_verification_token")
 @Data

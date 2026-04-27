@@ -71,7 +71,7 @@ public class UserController {
             summary = "Request a password-reset token",
             description = "Always returns 200 — the response is the same whether or not the email matches a real "
                     + "account, to prevent enumeration. When the email matches, a token is issued and the reset "
-                    + "URL is logged at WARN level for ops retrieval (until SMTP is wired)."
+                    + "URL is delivered by email (with a WARN-level URL log on send failure for ops recovery)."
     )
     public ResponseEntity<ResponseDto> requestPasswordReset(
             @Valid @RequestBody id.co.blackheart.dto.request.PasswordResetRequestRequest request) {
