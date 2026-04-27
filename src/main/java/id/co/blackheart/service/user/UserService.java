@@ -35,6 +35,7 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final EmailVerificationService emailVerificationService;
 
     private static final String ROLE_USER    = "USER";
     private static final String STATUS_ACTIVE = "ACTIVE";
@@ -73,6 +74,18 @@ public class UserService {
 
         User saved = userRepository.save(user);
         log.info("User registered: userId={}", saved.getUserId());
+
+        // Issue an email-verification token immediately. Today this just
+        // logs the verify URL for ops retrieval; once SMTP is wired in,
+        // EmailVerificationService is the single place to add the send.
+        try {
+            emailVerificationService.issueVerificationToken(saved.getUserId());
+        } catch (RuntimeException e) {
+            // Don't fail the registration if the token issue stumbles —
+            // the user can request a resend from the dashboard banner.
+            log.warn("Failed to issue verification token at registration | userId={}",
+                    saved.getUserId(), e);
+        }
 
         return buildLoginResponse(saved);
     }

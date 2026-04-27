@@ -598,18 +598,94 @@ public class TechnicalIndicatorService {
     }
 
     /**
-     * Backfills VCB indicator fields (bbWidth, kcWidth, atrRatio, signedEr20 and
-     * their band values) for existing FeatureStore records that were saved before
-     * these columns were added to the computation pipeline.
+     * General feature-backfill across a date range. Recomputes ALL indicator
+     * columns the regular ingestion pipeline would produce — Bollinger
+     * Bands, Keltner Channels, ATR ratio, signed efficiency ratio, EMAs,
+     * RSI, MACD, ADX, Donchian, plus everything else
+     * {@link #computeIndicatorsAndStore} computes — for every candle in
+     * {@code [from, to]}.
      *
-     * Safe to call repeatedly — skips records where bb_width is already populated.
+     * <p>Two modes:
+     * <ul>
+     *   <li>{@code recompute=false} (default) — only fills candles that
+     *       have no FeatureStore row yet. Idempotent and safe to re-run
+     *       on a partially-populated range.</li>
+     *   <li>{@code recompute=true} — bulk-deletes every FeatureStore row
+     *       in the range, then recomputes from scratch. Use when indicator
+     *       code or parameters changed and existing rows are stale.</li>
+     * </ul>
      *
-     * @param symbol   e.g. "BTCUSDT"
-     * @param interval e.g. "1h"
-     * @param from     inclusive start of backfill window
-     * @param to       inclusive end of backfill window
-     * @return number of records updated
+     * <p>Returns the number of rows inserted.
+     *
+     * @param symbol     e.g. "BTCUSDT"
+     * @param interval   e.g. "1h"
+     * @param from       inclusive start of backfill window
+     * @param to         inclusive end of backfill window
+     * @param recompute  when true, delete existing rows in range before
+     *                   inserting fresh; when false, only fill missing rows
      */
+    @org.springframework.transaction.annotation.Transactional
+    public int backfillFeaturesInRange(String symbol, String interval,
+                                       LocalDateTime from, LocalDateTime to,
+                                       boolean recompute) {
+        List<MarketData> candlesInRange = marketDataRepository
+                .findBySymbolIntervalAndRange(symbol, interval, from, to);
+
+        if (candlesInRange == null || candlesInRange.isEmpty()) {
+            log.info("Feature backfill: no market_data found for {}/{} [{} → {}]",
+                    symbol, interval, from, to);
+            return 0;
+        }
+
+        candlesInRange.sort(Comparator.comparing(MarketData::getStartTime));
+
+        if (recompute) {
+            int deleted = featureStoreRepository
+                    .deleteBySymbolAndIntervalInRange(symbol, interval, from, to);
+            log.info("Feature backfill (recompute): deleted {} existing rows for {}/{} [{} → {}]",
+                    deleted, symbol, interval, from, to);
+        }
+
+        log.info("Feature backfill: {} candles to evaluate for {}/{} (recompute={})",
+                candlesInRange.size(), symbol, interval, recompute);
+
+        int inserted = 0;
+        int skipped = 0;
+        int failed = 0;
+
+        for (MarketData candle : candlesInRange) {
+            try {
+                // Reuses the canonical compute path — same indicators the
+                // live ingestion creates. Returns null if a row already
+                // exists at this start time (idempotent on missing-only mode).
+                FeatureStore fs = computeIndicatorsAndStoreByStartTime(
+                        symbol, interval, candle.getStartTime());
+                if (fs != null) {
+                    inserted++;
+                } else {
+                    skipped++;
+                }
+            } catch (RuntimeException e) {
+                failed++;
+                log.error("Feature backfill failed for {} {} startTime={}: {}",
+                        symbol, interval, candle.getStartTime(), e.getMessage());
+            }
+        }
+
+        log.info("Feature backfill complete: inserted={} skipped={} failed={} total={} for {}/{} [{} → {}]",
+                inserted, skipped, failed, candlesInRange.size(),
+                symbol, interval, from, to);
+        return inserted;
+    }
+
+    /**
+     * @deprecated Use {@link #backfillFeaturesInRange(String, String, LocalDateTime, LocalDateTime, boolean)}
+     * instead. This method only patches VCB-specific columns (bbWidth, kcWidth,
+     * atrRatio, signedEr20) on rows missing them, while the new general
+     * backfill recomputes the full feature set. Kept for back-compat with
+     * the legacy {@code /backfill-vcb} endpoint.
+     */
+    @Deprecated(since = "general-backfill")
     public int backfillVcbIndicators(String symbol, String interval,
                                      LocalDateTime from, LocalDateTime to) {
         List<FeatureStore> missing = featureStoreRepository

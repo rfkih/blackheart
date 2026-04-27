@@ -207,7 +207,10 @@ public class BacktestTradeExecutorService {
         String tradeInterval = (resolvedInterval != null && !resolvedInterval.isBlank())
                 ? resolvedInterval
                 : backtestRun.getInterval();
-        BigDecimal requestedQuoteAmount = resolveRequestedQuoteAmount(decision);
+        // Resolve the USDT-denominated trade amount BEFORE applying slippage:
+        // strategies size off the raw fill price, not the slipped one. SHORT
+        // decisions set positionSize in BTC; we convert to USDT here.
+        BigDecimal requestedQuoteAmount = resolveRequestedQuoteAmount(decision, rawEntryPrice);
 
         if (requestedQuoteAmount.compareTo(BigDecimal.ZERO) <= 0 || safe(rawEntryPrice).compareTo(BigDecimal.ZERO) <= 0) {
             log.warn("Backtest {} rejected | asset={} reason=Invalid size or entry price",
@@ -626,6 +629,52 @@ public class BacktestTradeExecutorService {
         return null;
     }
 
+    /**
+     * Pick the most representative exit reason across a multi-leg trade's
+     * positions. Priority — what the trader actually cares about first:
+     *
+     * <ol>
+     *   <li>{@code TAKE_PROFIT} — any leg that hit its TP. A TP1+RUNNER trade
+     *       where TP1 hit and the runner later trailed out is fundamentally a
+     *       "took profit" trade; the runner trail is a P&L-protection
+     *       mechanism, not the primary exit story.</li>
+     *   <li>{@code TRAILING_STOP} — any leg trailed out without a TP hit
+     *       happening first. The trade ran in our favour but reversed.</li>
+     *   <li>{@code STOP_LOSS} — original stop hit on any leg.</li>
+     *   <li>Fallback to the latest-closed leg's exit reason (preserves the
+     *       legacy single-leg behaviour for SINGLE-structure trades).</li>
+     * </ol>
+     *
+     * <p>Listener-side reason names are matched case-insensitively and
+     * substring-tolerant so future synonyms (e.g. {@code TP_HIT}) are caught.
+     */
+    private String aggregateExitReason(List<BacktestTradePosition> positions) {
+        if (positions == null || positions.isEmpty()) return null;
+
+        boolean anyTp = false;
+        boolean anyTrail = false;
+        boolean anyStop = false;
+        for (BacktestTradePosition p : positions) {
+            String r = p.getExitReason();
+            if (r == null) continue;
+            String upper = r.toUpperCase();
+            if (upper.contains("TAKE_PROFIT") || upper.contains("TP_HIT")) anyTp = true;
+            else if (upper.contains("TRAILING_STOP")) anyTrail = true;
+            else if (upper.contains("STOP_LOSS") || upper.contains("SL_HIT")) anyStop = true;
+        }
+        if (anyTp) return "TAKE_PROFIT";
+        if (anyTrail) return "TRAILING_STOP";
+        if (anyStop) return "STOP_LOSS";
+
+        // Nothing matched the standard set — fall through to the legacy
+        // last-leg behaviour (e.g. BACKTEST_END, MANUAL_CLOSE).
+        return positions.stream()
+                .filter(p -> p.getExitTime() != null)
+                .max(Comparator.comparing(BacktestTradePosition::getExitTime))
+                .map(BacktestTradePosition::getExitReason)
+                .orElse(null);
+    }
+
     private void refreshParentTradeState(BacktestState state, String strategyCode, LocalDateTime exitTime) {
         // Multi-trade aware: refresh THIS strategy's trade + positions, not
         // the legacy mirror's most-recently-added pair. The legacy mirror
@@ -733,12 +782,20 @@ public class BacktestTradeExecutorService {
                         realizedPnlAmount.divide(initialRisk, 8, RoundingMode.HALF_UP));
             }
 
-            // ── Exit reason / final stop — from last position to close ────────
+            // ── Exit reason / final stop ───────────────────────────────────────
+            // Aggregate across legs with priority: TAKE_PROFIT > TRAILING_STOP
+            // > STOP_LOSS > anything else. Picking only the last-closed leg's
+            // reason erased the TP hit on TP1+RUNNER structures: TP1 closes
+            // first as TAKE_PROFIT, the runner trails out later, and the
+            // parent ended up labeled TRAILING_STOP even when the trade was
+            // profitable on TP1. Final-stop / last-trailing fields still come
+            // from the latest-closed leg, since those describe the closing
+            // state of the trade as a whole.
+            trade.setExitReason(aggregateExitReason(allPositions));
             allPositions.stream()
                     .filter(p -> p.getExitTime() != null)
                     .max(Comparator.comparing(BacktestTradePosition::getExitTime))
                     .ifPresent(p -> {
-                        trade.setExitReason(p.getExitReason());
                         trade.setFinalStopLossPrice(p.getCurrentStopLossPrice());
                         trade.setLastTrailingStopPrice(p.getTrailingStopPrice());
                     });
@@ -768,7 +825,31 @@ public class BacktestTradeExecutorService {
         }
     }
 
-    private BigDecimal resolveRequestedQuoteAmount(StrategyDecision decision) {
+    /**
+     * Resolve the USDT-denominated quote amount for a trade decision.
+     *
+     * <p>Strategies set sizing on the decision in one of two units, matching
+     * how live trading consumes them:
+     * <ul>
+     *   <li><b>{@code notionalSize}</b> — USDT (quote-currency) amount.
+     *       Set by LONG entries via
+     *       {@link StrategyHelper#calculateEntryNotional(EnrichedStrategyContext, String)}.
+     *       Live's {@code executeOpenLong} reads this and checks against the
+     *       USDT portfolio balance.</li>
+     *   <li><b>{@code positionSize}</b> — base-asset (e.g. BTC) quantity.
+     *       Set by SHORT entries via
+     *       {@link StrategyHelper#calculateShortPositionSize(EnrichedStrategyContext)}.
+     *       Live's {@code executeOpenShort} reads this and checks against the
+     *       BTC portfolio balance.</li>
+     * </ul>
+     *
+     * <p>The backtest's internal cash math is USDT-denominated, so we convert
+     * a base-quantity {@code positionSize} to USDT via the fill price. Without
+     * this conversion, a SHORT decision setting {@code positionSize=0.2} (BTC)
+     * was being interpreted as {@code 0.2 USDT}, producing microscopic
+     * positions that silently looked like "no shorts execute".
+     */
+    private BigDecimal resolveRequestedQuoteAmount(StrategyDecision decision, BigDecimal entryPrice) {
         if (decision == null) {
             return BigDecimal.ZERO;
         }
@@ -778,7 +859,13 @@ public class BacktestTradeExecutorService {
         }
 
         if (decision.getPositionSize() != null && decision.getPositionSize().compareTo(BigDecimal.ZERO) > 0) {
-            return decision.getPositionSize();
+            // positionSize is base-asset qty (BTC). Convert to USDT quote
+            // using the fill price so the backtest's cash-flow math is
+            // unit-consistent.
+            if (entryPrice == null || entryPrice.compareTo(BigDecimal.ZERO) <= 0) {
+                return BigDecimal.ZERO;
+            }
+            return decision.getPositionSize().multiply(entryPrice).setScale(8, RoundingMode.HALF_UP);
         }
 
         return BigDecimal.ZERO;

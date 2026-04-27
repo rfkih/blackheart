@@ -44,14 +44,29 @@ public class HistoricalBackfillController {
                 .build());
     }
 
-    @PostMapping("/backfill-vcb")
-    public ResponseEntity<ResponseDto> backfillVcbIndicators(
+    /**
+     * General feature backfill across a date range. Recomputes ALL FeatureStore
+     * indicator columns the live ingestion path produces — works for every
+     * strategy, not just VCB.
+     *
+     * <p>Modes:
+     * <ul>
+     *   <li>{@code recompute=false} (default) — fill candles in the range that
+     *       lack a FeatureStore row. Idempotent.</li>
+     *   <li>{@code recompute=true} — delete existing rows in the range first,
+     *       then recompute. Use when indicator code/params changed.</li>
+     * </ul>
+     */
+    @PostMapping("/backfill-features")
+    public ResponseEntity<ResponseDto> backfillFeatures(
             @RequestParam String symbol,
             @RequestParam String interval,
             @RequestParam LocalDateTime from,
-            @RequestParam LocalDateTime to
+            @RequestParam LocalDateTime to,
+            @RequestParam(defaultValue = "false") boolean recompute
     ) {
-        int updated = technicalIndicatorService.backfillVcbIndicators(symbol, interval, from, to);
+        int updated = technicalIndicatorService.backfillFeaturesInRange(
+                symbol, interval, from, to, recompute);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(Map.of(
@@ -59,7 +74,37 @@ public class HistoricalBackfillController {
                         "interval", interval,
                         "from", from.toString(),
                         "to", to.toString(),
+                        "recompute", recompute,
                         "recordsUpdated", updated
+                ))
+                .build());
+    }
+
+    /**
+     * @deprecated Use {@code /backfill-features} instead. This endpoint only
+     * patched VCB-specific columns; the new endpoint recomputes the full
+     * feature set used by every strategy. Kept for back-compat — delegates
+     * to the general backfill so callers see equivalent (or better) results.
+     */
+    @Deprecated(since = "general-backfill")
+    @PostMapping("/backfill-vcb")
+    public ResponseEntity<ResponseDto> backfillVcbIndicators(
+            @RequestParam String symbol,
+            @RequestParam String interval,
+            @RequestParam LocalDateTime from,
+            @RequestParam LocalDateTime to
+    ) {
+        int updated = technicalIndicatorService.backfillFeaturesInRange(
+                symbol, interval, from, to, false);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(Map.of(
+                        "symbol", symbol,
+                        "interval", interval,
+                        "from", from.toString(),
+                        "to", to.toString(),
+                        "recordsUpdated", updated,
+                        "deprecated", "Use /api/v1/historical/backfill-features instead"
                 ))
                 .build());
     }
