@@ -68,4 +68,34 @@ public class Account extends BaseEntity {
     @Convert(converter = EncryptedStringConverter.class)
     private String apiSecret;
 
+    /**
+     * Concurrent-direction position caps across all strategies on this
+     * account. Most concentration risk on a single-asset book is "every
+     * strategy fires LONG on the same candle" — this gate is the simplest
+     * correlation cap that prevents it. Defaults to 2 each.
+     */
+    @Column(name = "max_concurrent_longs", nullable = false)
+    private Integer maxConcurrentLongs;
+
+    @Column(name = "max_concurrent_shorts", nullable = false)
+    private Integer maxConcurrentShorts;
+
+    /**
+     * Phase 2b — book vol-targeting toggle. When false (default), every
+     * strategy's entry size flows through unchanged from its strategy
+     * service. When true, BookVolTargetingService scales the size so the
+     * strategy's realized volatility hits the per-strategy target and a
+     * concurrency haircut shrinks correlated bets.
+     */
+    @Column(name = "vol_targeting_enabled", nullable = false)
+    private Boolean volTargetingEnabled;
+
+    /**
+     * Annualized volatility target as a percentage (e.g. 15.00 for 15%).
+     * Used per-strategy in the MVP — book-level covariance modeling comes
+     * in a later pass.
+     */
+    @Column(name = "book_vol_target_pct", nullable = false, precision = 5, scale = 2)
+    private BigDecimal bookVolTargetPct;
+
 }

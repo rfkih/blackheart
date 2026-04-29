@@ -130,6 +130,10 @@ public class TradeOpenService {
                     .entryRsi(decision.getEntryRsi())
                     .entryTime(now)
                     .exitTime(null)
+                    // Phase 2c — decision intent for P&L attribution at close.
+                    .intendedEntryPrice(decision.getIntendedEntryPrice())
+                    .intendedSize(decision.getIntendedSize())
+                    .decisionTime(decision.getDecisionTime())
                     .build();
 
             tradesRepository.save(persistedTrade);

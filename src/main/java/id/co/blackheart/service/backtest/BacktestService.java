@@ -5,6 +5,8 @@ import id.co.blackheart.dto.request.BacktestRunRequest;
 import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
+import id.co.blackheart.service.build.BuildInfoService;
+import id.co.blackheart.service.risk.SlippageCalibrationService;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +36,8 @@ public class BacktestService {
     private final AccountStrategyOwnershipGuard ownershipGuard;
     private final BacktestAsyncRunner backtestAsyncRunner;
     private final ObjectMapper objectMapper;
+    private final BuildInfoService buildInfoService;
+    private final SlippageCalibrationService slippageCalibrationService;
 
     /**
      * Persist the backtest as PENDING, hand it off to the dedicated backtest
@@ -58,9 +62,19 @@ public class BacktestService {
         String resolvedStrategyCode = resolveStrategyCode(request);
         String resolvedStrategyName = request.getStrategyName() != null ? request.getStrategyName() : resolvedStrategyCode;
         BigDecimal resolvedFee = request.getFeeRate() != null ? request.getFeeRate() : DEFAULT_FEE_RATE;
-        BigDecimal resolvedSlippage = request.getSlippageRate() != null
-                ? request.getSlippageRate()
-                : DEFAULT_SLIPPAGE_RATE;
+        // Slippage resolution order: explicit request → calibrated from
+        // user's own fills → hardcoded default. Calibration only kicks in
+        // when the symbol has enough closed trades with intent recorded
+        // (see SlippageCalibrationService.MIN_SAMPLE_FOR_TRUST). Below
+        // that threshold we'd be picking a number from coin-flip data.
+        BigDecimal resolvedSlippage;
+        if (request.getSlippageRate() != null) {
+            resolvedSlippage = request.getSlippageRate();
+        } else {
+            resolvedSlippage = slippageCalibrationService
+                    .calibratedRateAsFraction(request.getAsset())
+                    .orElse(DEFAULT_SLIPPAGE_RATE);
+        }
 
         // Persist the wizard's per-strategy param overrides on the run itself
         // (config_snapshot JSON). BacktestAsyncRunner reads it back, installs
@@ -107,6 +121,11 @@ public class BacktestService {
                 .maxDrawdownPct(BigDecimal.ZERO)
                 .endingBalance(request.getInitialCapital())
                 .configSnapshot(configSnapshot)
+                // Reproducibility manifest — stamp the running app's git SHA
+                // and version so the result page can later cross-reference
+                // exactly which strategy code + defaults produced this run.
+                .gitCommitSha(buildInfoService.getGitCommitSha())
+                .appVersion(buildInfoService.getAppVersion())
                 .build();
 
         backtestRun = backtestRunRepository.save(backtestRun);

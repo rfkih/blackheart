@@ -45,6 +45,22 @@ public class UnifiedTradeController {
                 .build());
     }
 
+    /**
+     * Phase 2c — realized P&L decomposed into signal alpha, execution
+     * drift, and sizing residual. Returns {@code data: null} when the
+     * trade is still open or predates Phase 2c (no intent captured).
+     */
+    @GetMapping("/{id}/attribution")
+    public ResponseEntity<ResponseDto> getTradeAttribution(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID id) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(unifiedTradeService.getTradeAttribution(userId, id))
+                .build());
+    }
+
     private UUID extractUserId(String authHeader) {
         return jwtService.extractUserId(authHeader.substring(7));
     }

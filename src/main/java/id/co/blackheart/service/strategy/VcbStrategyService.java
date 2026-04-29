@@ -320,9 +320,11 @@ public class VcbStrategyService implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notionalSize = strategyHelper.calculateEntryNotional(context, SIDE_SHORT);
-        if (notionalSize.compareTo(ZERO) <= 0) {
-            return hold(context, "Short notional size is zero");
+        // SHORT spot orders sell base currency (BTC); executor compares against
+        // BTC balance. Use the BTC-denominated helper, not the USDT one.
+        BigDecimal positionSize = strategyHelper.calculateShortPositionSize(context);
+        if (positionSize.compareTo(ZERO) <= 0) {
+            return hold(context, "Short position size is zero");
         }
 
         log.info("VCB SHORT ENTRY | time={} close={} stop={} tp1={} score={}",
@@ -344,7 +346,7 @@ public class VcbStrategyService implements StrategyExecutor {
                 .regimeScore(resolveRegimeScore(context))
                 .riskMultiplier(resolveRiskMultiplier(context))
                 .jumpRiskScore(resolveJumpRisk(context))
-                .notionalSize(notionalSize)
+                .positionSize(positionSize)
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(tp1)

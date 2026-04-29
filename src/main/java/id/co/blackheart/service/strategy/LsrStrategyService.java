@@ -442,11 +442,15 @@ public class LsrStrategyService implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal baseNotional = strategyHelper.calculateEntryNotional(context, SIDE_SHORT);
-        BigDecimal notionalSize = baseNotional.multiply(p.getShortNotionalMultiplier()).setScale(8, RoundingMode.HALF_UP);
+        // SHORT entries on Binance spot sell base currency (BTC) — the executor
+        // reads `positionSize` and matches against the BTC balance. Use the
+        // BTC-denominated helper, not `calculateEntryNotional` which returns
+        // USDT and would silently undershoot the balance check.
+        BigDecimal basePositionSize = strategyHelper.calculateShortPositionSize(context);
+        BigDecimal positionSize = basePositionSize.multiply(p.getShortNotionalMultiplier()).setScale(8, RoundingMode.HALF_UP);
 
-        if (notionalSize.compareTo(ZERO) <= 0) {
-            return hold(context, "Short premium notional size is zero");
+        if (positionSize.compareTo(ZERO) <= 0) {
+            return hold(context, "Short premium position size is zero");
         }
 
         return StrategyDecision.builder()
@@ -465,7 +469,7 @@ public class LsrStrategyService implements StrategyExecutor {
                 .regimeScore(resolveRegimeScore(context))
                 .riskMultiplier(resolveRiskMultiplier(context))
                 .jumpRiskScore(resolveJumpRisk(context))
-                .notionalSize(notionalSize)
+                .positionSize(positionSize)
                 .stopLossPrice(stopLoss)
                 .takeProfitPrice1(tp1)
                 .takeProfitPrice2(null)

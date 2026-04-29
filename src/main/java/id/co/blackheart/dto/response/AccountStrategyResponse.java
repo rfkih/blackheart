@@ -27,4 +27,10 @@ public class AccountStrategyResponse {
     private String currentStatus;
     private LocalDateTime createdTime;
     private LocalDateTime updatedTime;
+    /** Drawdown kill-switch state — surfaced so the strategy detail page can
+     *  render a clear "tripped" badge and the re-arm button. */
+    private BigDecimal ddKillThresholdPct;
+    private Boolean isKillSwitchTripped;
+    private LocalDateTime killSwitchTrippedAt;
+    private String killSwitchReason;
 }

@@ -46,7 +46,7 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 |---|---|---|
 | Strategy execution | `service/strategy/` | `StrategyExecutor`, `StrategyExecutorFactory`, `DefaultStrategyContextEnrichmentService`, `StrategyHelper` |
 | Strategy impls | `service/strategy/` | `LsrStrategyService`, `VcbStrategyService`, `ExecutionTestService` |
-| Strategy params | `service/strategy/` | `LsrStrategyParamService`, `VcbStrategyParamService`, `AccountStrategyService` |
+| Strategy params | `service/strategy/` | `LsrStrategyParamService`, `VcbStrategyParamService`, `VboStrategyParamService`, `AccountStrategyService` |
 | Live trading | `service/live/` | `LiveOrchestratorCoordinatorService`, `LiveTradingCoordinatorService`, `LiveTradingDecisionExecutorService`, `LiveTradeListenerService`, `LivePositionSnapshotMapper` |
 | Backtest | `service/backtest/` | `BacktestCoordinatorService`, `BacktestTradeExecutorService`, `BacktestMetricsService`, `BacktestPersistenceService`, `BacktestStateService`, `BacktestEquityPointRecorder` |
 | Trade mgmt | `service/trade/` | `TradeOpenService`, `TradeCloseService`, `TradeStateSyncService` |
@@ -63,6 +63,7 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 | `AccountStrategy` | Links account → strategy; interval, capital allocation, priority, allow-long/short flags. Soft-delete via `is_deleted` + `deleted_at` (preserves FK targets for historical trades/P&L) |
 | `LsrStrategyParam` | Per-account-strategy LSR overrides; JSONB `param_overrides`, `@Version` optimistic lock |
 | `VcbStrategyParam` | Per-account-strategy VCB overrides; same structure as LSR |
+| `VboStrategyParam` | Per-account-strategy VBO overrides; same structure as LSR / VCB |
 | `Trades` | Parent trade record (status: OPEN / PARTIALLY_CLOSED / CLOSED) |
 | `TradePosition` | Child leg: SINGLE, TP1, TP2, RUNNER |
 | `MarketData` | OHLCV candlestick data |
@@ -76,6 +77,7 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 |---|---|---|
 | `LSR` / `LSR_V2` | `LsrStrategyService` | Long/Short reversal; fully parameterized via `LsrParams` |
 | `VCB` | `VcbStrategyService` | Volatility Compression Breakout v2.1; fully parameterized via `VcbParams` |
+| `VBO` | `VolatilityBreakoutStrategyService` | Volatility Breakout (BB-width compression → expansion); fully parameterized via `VboParams` |
 | `TREND_PULLBACK_SINGLE_EXIT` | (existing) | Trend-following w/ pullback entries, fixed 1.5:1 R:R |
 | `RAHT_V1` | `RahtV1` | RahtV1 strategy |
 | `TSMOM_V1` | `TsMomV1` | Time-series momentum |
@@ -87,13 +89,13 @@ BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
 - **Liveness flag is `enabled`, not `currentStatus`**: `current_status` is a legacy column that **no service writes**. Every row holds its seed value (`"STOPPED"`). All active-strategy queries filter `enabled = true AND is_deleted = false`; never rely on `current_status`. The frontend status badge is derived from `enabled`.
 - **Read paths that filter `is_deleted`**: every query in `AccountStrategyRepository` (live orchestration, scheduler, UI list). Trade / P&L joins must **NOT** filter `is_deleted` — historical attribution depends on resolving deleted strategies by id.
 
-## Per-Strategy Parameter System (LSR + VCB)
-Both LSR and VCB support per-`accountStrategyId` overrides in PostgreSQL:
-- **Storage**: `lsr_strategy_param` / `vcb_strategy_param` — JSONB `param_overrides`, `@JdbcTypeCode(SqlTypes.JSON)` (Hibernate 6), `@Version` optimistic locking.
-- **Param objects**: `LsrParams` / `VcbParams` — value objects, `@Builder.Default` fields, `defaults()` factory, `merge(Map)` overlay.
-- **Cache**: Redis, `GenericJackson2JsonRedisSerializer`; key prefix `lsr:params:` / `vcb:params:`; TTL 1h. Evicted **after transaction commit** via `TransactionSynchronizationManager.afterCommit()`.
+## Per-Strategy Parameter System (LSR + VCB + VBO)
+LSR, VCB, and VBO support per-`accountStrategyId` overrides in PostgreSQL:
+- **Storage**: `lsr_strategy_param` / `vcb_strategy_param` / `vbo_strategy_param` — JSONB `param_overrides`, `@JdbcTypeCode(SqlTypes.JSON)` (Hibernate 6), `@Version` optimistic locking.
+- **Param objects**: `LsrParams` / `VcbParams` / `VboParams` — value objects, `@Builder.Default` fields, `defaults()` factory, `merge(Map)` overlay. `VboParams` additionally exposes `applyOverrides(Map)` for in-place mutation, and its merge handles boolean gate flags (`requireKcSqueeze`, `requireDonchianBreak`, `requireTrendAlignment`).
+- **Cache**: Redis, `GenericJackson2JsonRedisSerializer`; key prefix `lsr:params:` / `vcb:params:` / `vbo:params:`; TTL 1h. Evicted **after transaction commit** via `TransactionSynchronizationManager.afterCommit()`.
 - **Concurrent insert safety**: `putParams` / `patchParams` catch `DataIntegrityViolationException` and retry with UPDATE.
-- **REST**: `/api/v1/lsr-params/{accountStrategyId}` and `/api/v1/vcb-params/{accountStrategyId}` — GET, PUT, PATCH, DELETE + GET `/defaults`.
+- **REST**: `/api/v1/lsr-params/{accountStrategyId}`, `/api/v1/vcb-params/{accountStrategyId}`, `/api/v1/vbo-params/{accountStrategyId}` — GET, PUT, PATCH, DELETE + GET `/defaults`.
 - **Backtest integration**: `BacktestRun.strategyAccountStrategyIds` (JSONB `Map<String, UUID>`) maps strategy code → accountStrategyId; falls back to global `accountStrategyId`.
 
 ## Context Enrichment (Live vs Backtest)
@@ -118,14 +120,18 @@ Both LSR and VCB support per-`accountStrategyId` overrides in PostgreSQL:
 | `AccountStrategyController` | `/api/v1/account-strategies` | List/get strategies by user (excludes soft-deleted); `POST` create; `DELETE /:id` soft-delete (blocked if OPEN/PARTIALLY_CLOSED trades exist) |
 | `LsrStrategyParamController` | `/api/v1/lsr-params` | LSR param CRUD |
 | `VcbStrategyParamController` | `/api/v1/vcb-params` | VCB param CRUD |
+| `VboStrategyParamController` | `/api/v1/vbo-params` | VBO param CRUD |
 | `BacktestController` | `/api/v1/backtest` | Submit and query backtests |
 | `TradeController` | `/api/v1/trades` | Trade management |
 | `TradeQueryController` | `/api/v1/trades` | Trade queries |
 | `TradePnlQueryController` | `/api/v1/pnl` | P&L queries |
-| `PortofolioController` | `/api/v1/portfolio` | Portfolio balances |
+| `PortfolioController` | `/api/v1/portfolio` | Portfolio balances. `GET ?accountId=<uuid>` scopes to a single owned account (verifies ownership, throws `AccessDeniedException` otherwise). Omit `accountId` to aggregate across every account the user owns: free/locked summed per asset, USDT recomputed once on the merged total so spot price is not double-applied. |
+| `PortofolioController` | `/api/v1/portofolio` (also `/v1/portofolio` alias) | **Admin-only** legacy reload endpoint (`GET /reload`). Note the spelling — typo preserved for backward compat. Not the same as `PortfolioController`. |
 | `MarketQueryController` | `/api/v1/market` | Market data queries |
-| `SchedulerController` | `/api/v1/scheduler` | Scheduler management |
+| `SchedulerController` | `/api/v1/scheduler` | Scheduler management. `IP_MONITOR` job calls `IpMonitorService.checkAndNotifyIfChanged()` on its tick. |
 | `MonteCarloController` | `/api/v1/montecarlo` | Monte Carlo simulation |
+| `ResearchController` | `/api/v1/research` | **Mixed access** (no class-level `@PreAuthorize`). Sweeps endpoints (`POST/GET/DELETE /sweeps`, `POST /sweeps/:id/cancel`) and read-only `GET /tpr/params` are user-accessible — every sweep is created with the caller's `userId` and the get/cancel/delete handlers reject when `state.getUserId()` differs from the JWT subject. Admin-only via method-level `@PreAuthorize("hasRole('ADMIN')")`: `GET /backtest/:id/analysis` (no per-run ownership check), `PUT /tpr/params`, `POST /tpr/params/reset`, `GET /log`. Add new sweep-adjacent endpoints **without** `@PreAuthorize` and rely on the service-layer ownership check; add new global/mutating endpoints **with** `@PreAuthorize("hasRole('ADMIN')")`. |
+| `ServerInfoController` | `/api/v1/server` | Server diagnostics. `GET /ip` calls ipify live (used by the broker-setup card). `GET /ip/status` returns the latest persisted `ServerIpLog` row — `{ currentIp, previousIp, event, recordedAt }` — written by the `IP_MONITOR` scheduler. The frontend `IpWhitelistBanner` polls this and warns the user when `event == "CHANGED"`. Don't make `/ip/status` call ipify; the whole point is to keep it cheap to poll. |
 
 ## Security
 - JWT Bearer auth; `JwtService` issues and validates tokens.
@@ -158,7 +164,13 @@ Both LSR and VCB support per-`accountStrategyId` overrides in PostgreSQL:
 - `DefaultStrategyContextEnrichmentService` skips live DB queries when `source == "backtest"` — do not break this guard.
 - `previousFeatureStore` must be populated for strategies declaring `requirePreviousFeatureStore = true`; live loads from DB, backtest sets it manually.
 - Live bias candle must use `findLatestCompletedBySymbolAndInterval` (completed), not `findLatestBySymbolAndInterval` (may return forming candle).
-- `executeOpenShort` in `LiveTradingDecisionExecutorService` reads `decision.getNotionalSize()` — strategies must set `notionalSize`, not `positionSize`, for SHORT entries.
+
+### Point-in-Time Discipline (audited 2026-04-26)
+- Strategy execution gates on `BinanceWebSocketClient.isProcessable` which requires the Binance `k.x` closed-candle flag — entry decisions never see a forming bar.
+- Bias-timeframe enrichment uses `findLatestCompletedBySymbolAndInterval(boundary=now)` with `start_time < now` — completed-only.
+- `FeatureStoreRepository.findLatestBySymbolAndInterval` (no completed filter) is **decision-unsafe** and only used by `SentimentPublisherService` (informational broadcast). The Javadoc on that method now warns explicitly against decision-path use; honor it. Add a completed-filter variant if a new caller emerges.
+- When wiring a new strategy or feature read on the live path, the rule is: anything that influences an entry/exit price level OR a sizing decision must read completed-only data. Anything informational (UI, alerts) can use the latest-including-forming variant.
+- Live entry sizing fields in `LiveTradingDecisionExecutorService`: `executeOpenLong` reads `decision.getNotionalSize()` (USDT, checked against the USDT portfolio balance); `executeOpenShort` reads `decision.getPositionSize()` (BTC qty, checked against the BTC portfolio balance). Strategies must set the correct field in the correct currency or the executor silently falls back to its own sizing. For SHORT, use `StrategyHelper.calculateShortPositionSize` (BTC), **not** `calculateEntryNotional(SIDE_SHORT)` which returns USDT and will always fail the BTC balance guard.
 - `buildPositionSnapshot` in `LiveTradingCoordinatorService` returns `hasOpenPosition=false` when no OPEN `TradePosition` rows exist, regardless of parent `Trades` status.
 
 ### Code Change Format

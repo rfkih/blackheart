@@ -2,9 +2,11 @@ package id.co.blackheart.repository;
 
 import id.co.blackheart.model.BacktestRun;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -133,4 +135,27 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
     java.util.Optional<BacktestRun> findByIdAndUserId(
             @Param("id") UUID id,
             @Param("userId") UUID userId);
+
+    /**
+     * Targeted marker-only UPDATE for the holdout flag. Used by
+     * {@code ResearchSweepService.evaluateHoldout} to avoid clobbering the
+     * async worker's progress / status writes — a full {@code save(row)}
+     * would write back every field of a possibly-stale entity.
+     *
+     * <p>Returns the number of rows updated. The unique partial index
+     * {@code idx_backtest_run_holdout_per_sweep} additionally enforces
+     * "at most one holdout per sweep" at the DB level.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE backtest_run
+               SET is_holdout_run = TRUE,
+                   holdout_for_sweep_id = :sweepId
+             WHERE backtest_run_id = :runId
+               AND is_holdout_run = FALSE
+            """, nativeQuery = true)
+    int markAsHoldoutRun(
+            @Param("runId") UUID runId,
+            @Param("sweepId") UUID sweepId);
 }

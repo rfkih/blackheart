@@ -107,5 +107,29 @@ public class BacktestPersistenceService {
         if (summary.getSharpeRatio() != null) {
             backtestRun.setSharpeRatio(summary.getSharpeRatio());
         }
+
+        if (summary.getSortinoRatio() != null) {
+            backtestRun.setSortinoRatio(summary.getSortinoRatio());
+        }
+
+        if (summary.getPsr() != null) {
+            backtestRun.setPsr(summary.getPsr());
+        }
+
+        if (summary.getAvgWin() != null) {
+            backtestRun.setAvgWin(summary.getAvgWin());
+        }
+
+        if (summary.getAvgLoss() != null) {
+            backtestRun.setAvgLoss(summary.getAvgLoss());
+        }
+
+        if (summary.getMaxDrawdownAmount() != null) {
+            backtestRun.setMaxDrawdownAmount(summary.getMaxDrawdownAmount());
+        }
+
+        if (summary.getExpectancy() != null) {
+            backtestRun.setExpectancy(summary.getExpectancy());
+        }
     }
 }

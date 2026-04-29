@@ -196,6 +196,14 @@ public class BacktestRun extends BaseEntity {
     @Column(name = "sortino_ratio", precision = 12, scale = 6)
     private BigDecimal sortinoRatio;
 
+    /**
+     * Probabilistic Sharpe Ratio — P(true Sharpe > 0) given the observed
+     * per-period Sharpe, sample size, skewness, and kurtosis. Value in
+     * [0, 1]. Computed at run completion; null on PENDING/RUNNING/FAILED.
+     */
+    @Column(name = "psr", precision = 10, scale = 6)
+    private BigDecimal psr;
+
     @Column(name = "status", length = 30, nullable = false)
     private String status;
 
@@ -208,5 +216,44 @@ public class BacktestRun extends BaseEntity {
      */
     @Column(name = "progress_percent")
     private Integer progressPercent;
+
+    /**
+     * JSON payload written by the research analyzer when a run completes.
+     * Contains headline metrics + feature-bucket diagnostics + MFE-capture
+     * stats + best/worst trades. Stored as TEXT not {@code @Lob} for the same
+     * reason as {@link #configSnapshot} — avoids the Postgres oid /
+     * auto-commit trap.
+     */
+    @Column(name = "analysis_snapshot", columnDefinition = "TEXT")
+    private String analysisSnapshot;
+
+    /**
+     * Reproducibility manifest — the application's git commit + display
+     * version at submission time. Combined with {@link #configSnapshot},
+     * {@link #asset}, {@link #interval}, {@link #startTime}, and
+     * {@link #endTime}, these are sufficient to replay the run later.
+     * Nullable for legacy rows.
+     */
+    @Column(name = "git_commit_sha", length = 40)
+    private String gitCommitSha;
+
+    @Column(name = "app_version", length = 50)
+    private String appVersion;
+
+    /**
+     * Locked-holdout marker. {@code true} means this run was the one-shot
+     * unbiased evaluation that ran AFTER a sweep picked its winner; the
+     * sweep itself was never allowed to touch this window during
+     * optimization. Set only by {@code ResearchSweepService.evaluateHoldout};
+     * a unique partial index enforces at-most-one per sweep at the DB level.
+     */
+    @Column(name = "is_holdout_run", nullable = false)
+    @Builder.Default
+    private Boolean isHoldoutRun = Boolean.FALSE;
+
+    /** When {@link #isHoldoutRun} is true, the sweep this holdout result
+     *  belongs to. Null for non-holdout runs. */
+    @Column(name = "holdout_for_sweep_id")
+    private UUID holdoutForSweepId;
 
 }

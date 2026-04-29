@@ -18,6 +18,8 @@ public class BacktestMetricsResponse {
     private BigDecimal maxDrawdownPct;
     private BigDecimal sharpe;
     private BigDecimal sortino;
+    /** Probabilistic Sharpe Ratio — null when sample too small. */
+    private BigDecimal psr;
     private Integer totalTrades;
     private Integer winningTrades;
     private Integer losingTrades;

@@ -68,6 +68,16 @@ public class StrategyDecision {
      */
     private BigDecimal positionSize;
     private BigDecimal notionalSize;
+
+    /**
+     * Phase 2c — intent captured by the live executor BEFORE vol-targeting
+     * mutates the size. {@code intendedSize} mirrors the side's natural
+     * unit (USDT for LONG, BTC for SHORT). {@code intendedEntryPrice} is
+     * the bar close at decision time. Used at trade close to attribute
+     * realized P&L into signal-alpha / exec-drift / sizing-residual.
+     */
+    private BigDecimal intendedSize;
+    private BigDecimal intendedEntryPrice;
     private BigDecimal stopLossPrice;
     private BigDecimal trailingStopPrice;
     private BigDecimal takeProfitPrice1;

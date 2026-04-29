@@ -75,6 +75,24 @@ public class AccountController {
                 .build());
     }
 
+    @PatchMapping("/{accountId}/risk-config")
+    @Operation(
+            summary = "Update per-account risk policy: concurrency caps + vol-targeting toggle/target.",
+            description = "Partial update — null fields are left unchanged. Bounds enforced server-side: "
+                    + "concurrency caps in [0, 20], book vol target in (0, 50].",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    public ResponseEntity<ResponseDto> updateRiskConfig(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountId,
+            @RequestBody id.co.blackheart.service.user.AccountQueryService.RiskConfigRequest request) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountQueryService.updateRiskConfig(userId, accountId, request))
+                .build());
+    }
+
     @PatchMapping("/{accountId}/credentials")
     @Operation(
             summary = "Rotate the Binance API key + secret for an account the caller owns",

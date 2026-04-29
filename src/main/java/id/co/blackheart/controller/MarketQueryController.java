@@ -11,6 +11,7 @@ import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.service.marketquery.CurrencyRateService;
 import id.co.blackheart.service.marketquery.MarketQueryService;
+import id.co.blackheart.service.risk.SlippageCalibrationService;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -33,6 +34,7 @@ public class MarketQueryController {
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
     private final CurrencyRateService currencyRateService;
+    private final SlippageCalibrationService slippageCalibrationService;
 
     /**
      * Rates for the frontend's display-currency toggle. Returned values are
@@ -53,6 +55,19 @@ public class MarketQueryController {
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(data)
+                .build());
+    }
+
+    /**
+     * Phase 3.8 — calibrated slippage stats for a symbol, computed from
+     * the user's own intended-vs-actual fills. {@code data} is null when
+     * the symbol has no closed trades with intent (legacy or unused).
+     */
+    @GetMapping("/slippage/{symbol}")
+    public ResponseEntity<ResponseDto> getSlippage(@PathVariable String symbol) {
+        return ResponseEntity.ok().body(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(slippageCalibrationService.calibrate(symbol.toUpperCase()).orElse(null))
                 .build());
     }
 

@@ -1,6 +1,7 @@
 package id.co.blackheart.controller;
 
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.model.ServerIpLog;
 import id.co.blackheart.repository.ServerIpLogRepository;
 import id.co.blackheart.service.notification.IpMonitorService;
 import id.co.blackheart.service.notification.TelegramNotificationService;
@@ -10,6 +11,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.HashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/server")
@@ -35,6 +39,29 @@ public class ServerInfoController {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(serverIpLogRepository.findAllByOrderByRecordedAtDesc())
+                .build());
+    }
+
+    /**
+     * Latest IP-monitor snapshot. Drives the in-app whitelist warning banner —
+     * when {@code event == "CHANGED"} the frontend nudges the user to update
+     * their Binance API key whitelist before trades start failing. Reads from
+     * the persisted log (kept up to date by the IP_MONITOR scheduler) rather
+     * than calling ipify on every poll, so the endpoint is cheap and safe to
+     * hit at frequent intervals.
+     */
+    @GetMapping("/ip/status")
+    public ResponseEntity<ResponseDto> getIpStatus() {
+        Map<String, Object> payload = new HashMap<>();
+        serverIpLogRepository.findTopByOrderByRecordedAtDesc().ifPresent(latest -> {
+            payload.put("currentIp", latest.getIpAddress());
+            payload.put("previousIp", latest.getPreviousIp());
+            payload.put("event", latest.getEvent());
+            payload.put("recordedAt", latest.getRecordedAt());
+        });
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(payload)
                 .build());
     }
 

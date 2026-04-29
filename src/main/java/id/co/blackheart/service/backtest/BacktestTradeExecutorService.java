@@ -258,6 +258,16 @@ public class BacktestTradeExecutorService {
                 .exitReason(null)
                 .entryTime(entryTime)
                 .exitTime(null)
+                // Phase 2c — capture decision-time intent so trade
+                // attribution at close can decompose realized P&L into
+                // signal alpha + execution drift + sizing residual. For
+                // backtest, intended_size mirrors notionalSize (LONG) or
+                // positionSize (SHORT) since vol-targeting only runs live.
+                .intendedEntryPrice(rawEntryPrice)
+                .intendedSize("SHORT".equalsIgnoreCase(tradeType)
+                        ? decision.getPositionSize()
+                        : decision.getNotionalSize())
+                .decisionTime(decision.getDecisionTime())
                 .build();
 
         List<PlannedPosition> plan = buildPositionPlan(totalQty, requestedQuoteAmount, entryFee, decision);

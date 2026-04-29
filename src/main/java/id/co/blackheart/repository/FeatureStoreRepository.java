@@ -14,6 +14,19 @@ import java.util.Optional;
 @Repository
 public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long> {
 
+    /**
+     * <b>Returns the highest-{@code start_time} row INCLUDING the currently
+     * forming bar.</b> Use ONLY for informational / display surfaces (e.g.
+     * sentiment broadcasts) where peeking at the in-progress candle is
+     * acceptable.
+     *
+     * <p><b>DO NOT use this on entry-decision paths.</b> Strategies must
+     * see only closed bars or they leak forward-looking data. For
+     * decision-time reads use {@link #findLatestCompletedBySymbolAndInterval}
+     * with a {@code boundary < now} filter, and gate execution on
+     * {@code BinanceWebSocketClient.isProcessable} which requires the
+     * Binance {@code k.x = true} closed-candle flag.
+     */
     @Query(value = """
     SELECT *
     FROM feature_store
