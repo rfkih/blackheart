@@ -7,6 +7,7 @@ import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,6 +17,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/montecarlo")
 @RequiredArgsConstructor
+@Profile("research")
 @Tag(name = "MonteCarloController", description = "Controller for Monte Carlo Simulation")
 public class MonteCarloController {
 

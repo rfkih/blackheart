@@ -194,6 +194,21 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    // ── 404 Not Found (Spring's NoResourceFoundException for unmapped paths) ─
+    // After Phase 1 decoupling, paths registered on one JVM but not the other
+    // would surface as NoResourceFoundException via the static-resource
+    // fallback. Map to a clean 404 instead of the catch-all 500.
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ResponseDto> handleNoResource(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex) {
+        log.warn("Path not registered on this JVM: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ResponseDto.builder()
+                .responseCode(HttpStatus.NOT_FOUND.value() + "00")
+                .responseDesc("Not Found")
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
     // ── 500 Internal Server Error ────────────────────────────────────────────
 
     @ExceptionHandler(Exception.class)

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blackheart.local/schemas/momentum_mean_reversion.schema.json",
+  "title": "momentum_mean_reversion param overrides",
+  "description": "Validates the param_overrides map for any spec-driven strategy with archetype=momentum_mean_reversion (MMR-style EMA200-distance fade).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "extremeAtrMult":     {"type": "number", "exclusiveMinimum": 0, "maximum": 10, "description": "How many ATRs from EMA200 qualifies as 'extreme'."},
+    "rsiOversoldMax":     {"type": "number", "minimum": 0, "maximum": 50},
+    "rsiOverboughtMin":   {"type": "number", "minimum": 50, "maximum": 100},
+    "stopAtrBuffer":      {"type": "number", "exclusiveMinimum": 0, "maximum": 5},
+    "minRewardRiskRatio": {"type": "number", "exclusiveMinimum": 0, "maximum": 10},
+    "breakEvenR":         {"type": "number", "minimum": 0, "maximum": 5},
+    "maxEntryRiskPct":    {"type": "number", "exclusiveMinimum": 0, "maximum": 0.5},
+    "maxBarsHeld":        {"type": "integer", "minimum": 1, "maximum": 1000},
+    "intervalMinutes":    {"type": "integer", "minimum": 1, "maximum": 1440},
+    "useRiskBasedSizing": {"type": "boolean"},
+    "riskPct":            {"type": "number", "exclusiveMinimum": 0, "maximum": 0.1}
+  }
+}

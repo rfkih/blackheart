@@ -53,7 +53,7 @@ public class BacktestRun extends BaseEntity {
 
     /**
      * Stable strategy identifier used by StrategyExecutorFactory.
-     * Example: TREND_PULLBACK_SINGLE_EXIT, RAHT_V1
+     * Example: TREND_PULLBACK_SINGLE_EXIT
      */
     @Column(name = "strategy_code", length = 100, nullable = false)
     private String strategyCode;
@@ -93,6 +93,16 @@ public class BacktestRun extends BaseEntity {
 
     @Column(name = "slippage_pct", precision = 12, scale = 6)
     private BigDecimal slippagePct;
+
+    /**
+     * Flat funding rate stub (basis points per 8h Binance funding period).
+     * Applied per-position at close as
+     * {@code notional × (rate / 10000) × (hold_hours / 8)}, signed by side.
+     * Phase 0 stub for Phase 4 funding ingestion. Default {@code 0} keeps
+     * legacy backtests bit-identical with their pre-V22 P&L.
+     */
+    @Column(name = "funding_rate_bps_per_8h", precision = 12, scale = 6)
+    private BigDecimal fundingRateBpsPer8h;
 
     @Column(name = "min_notional", precision = 24, scale = 8)
     private BigDecimal minNotional;

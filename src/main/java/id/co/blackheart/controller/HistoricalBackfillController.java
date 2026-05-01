@@ -6,6 +6,7 @@ import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,11 +17,13 @@ import java.util.Map;
 
 /**
  * Historical data backfill is a privileged, CPU/IO-heavy operation that affects
- * shared market-data tables. Admin-only.
+ * shared market-data tables. Admin-only. Restricted to the research JVM
+ * (Phase 1 decoupling) since it loads heavy historical data.
  */
 @RestController
 @RequestMapping("/api/v1/historical")
 @RequiredArgsConstructor
+@Profile("research")
 @Tag(name = "HistoricalBackfillController", description = "Controller for Historical Data Warmup")
 @PreAuthorize("hasRole('ADMIN')")
 public class HistoricalBackfillController {

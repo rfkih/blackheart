@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Blackheart logback configuration. Two appenders:
+      • CONSOLE — preserves the previous default Spring Boot console layout.
+      • DB_ERROR — id.co.blackheart.logging.DbErrorAppender; captures
+        ERROR-level events into the error_log table. Logback instantiates
+        the appender during this XML parse; LogbackBridge wires the Spring-
+        managed ErrorIngestService into it once the context is up.
+
+    Filter `level >= ERROR` keeps the appender's bounded queue safe — only
+    real failures land in the table; WARN noise stays out.
+-->
+<configuration>
+
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <appender name="DB_ERROR" class="id.co.blackheart.logging.DbErrorAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>ERROR</level>
+        </filter>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="DB_ERROR"/>
+    </root>
+
+</configuration>

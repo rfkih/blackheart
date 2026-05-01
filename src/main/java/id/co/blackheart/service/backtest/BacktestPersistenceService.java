@@ -46,13 +46,48 @@ public class BacktestPersistenceService {
             return;
         }
 
+        String actor = resolveActor(backtestRun);
+
         if (state != null && state.getCompletedTrades() != null && !state.getCompletedTrades().isEmpty()) {
+            state.getCompletedTrades().forEach(t -> stampActor(t::getCreatedBy, t::setCreatedBy, t::setUpdatedBy, actor));
             backtestTradeRepository.saveAllAndFlush(state.getCompletedTrades());
         }
 
         if (state != null && state.getCompletedTradePositions() != null && !state.getCompletedTradePositions().isEmpty()) {
+            state.getCompletedTradePositions().forEach(p -> stampActor(p::getCreatedBy, p::setCreatedBy, p::setUpdatedBy, actor));
             backtestTradePositionRepository.saveAllAndFlush(state.getCompletedTradePositions());
         }
+    }
+
+    /**
+     * Resolves the audit actor stamped on persisted backtest trades and
+     * positions. Uses the run's owning user when available so the audit
+     * trail attributes rows to the trader who triggered the backtest;
+     * falls back to a {@code "BACKTEST"} sentinel when the run has no
+     * userId (synthetic / system-triggered runs).
+     */
+    private String resolveActor(BacktestRun backtestRun) {
+        if (backtestRun != null && backtestRun.getUserId() != null) {
+            return "BACKTEST:" + backtestRun.getUserId();
+        }
+        return "BACKTEST";
+    }
+
+    /**
+     * Stamps {@code createdBy} (only when null — preserves prior value on
+     * re-persist) and {@code updatedBy} (always overwrites) on a backtest
+     * audit-tracked entity. Hibernate fills {@code created_time} /
+     * {@code updated_time} automatically; the {@code *_by} fields require
+     * explicit service-layer population per BaseEntity's contract.
+     */
+    private void stampActor(
+            java.util.function.Supplier<String> getCreatedBy,
+            java.util.function.Consumer<String> setCreatedBy,
+            java.util.function.Consumer<String> setUpdatedBy,
+            String actor
+    ) {
+        if (getCreatedBy.get() == null) setCreatedBy.accept(actor);
+        setUpdatedBy.accept(actor);
     }
 
     private void applySummary(BacktestRun backtestRun, BacktestExecutionSummary summary) {

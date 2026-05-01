@@ -12,8 +12,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -22,16 +25,23 @@ import java.util.UUID;
  * <p>Any authenticated user may read (needed to populate strategy pickers);
  * only admins may create / update / soft-delete. The controller enforces
  * the admin rule via {@code @PreAuthorize}.
+ *
+ * <p>Every mutation appends a {@code strategy_definition_history} row in
+ * the same transaction (see {@link StrategyDefinitionHistoryService}) — a
+ * rolled-back mutation rolls back its history row too.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class StrategyDefinitionService {
 
-    private final StrategyDefinitionRepository repository;
-
     private static final String DEFAULT_STATUS = "ACTIVE";
     private static final String DEPRECATED_STATUS = "DEPRECATED";
+    private static final String LEGACY_ARCHETYPE = "LEGACY_JAVA";
+
+    private final StrategyDefinitionRepository repository;
+    private final StrategyDefinitionHistoryService historyService;
+    private final StrategyExecutorFactory executorFactory;
 
     @Transactional(readOnly = true)
     public List<StrategyDefinitionResponse> list() {
@@ -58,6 +68,13 @@ public class StrategyDefinitionService {
                     "Strategy code '" + code + "' is already registered");
         });
 
+        String archetype = orDefault(request.getArchetype(), LEGACY_ARCHETYPE);
+        Integer archetypeVersion = request.getArchetypeVersion() == null ? 1 : request.getArchetypeVersion();
+        Integer specSchemaVersion = request.getSpecSchemaVersion() == null ? 1 : request.getSpecSchemaVersion();
+        Map<String, Object> specJsonb = LEGACY_ARCHETYPE.equalsIgnoreCase(archetype)
+                ? null
+                : copyOrNull(request.getSpecJsonb());
+
         StrategyDefinition entity = StrategyDefinition.builder()
                 .strategyDefinitionId(UUID.randomUUID())
                 .strategyCode(code)
@@ -65,11 +82,18 @@ public class StrategyDefinitionService {
                 .strategyType(request.getStrategyType().trim())
                 .description(request.getDescription())
                 .status(orDefault(request.getStatus(), DEFAULT_STATUS))
+                .archetype(archetype)
+                .archetypeVersion(archetypeVersion)
+                .specJsonb(specJsonb)
+                .specSchemaVersion(specSchemaVersion)
+                .isDeleted(false)
                 .build();
         entity.setCreatedBy(actorEmail);
         entity.setUpdatedBy(actorEmail);
 
         StrategyDefinition saved = repository.save(entity);
+        historyService.record(saved, StrategyDefinitionHistoryService.OP_INSERT, null,
+                "Created by " + actorEmail);
         return toResponse(saved);
     }
 
@@ -79,6 +103,7 @@ public class StrategyDefinitionService {
         StrategyDefinition entity = repository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Strategy definition not found: " + id));
 
+        boolean archetypeChanged = false;
         if (request.getStrategyName() != null) {
             entity.setStrategyName(request.getStrategyName().trim());
         }
@@ -91,16 +116,46 @@ public class StrategyDefinitionService {
         if (request.getStatus() != null) {
             entity.setStatus(request.getStatus().trim());
         }
+        if (request.getArchetype() != null) {
+            String next = request.getArchetype().trim();
+            archetypeChanged = !next.equalsIgnoreCase(entity.getArchetype());
+            entity.setArchetype(next);
+        }
+        if (request.getArchetypeVersion() != null) {
+            entity.setArchetypeVersion(request.getArchetypeVersion());
+        }
+        if (request.getSpecJsonb() != null) {
+            entity.setSpecJsonb(copyOrNull(request.getSpecJsonb()));
+        }
+        if (request.getSpecSchemaVersion() != null) {
+            entity.setSpecSchemaVersion(request.getSpecSchemaVersion());
+        }
+        if (LEGACY_ARCHETYPE.equalsIgnoreCase(entity.getArchetype())) {
+            // Legacy strategies must not carry a spec body — keep the column null
+            // so engine readers never accidentally try to evaluate it.
+            entity.setSpecJsonb(null);
+        }
         entity.setUpdatedBy(actorEmail);
 
-        return toResponse(repository.save(entity));
+        StrategyDefinition saved = repository.save(entity);
+        String operation = archetypeChanged
+                ? StrategyDefinitionHistoryService.OP_UPGRADE
+                : StrategyDefinitionHistoryService.OP_UPDATE;
+        historyService.record(saved, operation, null, request.getChangeReason());
+        // Drop the cached spec-driven adapter so the next live tick rebuilds
+        // from the fresh definition. Live executors keyed off this strategy
+        // code would otherwise hold the old archetype/version/body until
+        // the trading JVM restarts.
+        executorFactory.invalidateSpecCache();
+        return toResponse(saved);
     }
 
     /**
-     * Soft-delete — flips status to DEPRECATED instead of removing the row.
-     * Downstream tables (account_strategy, backtest_run, *_param) store
-     * strategy_code as free-form strings; physically deleting the row would
-     * orphan references and break historical detail pages.
+     * Soft-delete — flips status to DEPRECATED, sets {@code is_deleted=true},
+     * and stamps {@code deleted_at}. Downstream tables (account_strategy,
+     * backtest_run, *_param) reference {@code strategy_code} as free-form
+     * strings; physically deleting the row would orphan references and break
+     * historical detail pages.
      */
     @Transactional
     public StrategyDefinitionResponse deprecate(UUID id, String actorEmail) {
@@ -108,8 +163,15 @@ public class StrategyDefinitionService {
         StrategyDefinition entity = repository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Strategy definition not found: " + id));
         entity.setStatus(DEPRECATED_STATUS);
+        entity.setIsDeleted(true);
+        entity.setDeletedAt(LocalDateTime.now());
         entity.setUpdatedBy(actorEmail);
-        return toResponse(repository.save(entity));
+
+        StrategyDefinition saved = repository.save(entity);
+        historyService.record(saved, StrategyDefinitionHistoryService.OP_DELETE, null,
+                "Deprecated by " + actorEmail);
+        executorFactory.invalidateSpecCache();
+        return toResponse(saved);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -122,6 +184,12 @@ public class StrategyDefinitionService {
                 .strategyType(s.getStrategyType())
                 .description(s.getDescription())
                 .status(s.getStatus())
+                .archetype(s.getArchetype())
+                .archetypeVersion(s.getArchetypeVersion())
+                .specJsonb(s.getSpecJsonb() == null ? null : new HashMap<>(s.getSpecJsonb()))
+                .specSchemaVersion(s.getSpecSchemaVersion())
+                .isDeleted(s.getIsDeleted())
+                .deletedAt(s.getDeletedAt())
                 .createdTime(s.getCreatedTime())
                 .updatedTime(s.getUpdatedTime())
                 .build();
@@ -131,5 +199,9 @@ public class StrategyDefinitionService {
         if (raw == null) return fallback;
         String trimmed = raw.trim();
         return trimmed.isEmpty() ? fallback : trimmed;
+    }
+
+    private Map<String, Object> copyOrNull(Map<String, Object> in) {
+        return in == null ? null : new HashMap<>(in);
     }
 }

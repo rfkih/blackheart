@@ -1,0 +1,73 @@
+// dev-tooling subproject — code that must NEVER ship in the trading JAR.
+//
+// Currently contains DevAuthController (the JWT-minting bypass). Future
+// candidates: any debug-only endpoint, dev-mode seeders, fixture loaders,
+// or test harnesses that should be invisible to production binaries.
+//
+// Dependency direction:
+//   dev-tooling  ──depends on──>  blackheart (root, "main")
+//   blackheart   ── does NOT depend on dev-tooling
+//
+// This is the structural guarantee. The trading-service build (rooted at
+// blackheart's `tradingBootJar`) cannot transitively reach dev-tooling
+// because nothing in the main module imports from it. The research-
+// service build (rooted at `researchBootJar`) explicitly adds
+// dev-tooling's output to its bootJar classpath so the JWT-bypass
+// endpoint exists on the research JVM for orchestrator convenience.
+//
+// Adding a new dev-tooling class? Make sure no class in the main module
+// imports it. The whole point is one-way dependency from dev-tooling
+// into main.
+
+plugins {
+    id 'java'
+    // Apply Spring Boot's dependency-management plugin so versionless
+    // spring-boot-starter-* coordinates resolve to the same versions
+    // pinned by the root project. Without this, every starter would
+    // need an explicit version string and would drift over time.
+    id 'io.spring.dependency-management' version '1.1.6'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.boot:spring-boot-dependencies:3.3.5"
+        // Root project pulls spring-cloud-stream versionless via the
+        // Cloud BOM. When dev-tooling depends on root, it inherits that
+        // transitive — and needs the same BOM to resolve the version.
+        mavenBom "org.springframework.cloud:spring-cloud-dependencies:2024.0.0"
+    }
+}
+
+dependencies {
+    // Depend on the main module for shared types (UserRepository,
+    // JwtService, ResponseDto, ResponseCode, User, etc.). This is the
+    // ONE-WAY dependency: dev-tooling sees main, main does not see
+    // dev-tooling.
+    implementation project(':')
+
+    // Spring Boot annotations + web stack — DevAuthController is a
+    // @RestController so it needs the web starter, and it uses
+    // @Profile + @Slf4j etc.
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+
+    // Swagger annotations on @Tag / @Operation
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.1.0'
+
+    // Lombok for @RequiredArgsConstructor / @Slf4j / @Data / @Builder
+    compileOnly 'org.projectlombok:lombok:1.18.32'
+    annotationProcessor 'org.projectlombok:lombok:1.18.32'
+
+    // JPA for EntityNotFoundException
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+}

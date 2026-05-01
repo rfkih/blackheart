@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blackheart.local/schemas/mean_reversion_oscillator.schema.json",
+  "title": "mean_reversion_oscillator param overrides",
+  "description": "Validates the param_overrides map for any spec-driven strategy with archetype=mean_reversion_oscillator. Keys not listed here are rejected (additionalProperties=false) so a typo can never silently no-op.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "rsiOversoldMax":     {"type": "number", "minimum": 0, "maximum": 50,  "description": "RSI ceiling that qualifies as 'oversold' for long entries"},
+    "rsiOverboughtMin":   {"type": "number", "minimum": 50, "maximum": 100, "description": "RSI floor that qualifies as 'overbought' for short entries"},
+    "stopAtrBuffer":      {"type": "number", "exclusiveMinimum": 0, "maximum": 5},
+    "minRewardRiskRatio": {"type": "number", "exclusiveMinimum": 0, "maximum": 10},
+    "breakEvenR":         {"type": "number", "minimum": 0, "maximum": 5},
+    "maxEntryRiskPct":    {"type": "number", "exclusiveMinimum": 0, "maximum": 0.5},
+    "maxBarsHeld":        {"type": "integer", "minimum": 1, "maximum": 1000},
+    "intervalMinutes":    {"type": "integer", "minimum": 1, "maximum": 1440},
+    "useRiskBasedSizing": {"type": "boolean"},
+    "riskPct":            {"type": "number", "exclusiveMinimum": 0, "maximum": 0.1}
+  }
+}

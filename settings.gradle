@@ -1,1 +1,19 @@
 rootProject.name = 'blackheart'
+
+// Multi-module structure (V14 prod-readiness, Step 3 Stage B2).
+//
+// Subprojects whose code MUST NOT ship in the trading-service JAR
+// live under their own directory and explicitly do not get pulled
+// into the main module's classpath. The trading bootJar gets only
+// the root project's classes; the research bootJar additionally
+// pulls in dev-tooling.
+//
+// To add another subproject (e.g. test-fixtures, mock-clients,
+// research-experiments), follow the dev-tooling pattern:
+//   1. mkdir <name>/src/main/java/...
+//   2. <name>/build.gradle declares `implementation project(':')`
+//      and any specific deps it needs.
+//   3. settings.gradle adds `include '<name>'`.
+//   4. researchBootJar (or whichever JAR should ship it) adds the
+//      subproject's sourceSets.main.output to its classpath.
+include 'dev-tooling'

@@ -1,7 +1,6 @@
-package id.co.blackheart.service.research;
+package id.co.blackheart.service.strategy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import id.co.blackheart.service.strategy.TrendPullbackStrategyService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +26,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Not wired through Spring's config prop system on purpose: the point is
  * that users/Claude update params at runtime without touching application
  * properties or redeploying.
+ *
+ * <p><b>Package note (V14+):</b> moved from {@code service.research} to
+ * {@code service.strategy} so the trading-service JAR can physically
+ * exclude {@code service/research/**} without breaking
+ * {@link TrendPullbackStrategyService}, which depends on this class to
+ * resolve TPR params at runtime. The bean still serves the research-mode
+ * TPR strategy; it just lives next to its peers (LSR/VCB/VBO param services).
  */
 @Slf4j
 @Service

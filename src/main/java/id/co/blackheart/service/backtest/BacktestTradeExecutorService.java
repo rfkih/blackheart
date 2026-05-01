@@ -27,6 +27,7 @@ import java.util.UUID;
 public class BacktestTradeExecutorService {
 
     private final BacktestPricingService backtestPricingService;
+    private final BacktestFundingCostService backtestFundingCostService;
 
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_CLOSED = "CLOSED";
@@ -443,12 +444,25 @@ public class BacktestTradeExecutorService {
         BigDecimal exitQuoteQty = remainingQty.multiply(cleanExitPrice).setScale(8, RoundingMode.HALF_UP);
         BigDecimal exitFee = exitQuoteQty.multiply(safe(backtestRun.getFeePct())).setScale(8, RoundingMode.HALF_UP);
 
+        // Funding-cost stub (V22): for non-zero funding_rate_bps_per_8h, charge
+        // (or credit) the position based on hold duration. Default rate=0 keeps
+        // legacy backtests bit-identical.
+        BigDecimal fundingCost = backtestFundingCostService.compute(
+                safe(position.getEntryQuoteQty()),
+                position.getSide(),
+                position.getEntryTime(),
+                exitTime,
+                backtestRun.getFundingRateBpsPer8h()
+        );
+
         BigDecimal pnlAmount = calculatePLAmount(
                 entryPrice,
                 cleanExitPrice,
                 remainingQty,
                 position.getSide()
-        ).subtract(safe(position.getEntryFee())).subtract(exitFee);
+        ).subtract(safe(position.getEntryFee()))
+         .subtract(exitFee)
+         .subtract(fundingCost);
 
         BigDecimal pnlPercent = safe(position.getEntryQuoteQty()).compareTo(BigDecimal.ZERO) > 0
                 ? pnlAmount.divide(position.getEntryQuoteQty(), 8, RoundingMode.HALF_UP)
@@ -459,6 +473,11 @@ public class BacktestTradeExecutorService {
         position.setExitExecutedQty(remainingQty);
         position.setExitExecutedQuoteQty(exitQuoteQty);
         position.setExitFee(exitFee);
+        // Mirror entry_fee_currency on close — backtest fees are always in
+        // the quote currency of the pair (USDT for BTCUSDT). Without this
+        // every closed position has a null exit_fee_currency.
+        position.setExitFeeCurrency(position.getEntryFeeCurrency() != null
+                ? position.getEntryFeeCurrency() : "USDT");
         position.setExitReason(exitReason);
         position.setExitTime(exitTime);
         position.setStatus(STATUS_CLOSED);

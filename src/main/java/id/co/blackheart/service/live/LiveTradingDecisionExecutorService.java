@@ -10,6 +10,7 @@ import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
+import id.co.blackheart.service.promotion.StrategyPromotionService;
 import id.co.blackheart.service.risk.BookVolTargetingService;
 import id.co.blackheart.service.risk.RiskGuardService;
 import id.co.blackheart.service.strategy.StrategyDecisionInvariants;
@@ -17,6 +18,8 @@ import id.co.blackheart.service.trade.TradeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+
+import id.co.blackheart.util.SymbolUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -45,6 +48,7 @@ public class LiveTradingDecisionExecutorService {
     private final TradeService tradeService;
     private final RiskGuardService riskGuardService;
     private final BookVolTargetingService bookVolTargetingService;
+    private final StrategyPromotionService strategyPromotionService;
 
     public void execute(
             Trades activeTrade,
@@ -98,6 +102,37 @@ public class LiveTradingDecisionExecutorService {
                 // service returns the size unchanged.
                 applyVolTargeting(accountStrategyId, side, decision);
             }
+        }
+
+        // Promotion-pipeline guardrail (V15+). If account_strategy.simulated
+        // is TRUE, the strategy is in PAPER_TRADE state — record OPEN
+        // intents into paper_trade_run and short-circuit BEFORE any
+        // real-order code path runs.
+        //
+        // CRITICAL: only OPEN_LONG / OPEN_SHORT are diverted. CLOSE_*
+        // and UPDATE_POSITION_MANAGEMENT MUST always fall through to real
+        // execution. Otherwise an emergency demote (PROMOTED → PAPER_TRADE)
+        // on a strategy with open positions would strand them — the close
+        // signal would be recorded as paper trade and the live position
+        // would never actually close. This is the V15 audit fix
+        // (Bug 1, identified 2026-04-28).
+        //
+        // The implication for promotion workflow: an operator demoting a
+        // PROMOTED strategy that has open positions blocks NEW entries
+        // immediately, but real positions wind down via the strategy's
+        // own exit logic (TP/SL/trailing). Force-close via TradeController
+        // if you need to flatten faster.
+        boolean isOpenAction =
+                decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                        || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
+        if (isOpenAction
+                && context.getAccountStrategy() != null
+                && Boolean.TRUE.equals(context.getAccountStrategy().getSimulated())) {
+            UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
+            log.info("[PaperTrade] {} {} — simulated=true, recording without placing order",
+                    decision.getStrategyCode(), decision.getDecisionType());
+            strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
+            return;
         }
 
         switch (decision.getDecisionType()) {
@@ -221,9 +256,10 @@ public class LiveTradingDecisionExecutorService {
             StrategyDecision decision
     ) throws JsonProcessingException {
         Account account = context.getAccount();
+        String quoteAsset = SymbolUtils.quoteAsset(context.getAsset());
 
-        Portfolio usdtPortfolio = portfolioService.updateAndGetAssetBalance("USDT", account);
-        BigDecimal balance = usdtPortfolio == null ? BigDecimal.ZERO : safe(usdtPortfolio.getBalance());
+        Portfolio quotePortfolio = portfolioService.updateAndGetAssetBalance(quoteAsset, account);
+        BigDecimal balance = quotePortfolio == null ? BigDecimal.ZERO : safe(quotePortfolio.getBalance());
 
         BigDecimal tradeAmount = decision.getNotionalSize() != null
                 ? decision.getNotionalSize()
@@ -236,7 +272,8 @@ public class LiveTradingDecisionExecutorService {
 
         if (balance.compareTo(tradeAmount) < 0) {
             log.info(
-                    "Insufficient USDT balance for LONG entry | balance={} required={}",
+                    "Insufficient {} balance for LONG entry | balance={} required={}",
+                    quoteAsset,
                     balance,
                     tradeAmount
             );
@@ -256,9 +293,10 @@ public class LiveTradingDecisionExecutorService {
             StrategyDecision decision
     ) throws JsonProcessingException {
         Account account = context.getAccount();
+        String baseAsset = SymbolUtils.baseAsset(context.getAsset());
 
-        Portfolio btcPortfolio = portfolioService.updateAndGetAssetBalance("BTC", account);
-        BigDecimal balance = btcPortfolio == null ? BigDecimal.ZERO : safe(btcPortfolio.getBalance());
+        Portfolio basePortfolio = portfolioService.updateAndGetAssetBalance(baseAsset, account);
+        BigDecimal balance = basePortfolio == null ? BigDecimal.ZERO : safe(basePortfolio.getBalance());
 
         BigDecimal tradeAmount = decision.getPositionSize() != null
                 ? decision.getPositionSize()
@@ -271,7 +309,8 @@ public class LiveTradingDecisionExecutorService {
 
         if (balance.compareTo(tradeAmount) < 0) {
             log.info(
-                    "Insufficient BTC balance for SHORT entry | balance={} required={}",
+                    "Insufficient {} balance for SHORT entry | balance={} required={}",
+                    baseAsset,
                     balance,
                     tradeAmount
             );
@@ -279,7 +318,8 @@ public class LiveTradingDecisionExecutorService {
         }
 
         log.info(
-                "SHORT entry sizing | btcBalance={} riskAmount={} tradeBaseQty={}",
+                "SHORT entry sizing | baseAsset={} balance={} riskAmount={} tradeBaseQty={}",
+                baseAsset,
                 balance,
                 account.getRiskAmount(),
                 tradeAmount

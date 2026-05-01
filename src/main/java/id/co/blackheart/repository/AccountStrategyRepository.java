@@ -2,7 +2,9 @@ package id.co.blackheart.repository;
 
 import id.co.blackheart.model.AccountStrategy;
 import id.co.blackheart.projection.EnabledAccountStrategyProjection;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -11,6 +13,21 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface AccountStrategyRepository extends JpaRepository<AccountStrategy, UUID> {
+
+    /**
+     * Pessimistic-write lock variant of findById. Used by
+     * {@code StrategyPromotionService.promote()} to serialize concurrent
+     * state transitions. Without this, two concurrent admin calls could
+     * both read the same currentState and both insert promotion-log rows
+     * for the same transition (Bug 3 fix, 2026-04-28).
+     *
+     * <p>The lock is held for the duration of the calling
+     * {@code @Transactional} method; releases on commit/rollback.
+     * Concurrent callers wait at the SQL layer, not in Java code.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM AccountStrategy a WHERE a.accountStrategyId = :id")
+    Optional<AccountStrategy> findByIdForUpdate(@Param("id") UUID id);
 
     /**
      * Looks up a row by the same tuple that backs the {@code uq_account_strategy}

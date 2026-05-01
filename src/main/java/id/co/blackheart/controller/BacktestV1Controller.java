@@ -11,6 +11,7 @@ import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/backtest")
 @RequiredArgsConstructor
+@Profile("research")
 @Tag(name = "BacktestV1Controller", description = "Backtest API v1")
 public class BacktestV1Controller {
 

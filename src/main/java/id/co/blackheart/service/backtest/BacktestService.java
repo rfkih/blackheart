@@ -105,6 +105,7 @@ public class BacktestService {
                 .riskPerTradePct(request.getRiskPerTradePct())
                 .feePct(resolvedFee)
                 .slippagePct(resolvedSlippage)
+                .fundingRateBpsPer8h(request.getFundingRateBpsPer8h())
                 .minNotional(request.getMinNotional())
                 .minQty(request.getMinQty())
                 .qtyStep(request.getQtyStep())

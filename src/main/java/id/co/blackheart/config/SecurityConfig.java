@@ -78,13 +78,49 @@ public class SecurityConfig {
                                 "/api/v1/users/password-reset/request",
                                 "/api/v1/users/password-reset/confirm",
                                 "/api/v1/users/email/verify",
+                                // Dev-only auth bypass (DevAuthController). The
+                                // controller bean is gated by @Profile({"dev",
+                                // "local","test"}) so on prod profiles the bean
+                                // doesn't exist and these URLs return 404. The
+                                // URL-level whitelist is permanent so the
+                                // unauthenticated request reaches the (possibly
+                                // missing) controller without a 401 first.
+                                "/api/v1/dev/**",
+                                // Frontend + middleware error capture (Phase B/C).
+                                // Public because errors fire pre-login (login page
+                                // crash, expired-token redirect). Spam protection
+                                // is downstream: fingerprint dedup on error_log
+                                // collapses repeats; bounded async queue caps
+                                // overall throughput.
+                                "/api/v1/errors",
                                 "/healthcheck",
                                 "/ws",
                                 "/ws/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
-                                "/v3/api-docs/**"
+                                "/v3/api-docs/**",
+                                // Probe sub-paths only — k8s liveness/readiness
+                                // and external uptime monitors call these
+                                // anonymously. They expose status only, not the
+                                // component-detail tree (filtered server-side).
+                                "/actuator/health/liveness",
+                                "/actuator/health/readiness"
                         ).permitAll()
+                        // Actuator surfaces internal state (heap, env, thread
+                        // dumps). Admin-only on both JVMs; the /research
+                        // dashboard polls these from an admin session. Probe
+                        // sub-paths above are excluded from this rule.
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+                        // Research-JVM actuator, reverse-proxied through this
+                        // JVM so the research process stays bound to
+                        // 127.0.0.1. Same admin gate as the local actuator —
+                        // ResearchProxyController forwards the path through
+                        // to research:8081/actuator/**.
+                        .requestMatchers("/research-actuator/**").hasRole("ADMIN")
+                        // Python research orchestrator (FastAPI, 8082)
+                        // proxied through ResearchOrchestratorProxyController.
+                        // Same admin gate as the actuator surfaces.
+                        .requestMatchers("/api/v1/research-orch/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(ex -> ex

@@ -15,6 +15,8 @@ import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONObject;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
@@ -37,17 +39,38 @@ import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Live trading entry point. Subscribes to Binance kline WebSocket and
+ * dispatches closed-candle events into the live coordinator chain.
+ *
+ * <p><b>JVM-split safety (V14+):</b> annotated {@code @Profile("!research")}
+ * so this bean does NOT register on a JVM started with
+ * {@code spring.profiles.active=research}. Two simultaneous WS connections
+ * to Binance would create duplicate signals and risk double-trading; gating
+ * here prevents the research-isolated JVM from opening a second feed. See
+ * {@code research/DEPLOYMENT.md} step 3 for the full two-JVM operating
+ * model.
+ */
 @Slf4j
 @Service
+@Profile("!research")
 @RequiredArgsConstructor
 public class BinanceWebSocketClient {
 
-    private static final String SYMBOL = "BTCUSDT";
     private static final String WS_BASE = "wss://data-stream.binance.vision";
-    private static final String STREAMS = "btcusdt@kline_5m/btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h";
-    private static final String BINANCE_WS_URL = WS_BASE + "/stream?streams=" + STREAMS;
 
-    private static final Set<String> ACCEPTED_INTERVALS = Set.of("5m", "15m", "1h", "4h");
+    /** Intervals subscribed on the kline stream. Order is irrelevant; iterate as a list to keep the URL deterministic for logs. */
+    private static final List<String> SUBSCRIBED_INTERVALS = List.of("5m", "15m", "1h", "4h");
+    private static final Set<String> ACCEPTED_INTERVALS = Set.copyOf(SUBSCRIBED_INTERVALS);
+
+    /**
+     * Trading pair this client subscribes to. Single-symbol today (BTCUSDT);
+     * pulled out of a constant so adding ETHUSDT etc. is a config change
+     * rather than a code edit. Multi-symbol routing is a separate, larger
+     * change to this class — see SymbolUtils + the data-plane TODO.
+     */
+    @Value("${app.live.symbol:BTCUSDT}")
+    private String symbol;
 
     private static final Duration STALE_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration RECONNECT_DELAY = Duration.ofSeconds(5);
@@ -75,6 +98,22 @@ public class BinanceWebSocketClient {
     private volatile boolean running = false;
     private volatile Instant lastMessageTime = Instant.now();
 
+    public boolean isRunning() {
+        return running;
+    }
+
+    public Instant getLastMessageTime() {
+        return lastMessageTime;
+    }
+
+    public String getSymbol() {
+        return symbol;
+    }
+
+    public List<String> getSubscribedIntervals() {
+        return SUBSCRIBED_INTERVALS;
+    }
+
     private final AtomicReference<Disposable> socketDisposable = new AtomicReference<>();
     private final AtomicReference<Disposable> reconnectDisposable = new AtomicReference<>();
     private final AtomicReference<ScheduledFuture<?>> watchdogFuture = new AtomicReference<>();
@@ -89,7 +128,7 @@ public class BinanceWebSocketClient {
         running = true;
         lastMessageTime = Instant.now();
 
-        log.info("Starting BinanceWebSocketClient for {}", SYMBOL);
+        log.info("Starting BinanceWebSocketClient for {}", symbol);
         connect();
         startWatchdog();
     }
@@ -122,10 +161,11 @@ public class BinanceWebSocketClient {
             return;
         }
 
-        log.info("Connecting to Binance WebSocket: {}", BINANCE_WS_URL);
+        String wsUrl = buildBinanceWsUrl();
+        log.info("Connecting to Binance WebSocket: {}", wsUrl);
 
         socketDisposable.set(webSocketClient.execute(
-                URI.create(BINANCE_WS_URL),
+                URI.create(wsUrl),
                 session -> session.receive()
                         .map(WebSocketMessage::getPayloadAsText)
                         .flatMap(msg -> Mono.fromCallable(() -> {
@@ -170,8 +210,8 @@ public class BinanceWebSocketClient {
             BigDecimal latestPrice = new BigDecimal(kline.getString("c"));
 
             if ("5m".equals(interval)) {
-                cacheService.saveLatestPrice(SYMBOL, latestPrice, LocalDateTime.now());
-                liveTradeListenerService.process(SYMBOL, latestPrice);
+                cacheService.saveLatestPrice(symbol, latestPrice, LocalDateTime.now());
+                liveTradeListenerService.process(symbol, latestPrice);
             }
 
             if (!isProcessable(interval, finalCandle)) {
@@ -180,21 +220,21 @@ public class BinanceWebSocketClient {
 
             MarketData incomingMarketData = buildMarketData(container, kline, interval);
 
-            MarketData latestBeforeInsert = marketDataRepository.findLatestBySymbol(SYMBOL, interval);
+            MarketData latestBeforeInsert = marketDataRepository.findLatestBySymbol(symbol, interval);
 
             if (isDuplicateAgainstLatest(latestBeforeInsert, incomingMarketData)) {
                 return;
             }
 
             marketDataService.backfillMissingCandlesBeforeInsert(
-                    SYMBOL,
+                    symbol,
                     interval,
                     latestBeforeInsert,
                     incomingMarketData.getEndTime().atZone(UTC).toInstant()
             );
 
             boolean exists = marketDataRepository.existsBySymbolAndIntervalAndStartTime(
-                    SYMBOL,
+                    symbol,
                     interval,
                     incomingMarketData.getStartTime()
             );
@@ -232,6 +272,20 @@ public class BinanceWebSocketClient {
         return duplicate;
     }
 
+    /**
+     * Builds the combined-stream URL for the configured symbol across all
+     * subscribed intervals — e.g. {@code wss://.../stream?streams=btcusdt@kline_5m/btcusdt@kline_15m/...}.
+     * Lower-cased per Binance's stream-name contract; intervals iterated in
+     * declaration order so the URL is deterministic for log diffing.
+     */
+    private String buildBinanceWsUrl() {
+        String prefix = symbol.toLowerCase();
+        String streams = SUBSCRIBED_INTERVALS.stream()
+                .map(i -> prefix + "@kline_" + i)
+                .collect(Collectors.joining("/"));
+        return WS_BASE + "/stream?streams=" + streams;
+    }
+
     private boolean isProcessable(String interval, boolean finalCandle) {
         if (!ACCEPTED_INTERVALS.contains(interval)) {
             return false;
@@ -246,7 +300,7 @@ public class BinanceWebSocketClient {
         Instant eventTime = Instant.ofEpochMilli(container.getLong("E"));
 
         MarketData marketData = new MarketData();
-        marketData.setSymbol(SYMBOL);
+        marketData.setSymbol(symbol);
         marketData.setInterval(interval);
         marketData.setStartTime(LocalDateTime.ofInstant(startTime, UTC));
         marketData.setEndTime(LocalDateTime.ofInstant(endTime, UTC));
@@ -267,14 +321,14 @@ public class BinanceWebSocketClient {
     private void persistMarketData(String interval, MarketData marketData) {
         marketDataRepository.save(marketData);
 
-        log.info("Inserted candle | symbol={} interval={} endTime={} close={}",SYMBOL,interval,marketData.getEndTime(),marketData.getClosePrice());
+        log.info("Inserted candle | symbol={} interval={} endTime={} close={}", symbol, interval, marketData.getEndTime(), marketData.getClosePrice());
     }
 
     private void processPostPersist(String interval, MarketData marketData, LocalDateTime startTime) {
         FeatureStore featureStore = null;
 
         if (requiresFeatureComputation(interval)) {
-            featureStore = technicalIndicatorService.computeIndicatorsAndStore(SYMBOL, interval, startTime);
+            featureStore = technicalIndicatorService.computeIndicatorsAndStore(symbol, interval, startTime);
         }
 
         if (featureStore != null) {
@@ -299,15 +353,15 @@ public class BinanceWebSocketClient {
 
                 try {
                     if (strategies.size() == 1) {
-                        liveTradingCoordinatorService.process(account, strategies.getFirst(), SYMBOL, interval, marketData, featureStore);
+                        liveTradingCoordinatorService.process(account, strategies.getFirst(), symbol, interval, marketData, featureStore);
                     } else {
-                        liveOrchestratorCoordinatorService.process(account, strategies, SYMBOL, interval, marketData, featureStore);
+                        liveOrchestratorCoordinatorService.process(account, strategies, symbol, interval, marketData, featureStore);
                     }
 
                 } catch (Exception e) {
                     log.error(
                             "Live strategy execution failed | accountId={} symbol={} interval={}",
-                            accountId, SYMBOL, interval, e
+                            accountId, symbol, interval, e
                     );
                 }
             }

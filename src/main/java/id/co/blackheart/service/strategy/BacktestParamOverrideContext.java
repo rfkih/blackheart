@@ -1,4 +1,4 @@
-package id.co.blackheart.service.backtest;
+package id.co.blackheart.service.strategy;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -24,7 +24,7 @@ import java.util.Map;
  *
  * <p><b>Safety.</b> The backtest executor is a bounded thread pool whose
  * threads are reused across runs. That means a leaked thread-local from a
- * crashed run would poison the next run. {@link BacktestAsyncRunner} always
+ * crashed run would poison the next run. {@code BacktestAsyncRunner} always
  * calls {@link #enter(Map)} / {@link #exit()} in a try/finally so a rogue
  * exception inside the coordinator cannot strand a stale override map on the
  * worker thread.
@@ -33,6 +33,13 @@ import java.util.Map;
  * follow the same schema as {@code lsr_strategy_param.param_overrides} — the
  * same {@code Map<String, Object>} {@link id.co.blackheart.dto.lsr.LsrParams#merge}
  * and {@link id.co.blackheart.dto.vcb.VcbParams#merge} already consume.
+ *
+ * <p><b>Package note (V14+):</b> this class lives in {@code service/strategy}
+ * not {@code service/backtest} so the trading-service JAR can physically
+ * exclude {@code service/backtest/**} without breaking shared strategy code.
+ * The class is invoked exclusively by backtest infrastructure at runtime,
+ * but its definition is needed on the trading classpath because shared
+ * strategy services (LsrStrategyParamService etc.) reference it.
  */
 public final class BacktestParamOverrideContext {
 

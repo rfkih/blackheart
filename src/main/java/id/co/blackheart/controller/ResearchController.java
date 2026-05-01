@@ -7,7 +7,7 @@ import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.service.research.AnalysisReport;
 import id.co.blackheart.service.research.BacktestAnalysisService;
-import id.co.blackheart.service.research.ResearchParamService;
+import id.co.blackheart.service.strategy.ResearchParamService;
 import id.co.blackheart.service.research.ResearchSweepService;
 import id.co.blackheart.service.research.SweepSpec;
 import id.co.blackheart.service.research.SweepState;
@@ -20,6 +20,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -51,6 +52,7 @@ import java.util.UUID;
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/research")
+@Profile("research")
 @RequiredArgsConstructor
 @Tag(name = "ResearchController",
      description = "Research-mode diagnostics + hot-reloadable strategy params")

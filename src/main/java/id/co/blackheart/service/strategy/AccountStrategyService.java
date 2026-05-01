@@ -3,6 +3,7 @@ package id.co.blackheart.service.strategy;
 import id.co.blackheart.dto.request.CreateAccountStrategyRequest;
 import id.co.blackheart.dto.request.UpdateAccountStrategyRequest;
 import id.co.blackheart.dto.response.AccountStrategyResponse;
+import id.co.blackheart.engine.EngineMetrics;
 import id.co.blackheart.model.Account;
 import id.co.blackheart.model.AccountStrategy;
 import id.co.blackheart.model.StrategyDefinition;
@@ -16,6 +17,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -32,6 +35,7 @@ public class AccountStrategyService {
     private final StrategyDefinitionRepository strategyDefinitionRepository;
     private final TradesRepository tradesRepository;
     private final AuditService auditService;
+    private final EngineMetrics engineMetrics;
 
     /**
      * Returns all account strategies belonging to every account owned by the given user.
@@ -134,6 +138,14 @@ public class AccountStrategyService {
                     req.getIntervalName());
         }
 
+        // V15+ promotion-pipeline default: every new strategy starts in
+        // simulated=true so the safe path (paper-trade quarantine) is the
+        // default path. To go live, an admin must explicitly transition
+        // via POST /api/v1/strategy-promotion/{id}/promote with reason +
+        // evidence — the audit trail of "we considered this and approved
+        // it" is then recorded. Direct UPDATE on simulated still works
+        // for emergency operations but bypasses the workflow. (Bug 5 fix,
+        // 2026-04-28.)
         AccountStrategy entity = AccountStrategy.builder()
                 .accountStrategyId(UUID.randomUUID())
                 .accountId(account.getAccountId())
@@ -143,6 +155,7 @@ public class AccountStrategyService {
                 .symbol(req.getSymbol())
                 .intervalName(req.getIntervalName())
                 .enabled(shouldActivate)
+                .simulated(Boolean.TRUE)
                 .allowLong(req.getAllowLong())
                 .allowShort(req.getAllowShort())
                 .maxOpenPositions(req.getMaxOpenPositions())
@@ -259,6 +272,20 @@ public class AccountStrategyService {
         strategy.setKillSwitchTrippedAt(null);
         strategy.setKillSwitchReason(null);
         AccountStrategy saved = accountStrategyRepository.save(strategy);
+        // Reset the in-memory error window AFTER the rearm row commits.
+        // Resetting in-tx would clear the window even if the tx rolled back,
+        // leaving the rearm-flag still tripped but the error history wiped.
+        UUID toReset = saved.getAccountStrategyId();
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    engineMetrics.reset(toReset);
+                }
+            });
+        } else {
+            engineMetrics.reset(toReset);
+        }
         log.info("Re-armed kill switch | userId={} accountStrategyId={}",
                 userId, accountStrategyId);
         auditService.record(userId, "KILL_SWITCH_REARMED", "AccountStrategy",
@@ -447,6 +474,7 @@ public class AccountStrategyService {
                 .symbol(s.getSymbol())
                 .intervalName(s.getIntervalName())
                 .enabled(s.getEnabled())
+                .simulated(s.getSimulated())
                 .allowLong(s.getAllowLong())
                 .allowShort(s.getAllowShort())
                 .maxOpenPositions(s.getMaxOpenPositions())

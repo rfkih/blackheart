@@ -19,6 +19,11 @@ public class AccountStrategyResponse {
     private String symbol;
     private String intervalName;
     private Boolean enabled;
+    /** Paper-trade flag: when true the strategy emits real signals but
+     *  OPEN_LONG/OPEN_SHORT are diverted to {@code paper_trade_run}. Combined
+     *  with {@code enabled} this lets the frontend derive the promotion state
+     *  (RESEARCH / PAPER_TRADE / PROMOTED / DEMOTED). */
+    private Boolean simulated;
     private Boolean allowLong;
     private Boolean allowShort;
     private Integer maxOpenPositions;

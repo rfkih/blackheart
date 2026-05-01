@@ -105,6 +105,18 @@ public class BacktestRunRequest {
     @DecimalMax(value = "0.1", inclusive = true, message = "slippageRate cannot exceed 10%")
     private BigDecimal slippageRate;
 
+    /**
+     * Phase 0 funding-cost stub. Basis points per 8h Binance funding period;
+     * applied flat across the run. Default {@code null} → 0 (legacy parity).
+     * Bounded ±50 bps/8h — beyond that you're in distressed-market territory
+     * where a single rate stub is the wrong tool anyway (use Phase 4 history).
+     */
+    @DecimalMin(value = "-50.0", inclusive = true,
+                message = "fundingRateBpsPer8h cannot be below -50 bps/8h")
+    @DecimalMax(value = "50.0", inclusive = true,
+                message = "fundingRateBpsPer8h cannot exceed 50 bps/8h")
+    private BigDecimal fundingRateBpsPer8h;
+
     private BigDecimal minNotional;
     private BigDecimal minQty;
     private BigDecimal qtyStep;

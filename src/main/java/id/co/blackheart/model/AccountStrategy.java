@@ -69,6 +69,27 @@ public class AccountStrategy extends BaseEntity {
     private LocalDateTime deletedAt;
 
     /**
+     * Promotion-pipeline guard (V15+). When TRUE, the live executor records
+     * decisions into {@code paper_trade_run} instead of placing real orders
+     * with {@code BinanceClientService}. Default FALSE so pre-V15 strategies
+     * keep current behavior.
+     *
+     * <p>State semantics:
+     * <ul>
+     *   <li>{@code enabled=false}                                 → not running (RESEARCH)</li>
+     *   <li>{@code enabled=true, simulated=true}                  → live signals, paper orders (PAPER_TRADE)</li>
+     *   <li>{@code enabled=true, simulated=false}                 → real capital (PROMOTED/ACTIVE)</li>
+     * </ul>
+     *
+     * <p>Flip via {@code POST /api/v1/strategy/{id}/promote} — the controller
+     * writes a {@code strategy_promotion_log} row in the same transaction so
+     * every change is auditable.
+     */
+    @Column(name = "simulated", nullable = false)
+    @Builder.Default
+    private Boolean simulated = Boolean.FALSE;
+
+    /**
      * Drawdown kill-switch — when the strategy's rolling 30-day drawdown
      * exceeds this percentage, RiskGuardService trips the switch and
      * blocks new entries until manually re-armed. Default 25%; range
