@@ -1,30 +1,27 @@
 package id.co.blackheart.dto.request;
 
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Request body for unified {@code /api/v1/strategy-params/...} PUT and PATCH endpoints.
+ * Request body for {@code PATCH /api/v1/strategy-params/{paramId}} — update
+ * the mutable fields of an existing saved preset. Both fields are nullable;
+ * a {@code null} field is left unchanged.
  *
- * <p>Generic shape: a free-form override map. Keys and value types are validated
- * server-side against the archetype's parameter schema (resolved via the bound
- * {@code account_strategy → strategy_definition.archetype}).
- *
- * <p>Validation responsibilities:
- * <ul>
- *   <li>Controller verifies the map is non-null (handled by {@code @NotNull}).</li>
- *   <li>Service layer (or its caller) verifies each key is allowed by the
- *       archetype schema and each value matches the declared type/range.</li>
- * </ul>
+ * <p>Activation flips are NOT done through this endpoint — use
+ * {@code POST /:paramId/activate} or {@code /deactivate} instead so the
+ * "exactly one active per account_strategy" invariant is enforced atomically.
  */
 @Data
 @NoArgsConstructor
 public class StrategyParamUpdateRequest {
 
-    @NotNull(message = "overrides map is required (use empty {} to clear)")
-    private Map<String, Object> overrides = new HashMap<>();
+    @Size(max = 120, message = "name max 120 chars")
+    private String name;
+
+    /** Replaces the entire override map when present. */
+    private Map<String, Object> overrides;
 }

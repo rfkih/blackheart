@@ -11,6 +11,8 @@ import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.AccountStrategyRepository;
 import id.co.blackheart.repository.StrategyDefinitionRepository;
 import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.service.alert.AlertService;
+import id.co.blackheart.service.alert.AlertSeverity;
 import id.co.blackheart.service.audit.AuditService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +38,8 @@ public class AccountStrategyService {
     private final TradesRepository tradesRepository;
     private final AuditService auditService;
     private final EngineMetrics engineMetrics;
+    private final StrategyParamService strategyParamService;
+    private final AlertService alertService;
 
     /**
      * Returns all account strategies belonging to every account owned by the given user.
@@ -167,6 +171,23 @@ public class AccountStrategyService {
                 .build();
 
         AccountStrategy saved = accountStrategyRepository.save(entity);
+
+        // Seed a default active strategy_param preset so the new strategy can
+        // resolve params on the live path immediately. Without this, a freshly
+        // created (and later promoted) strategy would have no active preset and
+        // every read would fall through to archetype defaults — which is fine
+        // operationally, but the user-stated invariant is "every promoted
+        // strategy has a default parameter row". The empty {} overrides map
+        // means "use defaults verbatim"; the operator can then create
+        // additional named presets via the saved-preset API.
+        strategyParamService.create(
+                saved.getAccountStrategyId(),
+                "default",
+                java.util.Map.of(),
+                /*activate=*/true,
+                /*sourceBacktestRunId=*/null,
+                "system");
+
         log.info("Created account strategy id={} code={} preset={} account={} enabled={}",
                 saved.getAccountStrategyId(), saved.getStrategyCode(),
                 saved.getPresetName(), saved.getAccountId(), saved.getEnabled());
@@ -290,6 +311,12 @@ public class AccountStrategyService {
                 userId, accountStrategyId);
         auditService.record(userId, "KILL_SWITCH_REARMED", "AccountStrategy",
                 saved.getAccountStrategyId(), null, saved);
+        alertService.raise(
+                AlertSeverity.INFO,
+                "KILL_SWITCH_REARMED",
+                String.format("Kill-switch re-armed on %s (%s) by user %s",
+                        saved.getStrategyCode() != null ? saved.getStrategyCode() : "?",
+                        saved.getAccountStrategyId(), userId));
         return toResponse(saved);
     }
 

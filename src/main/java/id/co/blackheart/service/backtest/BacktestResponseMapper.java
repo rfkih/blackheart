@@ -37,6 +37,7 @@ public class BacktestResponseMapper {
                 .maxDrawdownPct(run.getMaxDrawdownPct())
                 .createdTime(run.getCreatedTime())
                 .updatedTime(run.getUpdatedTime())
+                .triggeredBy(run.getTriggeredBy())
                 .build();
     }
 }

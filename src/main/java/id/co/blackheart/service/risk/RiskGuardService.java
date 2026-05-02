@@ -6,6 +6,8 @@ import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.AccountStrategyRepository;
 import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.service.alert.AlertService;
+import id.co.blackheart.service.alert.AlertSeverity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -57,6 +59,7 @@ public class RiskGuardService {
     private final AccountStrategyRepository accountStrategyRepository;
     private final AccountRepository accountRepository;
     private final TradesRepository tradesRepository;
+    private final AlertService alertService;
 
     /**
      * Verdict for one entry attempt. {@link #allowed} is the gate; the
@@ -195,5 +198,14 @@ public class RiskGuardService {
         accountStrategyRepository.save(strategy);
         log.warn("[RiskGuard] Kill switch TRIPPED | accountStrategyId={} reason={}",
                 strategy.getAccountStrategyId(), reason);
+
+        UUID id = strategy.getAccountStrategyId();
+        String code = strategy.getStrategyCode();
+        alertService.raise(
+                AlertSeverity.CRITICAL,
+                "KILL_SWITCH_TRIPPED",
+                String.format("DD kill-switch tripped on %s (%s) — %s",
+                        code != null ? code : "?", id, reason),
+                "kill_switch_dd_" + id);
     }
 }

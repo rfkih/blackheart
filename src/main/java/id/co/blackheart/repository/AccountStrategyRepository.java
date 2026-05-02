@@ -76,6 +76,20 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
             """, nativeQuery = true)
     List<EnabledAccountStrategyProjection> findAllEnabledStrategyRefs();
 
+    /**
+     * PROMOTED state = enabled AND not simulated AND not soft-deleted.
+     * Used by {@code PnlDeviationAlertService} to scope deviation checks
+     * to strategies actually trading real capital.
+     */
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.enabled = true
+              AND acs.simulated = false
+              AND acs.is_deleted = false
+            """, nativeQuery = true)
+    List<AccountStrategy> findAllPromoted();
+
     @Query(value = """
             SELECT acs.*
             FROM account_strategy acs

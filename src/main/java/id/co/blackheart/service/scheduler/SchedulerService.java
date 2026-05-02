@@ -5,13 +5,14 @@ import id.co.blackheart.model.SchedulerJob;
 import id.co.blackheart.repository.SchedulerJobRepository;
 import id.co.blackheart.repository.ServerIpLogRepository;
 import id.co.blackheart.service.DeepLearningService;
+import id.co.blackheart.service.marketdata.FundingRateBackfillService;
 import id.co.blackheart.service.notification.IpMonitorService;
 import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.tradequery.StrategyDailyRealizedCurveService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
@@ -25,13 +26,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 @Slf4j
 @Profile("!research")
-@AllArgsConstructor
 public class SchedulerService {
 
     private final TaskScheduler taskScheduler;
@@ -42,6 +44,36 @@ public class SchedulerService {
     private final SchedulerJobRepository schedulerJobRepository;
     private final ServerIpLogRepository serverIpLogRepository;
     private final IpMonitorService ipMonitorService;
+    private final FundingRateBackfillService fundingRateBackfillService;
+    private final List<String> fundingSymbols;
+
+    /** Re-entrancy guard: a FUNDING_INGEST tick that overruns the next 8h
+     *  cron fire (e.g. Binance latency, retry storm) must not stack with
+     *  itself. compareAndSet returns false → this fire is skipped. */
+    private final AtomicBoolean fundingIngestRunning = new AtomicBoolean(false);
+
+    private static final String JOB_TYPE_FUNDING_INGEST = "FUNDING_INGEST";
+    private static final TimeZone UTC = TimeZone.getTimeZone("UTC");
+
+    public SchedulerService(TaskScheduler taskScheduler,
+                            PortfolioService portfolioService,
+                            DeepLearningService deepLearningService,
+                            StrategyDailyRealizedCurveService strategyDailyRealizedCurveService,
+                            SchedulerJobRepository schedulerJobRepository,
+                            ServerIpLogRepository serverIpLogRepository,
+                            IpMonitorService ipMonitorService,
+                            FundingRateBackfillService fundingRateBackfillService,
+                            @Value("${app.funding.symbols:BTCUSDT,ETHUSDT}") List<String> fundingSymbols) {
+        this.taskScheduler = taskScheduler;
+        this.portfolioService = portfolioService;
+        this.deepLearningService = deepLearningService;
+        this.strategyDailyRealizedCurveService = strategyDailyRealizedCurveService;
+        this.schedulerJobRepository = schedulerJobRepository;
+        this.serverIpLogRepository = serverIpLogRepository;
+        this.ipMonitorService = ipMonitorService;
+        this.fundingRateBackfillService = fundingRateBackfillService;
+        this.fundingSymbols = fundingSymbols;
+    }
 
     @PostConstruct
     public void initSchedulersFromDB() {
@@ -54,11 +86,25 @@ public class SchedulerService {
     public synchronized void startScheduler(SchedulerJob job) {
         stopScheduler(job.getJobName());
 
-        CronTrigger cronTrigger = new CronTrigger(job.getCronExpression());
+        CronTrigger cronTrigger = buildCronTrigger(job.getCronExpression(), job.getJobType());
         ScheduledFuture<?> task = taskScheduler.schedule(() -> routeJob(job), cronTrigger);
 
         schedulerMap.put(job.getJobName(), task);
-        log.info("[{}] Scheduled with cron expression: {}", job.getJobName(), job.getCronExpression());
+        log.info("[{}] Scheduled with cron expression: {} (tz={})",
+                job.getJobName(), job.getCronExpression(),
+                JOB_TYPE_FUNDING_INGEST.equals(job.getJobType()) ? "UTC" : "JVM-default");
+    }
+
+    /**
+     * FUNDING_INGEST must fire on UTC ticks because the cron seeded by V37
+     * (0 5 0/8 * * *) targets the Binance funding boundaries at 00/08/16 UTC.
+     * Other jobs keep the JVM-default TZ so existing operator-set crons keep
+     * the same semantics they had before this fix.
+     */
+    private CronTrigger buildCronTrigger(String cronExpression, String jobType) {
+        return JOB_TYPE_FUNDING_INGEST.equals(jobType)
+                ? new CronTrigger(cronExpression, UTC)
+                : new CronTrigger(cronExpression);
     }
 
     public synchronized void stopScheduler(String jobName) {
@@ -95,7 +141,7 @@ public class SchedulerService {
         if (cronExpression != null) {
             // Validate before persisting so a bad cron doesn't sneak into the
             // DB. CronTrigger throws IllegalArgumentException on malformed input.
-            new CronTrigger(cronExpression);
+            buildCronTrigger(cronExpression, job.getJobType());
             job.setCronExpression(cronExpression);
         }
         if (status != null) {
@@ -115,7 +161,7 @@ public class SchedulerService {
 
         ScheduledFuture<?> task = schedulerMap.get(job.getJobName());
         boolean scheduled = task != null && !task.isCancelled() && !task.isDone();
-        Instant nextRunAt = computeNextRun(job.getCronExpression());
+        Instant nextRunAt = computeNextRun(job.getCronExpression(), job.getJobType());
         return SchedulerJobStatusResponse.builder()
                 .id(job.getId())
                 .jobName(job.getJobName())
@@ -179,6 +225,10 @@ public class SchedulerService {
                     log.info("[{}][IP_MONITOR] Triggered at {}", jobName, LocalDateTime.now());
                     break;
 
+                case "FUNDING_INGEST":
+                    runFundingIngest(jobName);
+                    break;
+
                 default:
                     log.warn("[{}] Unknown job type: {}", jobName, jobType);
             }
@@ -210,7 +260,7 @@ public class SchedulerService {
         for (SchedulerJob job : jobs) {
             ScheduledFuture<?> task = schedulerMap.get(job.getJobName());
             boolean scheduled = task != null && !task.isCancelled() && !task.isDone();
-            Instant nextRunAt = computeNextRun(job.getCronExpression());
+            Instant nextRunAt = computeNextRun(job.getCronExpression(), job.getJobType());
             Instant lastRunAt = job.getLastRunAt() != null
                     ? job.getLastRunAt().atZone(ZoneId.systemDefault()).toInstant()
                     : ("IP_MONITOR".equals(job.getJobType()) ? ipMonitorLastRun : null);
@@ -234,14 +284,48 @@ public class SchedulerService {
      * row with "—" rather than 500'ing the whole panel because one job has a
      * bad cron in the DB.
      */
-    private Instant computeNextRun(String cronExpression) {
+    private Instant computeNextRun(String cronExpression, String jobType) {
         try {
-            CronTrigger trigger = new CronTrigger(cronExpression);
+            CronTrigger trigger = buildCronTrigger(cronExpression, jobType);
             return Optional.ofNullable(trigger.nextExecution(new SimpleTriggerContext()))
                     .orElse(null);
         } catch (RuntimeException e) {
             log.warn("Failed to compute next run for cron '{}': {}", cronExpression, e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Phase 4.8 — pull any new {@code funding_rate_history} events for each
+     * configured symbol. Idempotent (PK on symbol+funding_time) and per-symbol
+     * isolated: a Binance hiccup on ETH does not skip the BTC ingest.
+     */
+    private void runFundingIngest(String jobName) {
+        if (!fundingIngestRunning.compareAndSet(false, true)) {
+            log.warn("[{}][FUNDING_INGEST] Previous run still in progress; skipping this fire", jobName);
+            return;
+        }
+        try {
+            if (fundingSymbols == null || fundingSymbols.isEmpty()) {
+                log.warn("[{}][FUNDING_INGEST] No symbols configured (app.funding.symbols)", jobName);
+                return;
+            }
+            for (String rawSymbol : fundingSymbols) {
+                if (rawSymbol == null) continue;
+                String symbol = rawSymbol.trim();
+                if (symbol.isEmpty()) continue;
+                try {
+                    FundingRateBackfillService.BackfillResult r =
+                            fundingRateBackfillService.ingestIncremental(symbol);
+                    log.info("[{}][FUNDING_INGEST] symbol={} pages={} fetched={} inserted={} truncated={}",
+                            jobName, symbol, r.pages(), r.fetched(), r.inserted(), r.truncated());
+                } catch (Exception e) {
+                    log.error("[{}][FUNDING_INGEST] symbol={} failed: {}",
+                            jobName, symbol, e.getMessage(), e);
+                }
+            }
+        } finally {
+            fundingIngestRunning.set(false);
         }
     }
 

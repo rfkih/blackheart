@@ -33,5 +33,18 @@ public class BacktestRunDetailResponse {
     /** Reproducibility manifest — git SHA + app version captured at submit. */
     private String gitCommitSha;
     private String appVersion;
+    /** Origin tag — USER (wizard) or RESEARCHER (autonomous orchestrator). */
+    private String triggeredBy;
+    /** Run-level config the wizard needs to faithfully reproduce a run via
+     *  "Re-run with these params". {@code paramSnapshot} only carries
+     *  per-strategy override maps; these fields carry the rest. */
+    private Boolean allowLong;
+    private Boolean allowShort;
+    private Integer maxConcurrentStrategies;
+    private Map<String, BigDecimal> strategyAllocations;
+    private Map<String, String> strategyIntervals;
+    /** Flat funding-rate stub used at submit time (basis points per 8h),
+     *  applied per-position at close. Null on legacy runs that pre-date V22. */
+    private BigDecimal fundingRateBpsPer8h;
     private BacktestMetricsResponse metrics;
 }

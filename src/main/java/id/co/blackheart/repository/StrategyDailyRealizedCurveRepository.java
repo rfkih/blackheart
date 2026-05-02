@@ -78,4 +78,22 @@ public interface StrategyDailyRealizedCurveRepository extends JpaRepository<Stra
             @Param("accountStrategyIds") Collection<UUID> accountStrategyIds,
             @Param("curveDate") LocalDate curveDate
     );
+
+    /**
+     * Continuous slice of daily curve rows in {@code [startDate, endDate]} inclusive,
+     * ordered ASC. Used by {@code PnlDeviationAlertService} to z-score the most
+     * recent week against a trailing baseline.
+     */
+    @Query(value = """
+            SELECT *
+            FROM strategy_daily_realized_curve
+            WHERE account_strategy_id = :accountStrategyId
+              AND curve_date BETWEEN :startDate AND :endDate
+            ORDER BY curve_date ASC
+            """, nativeQuery = true)
+    List<StrategyDailyRealizedCurve> findByAccountStrategyIdAndCurveDateBetween(
+            @Param("accountStrategyId") UUID accountStrategyId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
 }

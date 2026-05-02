@@ -20,7 +20,9 @@ class BacktestFundingCostServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new BacktestFundingCostService();
+        // Per-event lookup is exercised separately; the legacy compute() path
+        // never touches the repository, so a null arg is safe here.
+        service = new BacktestFundingCostService(null);
     }
 
     @Test

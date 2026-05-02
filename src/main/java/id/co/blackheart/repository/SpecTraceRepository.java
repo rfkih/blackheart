@@ -45,4 +45,28 @@ public interface SpecTraceRepository extends JpaRepository<SpecTrace, UUID> {
 
     /** Hard delete used by retention policy for live traces (backtest traces are kept). */
     int deleteByAccountStrategyIdIsNotNullAndCreatedTimeLessThan(LocalDateTime cutoff);
+
+    /**
+     * Filterable list for the admin SpecTraceViewer. Filters compose
+     * additively; null means "no filter on this dimension". Ordered by
+     * bar_time DESC for the recent-first viewer behaviour.
+     */
+    @Query("""
+            SELECT t FROM SpecTrace t
+            WHERE (:backtestRunId IS NULL OR t.backtestRunId = :backtestRunId)
+              AND (:accountStrategyId IS NULL OR t.accountStrategyId = :accountStrategyId)
+              AND (:strategyCode IS NULL OR t.strategyCode = :strategyCode)
+              AND (:phase IS NULL OR t.phase = :phase)
+              AND (:decision IS NULL OR t.decision = :decision)
+              AND (:errorsOnly = FALSE OR t.errorClass IS NOT NULL)
+            ORDER BY t.barTime DESC
+            """)
+    Page<SpecTrace> findFiltered(
+            @Param("backtestRunId") UUID backtestRunId,
+            @Param("accountStrategyId") UUID accountStrategyId,
+            @Param("strategyCode") String strategyCode,
+            @Param("phase") String phase,
+            @Param("decision") String decision,
+            @Param("errorsOnly") boolean errorsOnly,
+            Pageable pageable);
 }

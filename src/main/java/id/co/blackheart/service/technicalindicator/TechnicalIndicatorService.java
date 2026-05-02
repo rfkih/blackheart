@@ -1,9 +1,13 @@
 package id.co.blackheart.service.technicalindicator;
 
 import id.co.blackheart.model.FeatureStore;
+import id.co.blackheart.model.FundingRate;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
+import id.co.blackheart.repository.FundingRateRepository;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.service.marketdata.FundingRateService;
+import id.co.blackheart.service.marketdata.FundingRateService.FundingFeatureSnapshot;
 import id.co.blackheart.util.MapperUtil;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -38,6 +42,8 @@ public class TechnicalIndicatorService {
 
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
+    private final FundingRateRepository fundingRateRepository;
+    private final FundingRateService fundingRateService;
     private final MapperUtil mapperUtil;
 
 
@@ -230,6 +236,13 @@ public class TechnicalIndicatorService {
 
         featureData.setSignedEr20(calculateSignedEfficiencyRatio(historicalData, 20));
 
+        // 5. Funding-rate projection (V35) — perp-only; null on spot symbols
+        // or when funding_rate_history is cold-started for this symbol.
+        FundingFeatureSnapshot funding = fundingRateService.computeFundingFeatures(
+                symbol, latestMarketData.getEndTime());
+        featureData.setFundingRate8h(funding.rate8h());
+        featureData.setFundingRate7dAvg(funding.rate7dAvg());
+        featureData.setFundingRateZ(funding.rateZ());
 
         return  featureStoreRepository.save(featureData);
     }
@@ -676,6 +689,66 @@ public class TechnicalIndicatorService {
                 inserted, skipped, failed, candlesInRange.size(),
                 symbol, interval, from, to);
         return inserted;
+    }
+
+    /**
+     * Phase 4 step 5 — patch only the funding-rate columns on existing
+     * feature_store rows in the range. Skips the heavy OHLC indicator
+     * recomputation. Loads the full {@link FundingRate} series for the
+     * symbol once and walks it in lockstep with the FS rows, so DB cost
+     * is one query for funding history + one query for FS rows + N
+     * row-level UPDATEs.
+     *
+     * <p>Idempotent — re-running overwrites the funding columns with the
+     * same computed values. Use after Phase 4.2 has populated
+     * {@code funding_rate_history} for the symbol.
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public int backfillFundingColumnsInRange(String symbol, String interval,
+                                             LocalDateTime from, LocalDateTime to) {
+        List<FundingRate> series = fundingRateRepository.findAllUpTo(symbol, to);
+        if (series.isEmpty()) {
+            log.warn("Funding-column backfill: no funding_rate_history rows for {} (cold-start?). Skipping.",
+                    symbol);
+            return 0;
+        }
+
+        List<FeatureStore> rows = featureStoreRepository
+                .findBySymbolIntervalAndRange(symbol, interval, from, to);
+        if (rows.isEmpty()) {
+            log.info("Funding-column backfill: no feature_store rows for {}/{} [{} → {}]",
+                    symbol, interval, from, to);
+            return 0;
+        }
+
+        // Chunked saveAll — a single 12k-row backfill at 5m cadence used to
+        // emit 12k INSERT-or-UPDATE statements in one Hibernate session,
+        // bloating the L1 cache. Flush every 500 rows to keep memory bounded.
+        final int CHUNK = 500;
+        int updated = 0;
+        java.util.List<FeatureStore> buffer = new java.util.ArrayList<>(CHUNK);
+        for (FeatureStore fs : rows) {
+            FundingFeatureSnapshot snap =
+                    fundingRateService.computeFundingFeaturesFromSeries(series, fs.getEndTime());
+            fs.setFundingRate8h(snap.rate8h());
+            fs.setFundingRate7dAvg(snap.rate7dAvg());
+            fs.setFundingRateZ(snap.rateZ());
+            buffer.add(fs);
+            updated++;
+            if (buffer.size() >= CHUNK) {
+                featureStoreRepository.saveAll(buffer);
+                featureStoreRepository.flush();
+                buffer.clear();
+            }
+        }
+        if (!buffer.isEmpty()) {
+            featureStoreRepository.saveAll(buffer);
+            featureStoreRepository.flush();
+        }
+
+        log.info("Funding-column backfill complete: updated={} for {}/{} [{} → {}] (series_size={})",
+                updated, symbol, interval, from, to, series.size());
+        return updated;
     }
 
     /**

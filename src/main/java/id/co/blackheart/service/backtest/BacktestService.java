@@ -93,6 +93,7 @@ public class BacktestService {
                 .userId(userId)
                 .accountStrategyId(request.getAccountStrategyId())
                 .strategyAccountStrategyIds(request.getStrategyAccountStrategyIds())
+                .strategyParamIds(request.getStrategyParamIds())
                 .strategyName(resolvedStrategyName)
                 .strategyCode(resolvedStrategyCode)
                 .asset(request.getAsset())
@@ -133,6 +134,11 @@ public class BacktestService {
                 .maxConcurrentStrategies(request.getMaxConcurrentStrategies())
                 .strategyAllocations(canonicaliseAllocations(request.getStrategyAllocations()))
                 .strategyIntervals(canonicaliseIntervals(request.getStrategyIntervals()))
+                // Origin tag — RESEARCHER when the autonomous orchestrator
+                // submits, USER for everything else (wizard, scripts). Trust
+                // model: this is a UI/operational label not a security gate;
+                // the V32 CHECK constraint bounds the value space.
+                .triggeredBy(resolveTriggeredBy(request))
                 .build();
 
         backtestRun = backtestRunRepository.save(backtestRun);
@@ -150,6 +156,22 @@ public class BacktestService {
         }
 
         return backtestMapperService.toRunResponse(backtestRun);
+    }
+
+    /**
+     * Resolves the {@code triggered_by} tag for a new run. Accepts only the
+     * two whitelisted values defined by the V32 CHECK constraint and falls
+     * back to {@code USER} for null/blank/unknown — keeping the contract
+     * additive so existing clients that never set the field still work.
+     */
+    private String resolveTriggeredBy(BacktestRunRequest request) {
+        String raw = request.getTriggeredBy();
+        if (raw == null) return "USER";
+        String upper = raw.trim().toUpperCase();
+        if ("RESEARCHER".equals(upper) || "USER".equals(upper)) {
+            return upper;
+        }
+        return "USER";
     }
 
     /**

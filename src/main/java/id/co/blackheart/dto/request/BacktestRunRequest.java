@@ -43,6 +43,17 @@ public class BacktestRunRequest {
     @Size(max = 10)
     private Map<String, UUID> strategyAccountStrategyIds;
 
+    /**
+     * Per-strategy pinned preset IDs. Key = uppercase strategy code,
+     * value = {@code strategy_param.param_id}. Lets a run lock onto a specific
+     * preset row (including a soft-deleted historical one) instead of "whatever
+     * preset is active right now". Falls back to the active preset for the
+     * account_strategy when a strategy code is absent from this map. Optional;
+     * the wizard does not need to send it for the existing form to keep working.
+     */
+    @Size(max = 10)
+    private Map<String, UUID> strategyParamIds;
+
     @Size(max = 150)
     private String strategyName;
 
@@ -169,4 +180,15 @@ public class BacktestRunRequest {
             @Pattern(regexp = "^(5m|15m|1h|4h)$",
                      message = "per-strategy interval must be one of: 5m / 15m / 1h / 4h")
             String> strategyIntervals;
+
+    /**
+     * Origin tag — {@code USER} (default) or {@code RESEARCHER}. The
+     * autonomous research-orchestrator stamps {@code RESEARCHER}; the
+     * frontend wizard never sets it. The service defaults missing/blank
+     * values to {@code USER}. Pattern is permissive so the column's CHECK
+     * constraint catches typos at the DB layer.
+     */
+    @Pattern(regexp = "^(USER|RESEARCHER)$",
+             message = "triggeredBy must be USER or RESEARCHER")
+    private String triggeredBy;
 }

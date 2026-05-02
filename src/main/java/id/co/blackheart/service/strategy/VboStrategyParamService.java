@@ -3,95 +3,55 @@ package id.co.blackheart.service.strategy;
 import id.co.blackheart.dto.request.VboParamUpdateRequest;
 import id.co.blackheart.dto.response.VboParamResponse;
 import id.co.blackheart.dto.vbo.VboParams;
-import id.co.blackheart.model.VboStrategyParam;
-import id.co.blackheart.repository.VboStrategyParamRepository;
-import jakarta.persistence.EntityNotFoundException;
+import id.co.blackheart.model.StrategyParam;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * VBO parameter shim over {@link StrategyParamService} (V29+ unified table).
+ * See {@link LsrStrategyParamService} for the architecture rationale.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class VboStrategyParamService {
 
-    private static final String CACHE_KEY_PREFIX = "vbo:params:";
-    private static final Duration CACHE_TTL = Duration.ofHours(1);
+    private static final String STRATEGY_CODE = "VBO";
 
-    private final VboStrategyParamRepository paramRepository;
-    private final RedisTemplate<String, Object> redisTemplate;
+    private final StrategyParamService strategyParamService;
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
     public VboParams getParams(UUID accountStrategyId) {
-        // Backtest wizard overrides take precedence over stored overrides and
-        // bypass the Redis cache entirely (per-run only; must not leak into
-        // live execution). Layer order is (defaults < stored < wizard).
-        Map<String, Object> wizardOverrides = BacktestParamOverrideContext.forStrategy("VBO");
-        if (!wizardOverrides.isEmpty()) {
-            return loadAndMergeWithWizardOverrides(accountStrategyId, wizardOverrides);
-        }
+        Map<String, Object> wizardOverrides = BacktestParamOverrideContext.forStrategy(STRATEGY_CODE);
 
-        if (accountStrategyId == null) {
+        if (accountStrategyId == null && wizardOverrides.isEmpty()) {
             return VboParams.defaults();
         }
 
-        String key = cacheKey(accountStrategyId);
-        try {
-            Object cached = redisTemplate.opsForValue().get(key);
-            if (cached instanceof VboParams params) {
-                log.debug("VBO params cache hit: accountStrategyId={}", accountStrategyId);
-                return params;
-            }
-        } catch (Exception e) {
-            log.warn("Redis read failed for VBO params key={}, falling through to DB: {}", key, e.getMessage());
-        }
-
-        VboParams resolved = loadAndMerge(accountStrategyId);
-
-        try {
-            redisTemplate.opsForValue().set(key, resolved, CACHE_TTL);
-        } catch (Exception e) {
-            log.warn("Redis write failed for VBO params key={}: {}", key, e.getMessage());
-        }
-
-        return resolved;
-    }
-
-    /** See {@code LsrStrategyParamService.loadAndMergeWithWizardOverrides}. */
-    private VboParams loadAndMergeWithWizardOverrides(UUID accountStrategyId,
-                                                      Map<String, Object> wizardOverrides) {
         Map<String, Object> stored = accountStrategyId == null
                 ? new HashMap<>()
-                : paramRepository.findByAccountStrategyId(accountStrategyId)
-                        .map(VboStrategyParam::getParamOverrides)
-                        .map(HashMap::new)
-                        .orElseGet(HashMap::new);
-        stored.putAll(wizardOverrides);
-        return VboParams.merge(stored);
+                : strategyParamService.resolveOverridesForStrategy(STRATEGY_CODE, accountStrategyId);
+
+        if (wizardOverrides.isEmpty()) {
+            return VboParams.merge(stored);
+        }
+        Map<String, Object> layered = new HashMap<>(stored);
+        layered.putAll(wizardOverrides);
+        return VboParams.merge(layered);
     }
 
     @Transactional(readOnly = true)
     public VboParamResponse getParamResponse(UUID accountStrategyId) {
-        return paramRepository.findByAccountStrategyId(accountStrategyId)
-                .map(e -> VboParamResponse.builder()
-                        .accountStrategyId(accountStrategyId)
-                        .hasCustomParams(!e.getParamOverrides().isEmpty())
-                        .overrides(e.getParamOverrides())
-                        .effectiveParams(VboParams.merge(e.getParamOverrides()))
-                        .version(e.getVersion())
-                        .updatedAt(e.getUpdatedTime())
-                        .build())
+        Optional<StrategyParam> entity = strategyParamService.findActive(accountStrategyId);
+        return entity.map(VboStrategyParamService::buildResponse)
                 .orElseGet(() -> VboParamResponse.builder()
                         .accountStrategyId(accountStrategyId)
                         .hasCustomParams(false)
@@ -107,112 +67,47 @@ public class VboStrategyParamService {
     @Transactional
     public VboParamResponse putParams(UUID accountStrategyId, VboParamUpdateRequest request, String updatedBy) {
         Map<String, Object> newOverrides = buildOverrideMap(request);
-        try {
-            VboStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseGet(() -> VboStrategyParam.builder()
-                            .accountStrategyId(accountStrategyId)
-                            .build());
-
-            entity.setParamOverrides(newOverrides);
-            entity.setUpdatedBy(updatedBy);
-            if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
-
-            VboStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-
-            log.info("VBO params PUT: accountStrategyId={} overrides={} by={}", accountStrategyId, newOverrides.keySet(), updatedBy);
-            return buildResponse(saved);
-        } catch (DataIntegrityViolationException e) {
-            VboStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseThrow(() -> e);
-            entity.setParamOverrides(newOverrides);
-            entity.setUpdatedBy(updatedBy);
-            VboStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-            return buildResponse(saved);
-        }
+        StrategyParam saved = strategyParamService.upsertActiveOverrides(
+                accountStrategyId, newOverrides, updatedBy);
+        log.info("VBO params PUT (via unified): accountStrategyId={} overrides={} by={}",
+                accountStrategyId, newOverrides.keySet(), updatedBy);
+        return buildResponse(saved);
     }
 
     @Transactional
     public VboParamResponse patchParams(UUID accountStrategyId, VboParamUpdateRequest request, String updatedBy) {
         Map<String, Object> incoming = buildOverrideMap(request);
-        try {
-            VboStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseGet(() -> VboStrategyParam.builder()
-                            .accountStrategyId(accountStrategyId)
-                            .paramOverrides(new HashMap<>())
-                            .build());
+        Map<String, Object> existing = strategyParamService.findActive(accountStrategyId)
+                .map(StrategyParam::getParamOverrides)
+                .map(HashMap<String, Object>::new)
+                .orElseGet(HashMap::new);
+        existing.putAll(incoming);
 
-            Map<String, Object> merged = new HashMap<>(entity.getParamOverrides());
-            merged.putAll(incoming);
-
-            entity.setParamOverrides(merged);
-            entity.setUpdatedBy(updatedBy);
-            if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
-
-            VboStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-
-            log.info("VBO params PATCH: accountStrategyId={} merged overrides={} by={}", accountStrategyId, merged.keySet(), updatedBy);
-            return buildResponse(saved);
-        } catch (DataIntegrityViolationException e) {
-            VboStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseThrow(() -> e);
-            Map<String, Object> merged = new HashMap<>(entity.getParamOverrides());
-            merged.putAll(incoming);
-            entity.setParamOverrides(merged);
-            entity.setUpdatedBy(updatedBy);
-            VboStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-            return buildResponse(saved);
-        }
+        StrategyParam saved = strategyParamService.upsertActiveOverrides(
+                accountStrategyId, existing, updatedBy);
+        log.info("VBO params PATCH (via unified): accountStrategyId={} merged keys={} by={}",
+                accountStrategyId, existing.keySet(), updatedBy);
+        return buildResponse(saved);
     }
 
     @Transactional
     public void resetToDefaults(UUID accountStrategyId, String updatedBy) {
-        int deleted = paramRepository.deleteByAccountStrategyId(accountStrategyId);
-        if (deleted == 0) {
-            throw new EntityNotFoundException("No custom VBO params found for accountStrategyId=" + accountStrategyId);
-        }
-        evictCacheAfterCommit(accountStrategyId);
-        log.info("VBO params reset to defaults: accountStrategyId={} by={}", accountStrategyId, updatedBy);
+        strategyParamService.upsertActiveOverrides(accountStrategyId, Map.of(), updatedBy);
+        log.info("VBO params reset to defaults (via unified): accountStrategyId={} by={}",
+                accountStrategyId, updatedBy);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private VboParams loadAndMerge(UUID accountStrategyId) {
-        return paramRepository.findByAccountStrategyId(accountStrategyId)
-                .map(e -> VboParams.merge(e.getParamOverrides()))
-                .orElseGet(VboParams::defaults);
-    }
-
-    private String cacheKey(UUID accountStrategyId) {
-        return CACHE_KEY_PREFIX + accountStrategyId;
-    }
-
-    private void evictCache(UUID accountStrategyId) {
-        try {
-            redisTemplate.delete(cacheKey(accountStrategyId));
-        } catch (Exception e) {
-            log.warn("Failed to evict VBO params cache for accountStrategyId={}: {}", accountStrategyId, e.getMessage());
-        }
-    }
-
-    private void evictCacheAfterCommit(UUID accountStrategyId) {
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                evictCache(accountStrategyId);
-            }
-        });
-    }
-
-    private VboParamResponse buildResponse(VboStrategyParam entity) {
+    private static VboParamResponse buildResponse(StrategyParam entity) {
+        Map<String, Object> overrides = entity.getParamOverrides() == null
+                ? Map.of()
+                : entity.getParamOverrides();
         return VboParamResponse.builder()
                 .accountStrategyId(entity.getAccountStrategyId())
-                .hasCustomParams(!entity.getParamOverrides().isEmpty())
-                .overrides(entity.getParamOverrides())
-                .effectiveParams(VboParams.merge(entity.getParamOverrides()))
+                .hasCustomParams(!overrides.isEmpty())
+                .overrides(overrides)
+                .effectiveParams(VboParams.merge(overrides))
                 .version(entity.getVersion())
                 .updatedAt(entity.getUpdatedTime())
                 .build();

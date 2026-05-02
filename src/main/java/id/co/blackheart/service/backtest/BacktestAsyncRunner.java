@@ -7,6 +7,7 @@ import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.service.research.BacktestAnalysisService;
 import id.co.blackheart.service.strategy.BacktestParamOverrideContext;
+import id.co.blackheart.service.strategy.BacktestParamPresetContext;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,8 +67,9 @@ public class BacktestAsyncRunner {
         try {
             BacktestRun run = markRunning(backtestRunId);
             overrides = readOverrides(run);
-            BacktestParamOverrideContext.enter(overrides);
             try {
+                BacktestParamOverrideContext.enter(overrides);
+                BacktestParamPresetContext.enter(run.getStrategyParamIds());
                 BacktestExecutionSummary summary = backtestCoordinatorService.execute(run);
                 markCompleted(backtestRunId, summary);
                 progressTracker.complete(backtestRunId);
@@ -83,6 +85,7 @@ public class BacktestAsyncRunner {
                 }
             } finally {
                 BacktestParamOverrideContext.exit();
+                BacktestParamPresetContext.exit();
             }
         } catch (Exception e) {
             log.error("Backtest failed | runId={} overrides={}", backtestRunId,

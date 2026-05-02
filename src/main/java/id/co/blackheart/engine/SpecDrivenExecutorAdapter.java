@@ -59,7 +59,8 @@ public class SpecDrivenExecutorAdapter implements StrategyExecutor {
     @Override
     public StrategyDecision execute(EnrichedStrategyContext context) {
         UUID accountStrategyId = resolveAccountStrategyId(context);
-        Map<String, Object> dbOverrides = paramService.getOverrides(accountStrategyId);
+        Map<String, Object> dbOverrides = paramService.resolveOverridesForStrategy(
+                baseSpec.getStrategyCode(), accountStrategyId);
         Map<String, Object> sweepOverrides = BacktestParamOverrideContext.forStrategy(baseSpec.getStrategyCode());
 
         // Layer order (most specific wins): archetype defaults → DB → backtest sweep.

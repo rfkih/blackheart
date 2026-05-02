@@ -3,19 +3,12 @@ package id.co.blackheart.service.strategy;
 import id.co.blackheart.dto.lsr.LsrParams;
 import id.co.blackheart.dto.request.LsrParamUpdateRequest;
 import id.co.blackheart.dto.response.LsrParamResponse;
-import id.co.blackheart.model.LsrStrategyParam;
-import id.co.blackheart.repository.LsrStrategyParamRepository;
-import jakarta.persistence.EntityNotFoundException;
+import id.co.blackheart.model.StrategyParam;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -24,112 +17,69 @@ import java.util.UUID;
 /**
  * Manages per-account-strategy LSR parameter overrides.
  *
- * <p>Architecture:
+ * <p>V29+ — this service is now a thin shim over {@link StrategyParamService}.
+ * Storage lives in the unified {@code strategy_param} table (active preset per
+ * account_strategy); this class adds two LSR-specific concerns:
+ *
  * <ol>
- *   <li>Resolved {@link LsrParams} objects are cached in Redis with a 1-hour TTL
- *       under the key {@code lsr:params:{accountStrategyId}}.</li>
- *   <li>DB rows only exist for account strategies that have at least one override —
- *       a missing row means "use all defaults".</li>
- *   <li>PUT replaces the entire override map; PATCH merges into the existing one.</li>
- *   <li>DELETE removes the DB row and cache entry, reverting to defaults.</li>
+ *   <li>Default merging — overlays the stored override map onto
+ *       {@link LsrParams#defaults()} via {@link LsrParams#merge(Map)}.</li>
+ *   <li>Backtest wizard overlay — when a backtest run is active and supplied
+ *       its own tuning, those overrides win over both stored params and
+ *       defaults, but only for the duration of the run (read-through, never
+ *       cached).</li>
  * </ol>
  *
- * <p>Passing {@code null} as {@code accountStrategyId} (e.g. in backtest or test contexts)
- * always returns defaults without hitting cache or DB.
+ * <p>Public API is unchanged so the existing {@code /api/v1/lsr-params}
+ * controller and {@link LsrStrategyService} continue to work without edits.
+ * Reset-to-defaults clears the active preset's overrides to {@code {}} rather
+ * than deleting the row — preserves the "every account_strategy has an active
+ * preset" invariant the promotion guard depends on.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class LsrStrategyParamService {
 
-    private static final String CACHE_KEY_PREFIX = "lsr:params:";
-    private static final Duration CACHE_TTL = Duration.ofHours(1);
+    private static final String STRATEGY_CODE = "LSR";
 
-    private final LsrStrategyParamRepository paramRepository;
-    private final RedisTemplate<String, Object> redisTemplate;
+    private final StrategyParamService strategyParamService;
 
     // ── Read ──────────────────────────────────────────────────────────────────────
 
     /**
-     * Returns the resolved (defaults + overrides merged) {@link LsrParams} for the given
-     * account strategy. Cache-first; falls back to DB then falls back to defaults.
+     * Returns the resolved (defaults + overrides + optional wizard overlay)
+     * {@link LsrParams} for the given account_strategy.
      *
-     * <p>This is on the hot path of strategy execution — Redis should serve the vast majority
-     * of calls with sub-millisecond latency.
+     * <p>Hot path of strategy execution; the unified service's Redis cache
+     * serves the vast majority of calls.
      */
     public LsrParams getParams(UUID accountStrategyId) {
-        // Backtest wizard overrides: when a run is active and supplied its own
-        // tuning, skip the shared Redis cache entirely — those overrides are
-        // per-run and must not leak into live execution. Layer order is
-        // (defaults < stored overrides < wizard overrides).
-        Map<String, Object> wizardOverrides = BacktestParamOverrideContext.forStrategy("LSR");
-        if (!wizardOverrides.isEmpty()) {
-            return loadAndMergeWithWizardOverrides(accountStrategyId, wizardOverrides);
-        }
+        Map<String, Object> wizardOverrides = BacktestParamOverrideContext.forStrategy(STRATEGY_CODE);
 
-        if (accountStrategyId == null) {
+        if (accountStrategyId == null && wizardOverrides.isEmpty()) {
             return LsrParams.defaults();
         }
 
-        // 1. Cache lookup
-        String key = cacheKey(accountStrategyId);
-        try {
-            Object cached = redisTemplate.opsForValue().get(key);
-            if (cached instanceof LsrParams params) {
-                log.debug("LSR params cache hit: accountStrategyId={}", accountStrategyId);
-                return params;
-            }
-        } catch (Exception e) {
-            log.warn("Redis read failed for LSR params key={}, falling through to DB: {}", key, e.getMessage());
-        }
-
-        // 2. DB lookup + merge
-        LsrParams resolved = loadAndMerge(accountStrategyId);
-
-        // 3. Populate cache (best-effort — don't fail strategy execution on cache write failure)
-        try {
-            redisTemplate.opsForValue().set(key, resolved, CACHE_TTL);
-        } catch (Exception e) {
-            log.warn("Redis write failed for LSR params key={}: {}", key, e.getMessage());
-        }
-
-        return resolved;
-    }
-
-    /**
-     * Backtest-only resolution: loads the stored override map (if any), overlays
-     * the wizard's per-run overrides on top, and merges the whole thing onto
-     * defaults in one shot. Never touches the Redis cache — results are
-     * per-run and caching them would poison live execution on subsequent
-     * reads.
-     */
-    private LsrParams loadAndMergeWithWizardOverrides(UUID accountStrategyId,
-                                                      Map<String, Object> wizardOverrides) {
         Map<String, Object> stored = accountStrategyId == null
                 ? new HashMap<>()
-                : paramRepository.findByAccountStrategyId(accountStrategyId)
-                        .map(LsrStrategyParam::getParamOverrides)
-                        .map(HashMap::new)
-                        .orElseGet(HashMap::new);
-        stored.putAll(wizardOverrides);   // wizard wins on key collisions
-        return LsrParams.merge(stored);
+                : strategyParamService.resolveOverridesForStrategy(STRATEGY_CODE, accountStrategyId);
+
+        if (wizardOverrides.isEmpty()) {
+            return LsrParams.merge(stored);
+        }
+        Map<String, Object> layered = new HashMap<>(stored);
+        layered.putAll(wizardOverrides);   // wizard wins on key collisions
+        return LsrParams.merge(layered);
     }
 
     /**
-     * Returns the full response DTO for the REST API (includes override map, version, etc.).
+     * Returns the full response DTO for the REST API (overrides + version + audit).
      */
     @Transactional(readOnly = true)
     public LsrParamResponse getParamResponse(UUID accountStrategyId) {
-        Optional<LsrStrategyParam> entity = paramRepository.findByAccountStrategyId(accountStrategyId);
-
-        return entity.map(e -> LsrParamResponse.builder()
-                        .accountStrategyId(accountStrategyId)
-                        .hasCustomParams(!e.getParamOverrides().isEmpty())
-                        .overrides(e.getParamOverrides())
-                        .effectiveParams(LsrParams.merge(e.getParamOverrides()))
-                        .version(e.getVersion())
-                        .updatedAt(e.getUpdatedTime())
-                        .build())
+        Optional<StrategyParam> entity = strategyParamService.findActive(accountStrategyId);
+        return entity.map(LsrStrategyParamService::buildResponse)
                 .orElseGet(() -> LsrParamResponse.builder()
                         .accountStrategyId(accountStrategyId)
                         .hasCustomParams(false)
@@ -142,139 +92,55 @@ public class LsrStrategyParamService {
 
     // ── Write ─────────────────────────────────────────────────────────────────────
 
-    /**
-     * Replaces the entire override map for the given account strategy.
-     * Null fields in the request are excluded from the override map (treated as "use default").
-     * Evicts the cache on success.
-     */
     @Transactional
     public LsrParamResponse putParams(UUID accountStrategyId, LsrParamUpdateRequest request, String updatedBy) {
         Map<String, Object> newOverrides = buildOverrideMap(request);
-        try {
-            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseGet(() -> LsrStrategyParam.builder()
-                            .accountStrategyId(accountStrategyId)
-                            .build());
-
-            entity.setParamOverrides(newOverrides);
-            entity.setUpdatedBy(updatedBy);
-            if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
-
-            LsrStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-
-            log.info("LSR params PUT: accountStrategyId={} overrides={} by={}", accountStrategyId, newOverrides.keySet(), updatedBy);
-
-            return buildResponse(saved);
-        } catch (DataIntegrityViolationException e) {
-            // Concurrent insert: another thread created the row — load it and update
-            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseThrow(() -> e);
-            entity.setParamOverrides(newOverrides);
-            entity.setUpdatedBy(updatedBy);
-            LsrStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-            return buildResponse(saved);
-        }
+        StrategyParam saved = strategyParamService.upsertActiveOverrides(
+                accountStrategyId, newOverrides, updatedBy);
+        log.info("LSR params PUT (via unified): accountStrategyId={} overrides={} by={}",
+                accountStrategyId, newOverrides.keySet(), updatedBy);
+        return buildResponse(saved);
     }
 
-    /**
-     * Merges non-null fields from the request into the existing override map.
-     * Existing overrides not mentioned in the request are preserved.
-     * Evicts the cache on success.
-     */
     @Transactional
     public LsrParamResponse patchParams(UUID accountStrategyId, LsrParamUpdateRequest request, String updatedBy) {
         Map<String, Object> incoming = buildOverrideMap(request);
-        try {
-            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseGet(() -> LsrStrategyParam.builder()
-                            .accountStrategyId(accountStrategyId)
-                            .paramOverrides(new HashMap<>())
-                            .build());
+        Map<String, Object> existing = strategyParamService.findActive(accountStrategyId)
+                .map(StrategyParam::getParamOverrides)
+                .map(HashMap<String, Object>::new)
+                .orElseGet(HashMap::new);
+        existing.putAll(incoming);
 
-            Map<String, Object> merged = new HashMap<>(entity.getParamOverrides());
-            merged.putAll(incoming);
-
-            entity.setParamOverrides(merged);
-            entity.setUpdatedBy(updatedBy);
-            if (entity.getCreatedBy() == null) entity.setCreatedBy(updatedBy);
-
-            LsrStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-
-            log.info("LSR params PATCH: accountStrategyId={} merged overrides={} by={}", accountStrategyId, merged.keySet(), updatedBy);
-
-            return buildResponse(saved);
-        } catch (DataIntegrityViolationException e) {
-            // Concurrent insert: another thread created the row — load it and merge
-            LsrStrategyParam entity = paramRepository.findByAccountStrategyId(accountStrategyId)
-                    .orElseThrow(() -> e);
-            Map<String, Object> merged = new HashMap<>(entity.getParamOverrides());
-            merged.putAll(incoming);
-            entity.setParamOverrides(merged);
-            entity.setUpdatedBy(updatedBy);
-            LsrStrategyParam saved = paramRepository.save(entity);
-            evictCacheAfterCommit(accountStrategyId);
-            return buildResponse(saved);
-        }
+        StrategyParam saved = strategyParamService.upsertActiveOverrides(
+                accountStrategyId, existing, updatedBy);
+        log.info("LSR params PATCH (via unified): accountStrategyId={} merged keys={} by={}",
+                accountStrategyId, existing.keySet(), updatedBy);
+        return buildResponse(saved);
     }
 
     /**
-     * Deletes all custom overrides for the given account strategy, reverting it to defaults.
-     * Throws {@link EntityNotFoundException} if no custom params exist.
+     * Reset overrides to defaults. Preserves the active preset row (with
+     * empty {@code {}} overrides) so the promotion-guard invariant — every
+     * promotable strategy has an active preset — stays intact.
      */
     @Transactional
     public void resetToDefaults(UUID accountStrategyId, String updatedBy) {
-        int deleted = paramRepository.deleteByAccountStrategyId(accountStrategyId);
-        if (deleted == 0) {
-            throw new EntityNotFoundException(
-                    "No custom LSR params found for accountStrategyId=" + accountStrategyId);
-        }
-        evictCache(accountStrategyId);
-        log.info("LSR params reset to defaults: accountStrategyId={} by={}", accountStrategyId, updatedBy);
+        strategyParamService.upsertActiveOverrides(accountStrategyId, Map.of(), updatedBy);
+        log.info("LSR params reset to defaults (via unified): accountStrategyId={} by={}",
+                accountStrategyId, updatedBy);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────────
 
-    private LsrParams loadAndMerge(UUID accountStrategyId) {
-        return paramRepository.findByAccountStrategyId(accountStrategyId)
-                .map(e -> LsrParams.merge(e.getParamOverrides()))
-                .orElseGet(LsrParams::defaults);
-    }
-
-    private String cacheKey(UUID accountStrategyId) {
-        return CACHE_KEY_PREFIX + accountStrategyId;
-    }
-
-    private void evictCache(UUID accountStrategyId) {
-        try {
-            redisTemplate.delete(cacheKey(accountStrategyId));
-        } catch (Exception e) {
-            log.warn("Failed to evict LSR params cache for accountStrategyId={}: {}", accountStrategyId, e.getMessage());
-        }
-    }
-
-    /**
-     * Registers a post-commit hook to evict the cache only after the surrounding transaction
-     * has been committed. Prevents a concurrent reader from re-populating the cache with
-     * stale DB data during the window between eviction and commit.
-     */
-    private void evictCacheAfterCommit(UUID accountStrategyId) {
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                evictCache(accountStrategyId);
-            }
-        });
-    }
-
-    private LsrParamResponse buildResponse(LsrStrategyParam entity) {
+    private static LsrParamResponse buildResponse(StrategyParam entity) {
+        Map<String, Object> overrides = entity.getParamOverrides() == null
+                ? Map.of()
+                : entity.getParamOverrides();
         return LsrParamResponse.builder()
                 .accountStrategyId(entity.getAccountStrategyId())
-                .hasCustomParams(!entity.getParamOverrides().isEmpty())
-                .overrides(entity.getParamOverrides())
-                .effectiveParams(LsrParams.merge(entity.getParamOverrides()))
+                .hasCustomParams(!overrides.isEmpty())
+                .overrides(overrides)
+                .effectiveParams(LsrParams.merge(overrides))
                 .version(entity.getVersion())
                 .updatedAt(entity.getUpdatedTime())
                 .build();
@@ -282,7 +148,6 @@ public class LsrStrategyParamService {
 
     /**
      * Converts a {@link LsrParamUpdateRequest} to a flat Map, including only non-null fields.
-     * Numeric values are stored as {@link java.math.BigDecimal} or {@link Integer} to preserve precision.
      */
     private Map<String, Object> buildOverrideMap(LsrParamUpdateRequest req) {
         Map<String, Object> m = new HashMap<>();

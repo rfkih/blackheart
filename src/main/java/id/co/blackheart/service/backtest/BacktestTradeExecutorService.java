@@ -444,16 +444,29 @@ public class BacktestTradeExecutorService {
         BigDecimal exitQuoteQty = remainingQty.multiply(cleanExitPrice).setScale(8, RoundingMode.HALF_UP);
         BigDecimal exitFee = exitQuoteQty.multiply(safe(backtestRun.getFeePct())).setScale(8, RoundingMode.HALF_UP);
 
-        // Funding-cost stub (V22): for non-zero funding_rate_bps_per_8h, charge
-        // (or credit) the position based on hold duration. Default rate=0 keeps
-        // legacy backtests bit-identical.
-        BigDecimal fundingCost = backtestFundingCostService.compute(
-                safe(position.getEntryQuoteQty()),
-                position.getSide(),
-                position.getEntryTime(),
-                exitTime,
-                backtestRun.getFundingRateBpsPer8h()
-        );
+        // Funding cost: when the run pins a flat rate (V22 stub, tests, what-if
+        // sweeps) honor it bit-identically; otherwise sum actual settlement
+        // events from funding_rate_history (Phase 4.6). Non-perp symbols and
+        // cold-start symbols silently return zero from the per-event path.
+        BigDecimal flatRate = backtestRun.getFundingRateBpsPer8h();
+        BigDecimal fundingCost;
+        if (flatRate != null && flatRate.signum() != 0) {
+            fundingCost = backtestFundingCostService.compute(
+                    safe(position.getEntryQuoteQty()),
+                    position.getSide(),
+                    position.getEntryTime(),
+                    exitTime,
+                    flatRate
+            );
+        } else {
+            fundingCost = backtestFundingCostService.computePerEvent(
+                    safe(position.getEntryQuoteQty()),
+                    position.getSide(),
+                    backtestRun.getAsset(),
+                    position.getEntryTime(),
+                    exitTime
+            );
+        }
 
         BigDecimal pnlAmount = calculatePLAmount(
                 entryPrice,

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -35,4 +36,14 @@ public interface StrategyDefinitionHistoryRepository
     /** Operator audit by user. */
     Page<StrategyDefinitionHistory> findByChangedByUserIdOrderByChangedAtDesc(
             UUID userId, Pageable pageable);
+
+    /**
+     * Most-recent revision before {@code cutoff} for the same strategy_code.
+     * Used by the diff browser so the "diff vs prev" lookup works across
+     * pagination boundaries — the row immediately older than the last entry
+     * on the current page lives on the next page.
+     */
+    Optional<StrategyDefinitionHistory>
+        findFirstByStrategyCodeAndChangedAtLessThanOrderByChangedAtDesc(
+            String strategyCode, LocalDateTime cutoff);
 }

@@ -66,4 +66,7 @@ public class BacktestRunResponse {
     private LocalDateTime createdTime;
 
     private LocalDateTime updatedTime;
+
+    /** Origin tag — USER (wizard) or RESEARCHER (autonomous orchestrator). */
+    private String triggeredBy;
 }

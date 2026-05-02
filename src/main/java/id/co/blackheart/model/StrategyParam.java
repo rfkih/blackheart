@@ -5,24 +5,26 @@ import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * Unified per-account-strategy parameter overrides — replaces the legacy
- * per-strategy tables (lsr_strategy_param, vcb_strategy_param, vbo_strategy_param).
+ * One saved parameter preset for an {@code account_strategy}.
  *
- * <p>One row per {@code account_strategy_id}, serving every strategy code
- * (legacy hand-coded Java strategies AND spec-driven engine strategies).
- * A missing row means "use defaults" — the service layer merges
- * {@code paramOverrides} on top of the strategy's default param map at read time.
+ * <p>V29 redesign: 1:N replaces the previous 1:1 schema. Each row is a named
+ * preset; at most one preset per {@code account_strategy_id} is {@code is_active}
+ * (enforced by the partial unique index {@code uq_strategy_param_one_active}).
+ * The active preset is the one live trading reads. Backtests can target any
+ * preset by {@code param_id}, including soft-deleted ones (so historical runs
+ * stay reproducible). Soft-deleted presets are hidden from the saved-set listing.
  *
- * <p>For LEGACY_JAVA strategies, the override shape mirrors the strategy class's
- * own Params DTO (e.g. {@code {"adxThreshold": 25}}). For spec-driven strategies,
- * the override shape mirrors the spec's archetype-defined parameter schema.
- *
- * <p>See {@code docs/PARAMETRIC_ENGINE_BLUEPRINT.md} §16.2 for the full design.
+ * <p>The {@code paramOverrides} JSONB shape is identical to the legacy
+ * {@code lsr_strategy_param} / {@code vcb_strategy_param} / {@code vbo_strategy_param}
+ * shape for those strategies, and identical to the spec-driven param schema for
+ * archetype-driven strategies — the unified service is intentionally
+ * shape-agnostic.
  */
 @Entity
 @Table(name = "strategy_param")
@@ -33,26 +35,42 @@ import java.util.UUID;
 @AllArgsConstructor
 public class StrategyParam extends BaseEntity {
 
-    /** Same as the account_strategy_id FK — serves as PK for 1-to-1 semantics. */
     @Id
+    @Column(name = "param_id", nullable = false, updatable = false)
+    private UUID paramId;
+
     @Column(name = "account_strategy_id", nullable = false, updatable = false)
     private UUID accountStrategyId;
 
-    /**
-     * Partial override map. Keys and value types depend on the strategy:
-     * for LEGACY_JAVA strategies the keys mirror the strategy's Params DTO fields;
-     * for spec-driven strategies the keys are validated against the archetype's
-     * parameter schema before write.
-     * Stored as {@code jsonb} in PostgreSQL.
-     */
+    @Column(name = "name", nullable = false, length = 120)
+    private String name;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "param_overrides", nullable = false, columnDefinition = "jsonb")
     @Builder.Default
     private Map<String, Object> paramOverrides = new HashMap<>();
 
+    @Column(name = "is_active", nullable = false)
+    @Builder.Default
+    private boolean active = false;
+
+    @Column(name = "is_deleted", nullable = false)
+    @Builder.Default
+    private boolean deleted = false;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     /**
-     * Optimistic-lock version. Prevents concurrent PUT/PATCH from silently overwriting each other.
+     * Optional FK to {@code backtest_run.backtest_run_id} — the run whose params
+     * seeded this preset. Set by the Re-run-with-params "Save to library" flow;
+     * null for presets created via the wizard "Save current" path or the
+     * legacy {@code /{lsr,vcb,vbo}-params} shims. {@code ON DELETE SET NULL}
+     * at the DB layer so a backtest-run cleanup can't strand the preset.
      */
+    @Column(name = "source_backtest_run_id")
+    private UUID sourceBacktestRunId;
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;

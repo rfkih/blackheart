@@ -1,6 +1,7 @@
 package id.co.blackheart.controller;
 
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.service.marketdata.FundingRateBackfillService;
 import id.co.blackheart.service.marketdata.HistoricalDataService;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import id.co.blackheart.util.ResponseCode;
@@ -30,6 +31,7 @@ public class HistoricalBackfillController {
 
     private final HistoricalDataService historicalDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
+    private final FundingRateBackfillService fundingRateBackfillService;
 
     @PostMapping({"/backfill", "/backill"})
     public ResponseEntity<ResponseDto> backfillHistoricalData(
@@ -79,6 +81,59 @@ public class HistoricalBackfillController {
                         "to", to.toString(),
                         "recompute", recompute,
                         "recordsUpdated", updated
+                ))
+                .build());
+    }
+
+    /**
+     * Phase 4 step 2 — pull Binance fapi funding-rate history into
+     * {@code funding_rate_history}. Idempotent (PK on (symbol, funding_time));
+     * safe to re-run. {@code from} defaults to 2024-01-01 UTC.
+     */
+    @PostMapping("/backfill-funding")
+    public ResponseEntity<ResponseDto> backfillFundingRate(
+            @RequestParam String symbol,
+            @RequestParam(required = false) LocalDateTime from
+    ) {
+        LocalDateTime start = from != null ? from : LocalDateTime.of(2024, 1, 1, 0, 0);
+        FundingRateBackfillService.BackfillResult result =
+                fundingRateBackfillService.backfillHistorical(symbol, start);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(Map.of(
+                        "symbol", result.symbol(),
+                        "from", start.toString(),
+                        "pages", result.pages(),
+                        "fetched", result.fetched(),
+                        "inserted", result.inserted(),
+                        "truncated", result.truncated()
+                ))
+                .build());
+    }
+
+    /**
+     * Phase 4 step 5 — patch only {@code funding_rate_8h},
+     * {@code funding_rate_7d_avg}, {@code funding_rate_z} on existing
+     * feature_store rows. Run this once after the funding history has been
+     * backfilled (Phase 4.2). Idempotent.
+     */
+    @PostMapping("/backfill-funding-columns")
+    public ResponseEntity<ResponseDto> backfillFundingColumns(
+            @RequestParam String symbol,
+            @RequestParam String interval,
+            @RequestParam LocalDateTime from,
+            @RequestParam LocalDateTime to
+    ) {
+        int updated = technicalIndicatorService.backfillFundingColumnsInRange(
+                symbol, interval, from, to);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(Map.of(
+                        "symbol", symbol,
+                        "interval", interval,
+                        "from", from.toString(),
+                        "to", to.toString(),
+                        "rowsUpdated", updated
                 ))
                 .build());
     }

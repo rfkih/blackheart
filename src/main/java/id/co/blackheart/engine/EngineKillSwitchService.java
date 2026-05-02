@@ -2,6 +2,8 @@ package id.co.blackheart.engine;
 
 import id.co.blackheart.model.AccountStrategy;
 import id.co.blackheart.repository.AccountStrategyRepository;
+import id.co.blackheart.service.alert.AlertService;
+import id.co.blackheart.service.alert.AlertSeverity;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -30,14 +32,17 @@ public class EngineKillSwitchService {
 
     private final AccountStrategyRepository repository;
     private final TransactionTemplate isolatedTx;
+    private final AlertService alertService;
 
     @Autowired
     public EngineKillSwitchService(AccountStrategyRepository repository,
-                                   PlatformTransactionManager txManager) {
+                                   PlatformTransactionManager txManager,
+                                   AlertService alertService) {
         this.repository = repository;
         TransactionTemplate tx = new TransactionTemplate(txManager);
         tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.isolatedTx = tx;
+        this.alertService = alertService;
     }
 
     /**
@@ -50,6 +55,7 @@ public class EngineKillSwitchService {
     protected EngineKillSwitchService() {
         this.repository = null;
         this.isolatedTx = null;
+        this.alertService = null;
     }
 
     /**
@@ -76,6 +82,16 @@ public class EngineKillSwitchService {
                 repository.save(as);
                 log.error("Engine kill switch TRIPPED | accountStrategyId={} strategyCode={} reason={}",
                         accountStrategyId, as.getStrategyCode(), reason);
+
+                if (alertService != null) {
+                    String code = as.getStrategyCode();
+                    alertService.raise(
+                            AlertSeverity.CRITICAL,
+                            "ENGINE_KILL_SWITCH",
+                            String.format("Engine error-rate kill-switch tripped on %s (%s) — %s",
+                                    code != null ? code : "?", accountStrategyId, reason),
+                            "kill_switch_engine_" + accountStrategyId);
+                }
             });
         } catch (RuntimeException ex) {
             log.error("Failed to trip engine kill switch for accountStrategyId={} — will retry on next error",

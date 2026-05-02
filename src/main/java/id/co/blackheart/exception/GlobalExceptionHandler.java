@@ -62,6 +62,16 @@ public class GlobalExceptionHandler {
 
     // ── 409 Conflict ─────────────────────────────────────────────────────────
 
+    @ExceptionHandler(StrategyHasOpenTradesException.class)
+    public ResponseEntity<ResponseDto> handleStrategyHasOpenTrades(StrategyHasOpenTradesException ex) {
+        log.warn("Strategy has open trades: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ResponseDto.builder()
+                .responseCode(HttpStatus.CONFLICT.value() + ResponseCode.STRATEGY_HAS_OPEN_TRADES.getCode())
+                .responseDesc(ResponseCode.STRATEGY_HAS_OPEN_TRADES.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
     @ExceptionHandler(UserAlreadyExistsException.class)
     public ResponseEntity<ResponseDto> handleUserAlreadyExists(UserAlreadyExistsException ex) {
         log.warn("User already exists: {}", ex.getMessage());

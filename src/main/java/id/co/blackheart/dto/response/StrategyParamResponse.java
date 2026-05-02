@@ -9,36 +9,39 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Response shape for unified {@code /api/v1/strategy-params/...} endpoints.
+ * Response shape for {@code /api/v1/strategy-params/...} — one saved preset.
  *
- * <p>Returns the raw override map for now. Once the {@code StrategyEngine} ships,
- * an {@code effective} field will be added that exposes the merged
- * (archetype-defaults + overrides) view for UI rendering. The {@code overrides}
- * field stays stable so client code keying on it is unaffected.
+ * <p>Mirrors the V29 schema. Soft-deleted presets are returned only by the
+ * by-id endpoint (used by historical backtest reruns); list endpoints filter
+ * them out upstream.
  */
 @Data
 @Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class StrategyParamResponse {
 
+    private UUID paramId;
     private UUID accountStrategyId;
 
-    /** Archetype the strategy resolves to (e.g. {@code "mean_reversion_oscillator"}). */
-    private String archetype;
+    /** User-supplied label, e.g. "aggressive RR=2". */
+    private String name;
 
-    /** Strategy code bound to this account_strategy. */
-    private String strategyCode;
-
-    /** True when at least one override is set. */
-    private boolean hasOverrides;
-
-    /** Raw override map (only the keys the operator has explicitly set). */
+    /** Raw override map. */
     private Map<String, Object> overrides;
 
-    /** Optimistic-lock version. {@code null} when no row exists yet. */
+    private boolean active;
+    private boolean deleted;
+
+    private LocalDateTime deletedAt;
+
+    /** Originating backtest run id, when the preset was saved from a run's
+     *  Re-run-with-params flow. Null otherwise. */
+    private UUID sourceBacktestRunId;
+
     private Long version;
 
+    private LocalDateTime createdAt;
+    private String createdBy;
     private LocalDateTime updatedAt;
-
     private String updatedBy;
 }

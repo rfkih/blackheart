@@ -52,6 +52,16 @@ public class BacktestRun extends BaseEntity {
     private Map<String, UUID> strategyAccountStrategyIds;
 
     /**
+     * Per-strategy pinned strategy_param.param_id. When a strategy code is in
+     * this map the run resolves overrides via that exact preset row (soft-deleted
+     * rows are still resolvable here, for historical reruns). When absent the
+     * run falls back to the active preset for the matching account_strategy.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_param_ids", columnDefinition = "jsonb")
+    private Map<String, UUID> strategyParamIds;
+
+    /**
      * Stable strategy identifier used by StrategyExecutorFactory.
      * Example: TREND_PULLBACK_SINGLE_EXIT
      */
@@ -289,6 +299,18 @@ public class BacktestRun extends BaseEntity {
     @Column(name = "is_holdout_run", nullable = false)
     @Builder.Default
     private Boolean isHoldoutRun = Boolean.FALSE;
+
+    /**
+     * Origin tag — {@code USER} for runs submitted from the wizard,
+     * {@code RESEARCHER} for runs submitted by the autonomous
+     * research-orchestrator. Used by the UI to render a RESEARCHER badge so
+     * users can tell their own work from agent-driven runs at a glance.
+     * Defaulted in the DB so legacy rows and any caller that doesn't set
+     * the field stay tagged USER.
+     */
+    @Column(name = "triggered_by", length = 20, nullable = false)
+    @Builder.Default
+    private String triggeredBy = "USER";
 
     /** When {@link #isHoldoutRun} is true, the sweep this holdout result
      *  belongs to. Null for non-holdout runs. */

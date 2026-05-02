@@ -1,36 +1,46 @@
 package id.co.blackheart.service.backtest;
 
+import id.co.blackheart.model.FundingRate;
+import id.co.blackheart.repository.FundingRateRepository;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
- * Phase 0 stub for funding-cost simulation in the backtest engine.
+ * Funding-cost simulation for the backtest engine.
  *
- * <p>Computes a flat funding charge for a closed position based on the
- * run-level {@code funding_rate_bps_per_8h} and the position's hold
- * duration. Signed so the executor can subtract the result from realised
- * PnL on either side of the book.
+ * <p>Two paths:
+ * <ul>
+ *   <li>{@link #compute(BigDecimal, String, LocalDateTime, LocalDateTime,
+ *       BigDecimal)} — legacy flat-rate stub. Used when the operator pins
+ *       a single {@code funding_rate_bps_per_8h} on the run (tests,
+ *       what-if sweeps).</li>
+ *   <li>{@link #computePerEvent(BigDecimal, String, String, LocalDateTime,
+ *       LocalDateTime)} — Phase 4 default. Sums actual settlement events
+ *       from {@code funding_rate_history} between entry and exit. One
+ *       charge per event at the rate active at that instant.</li>
+ * </ul>
  *
- * <p>Sign convention:
+ * <p>Sign convention (both paths):
  * <pre>
  *   rate &gt; 0  → LONG pays,  SHORT receives
  *   rate &lt; 0  → LONG gets,  SHORT pays
  * </pre>
  *
- * <p>The returned value is the cost <em>to the position</em> in quote
- * currency (USDT). Positive return = subtract from PnL. Negative return
- * = add to PnL (position received funding).
- *
- * <p>Phase 4 will replace this with a per-bar lookup against
- * {@code funding_rate_history}; the run-level stub remains as a fallback
- * for older runs and tests.
+ * <p>Returned value is the cost <em>to the position</em> in quote currency
+ * (USDT). Positive = subtract from PnL. Negative = add to PnL (position
+ * received funding).
  */
 @Service
+@RequiredArgsConstructor
 public class BacktestFundingCostService {
+
+    private final FundingRateRepository fundingRateRepository;
 
     private static final BigDecimal HOURS_PER_FUNDING_PERIOD = new BigDecimal("8");
     private static final BigDecimal BPS_DIVISOR = new BigDecimal("10000");
@@ -75,5 +85,43 @@ public class BacktestFundingCostService {
 
         boolean isShort = "SHORT".equalsIgnoreCase(side);
         return isShort ? magnitude.negate() : magnitude;
+    }
+
+    /**
+     * Per-event funding cost — sums every {@code funding_rate_history} event
+     * with {@code entryTime < fundingTime <= exitTime}, charging the position
+     * its {@code notional × rate} at each settlement instant. Notional is
+     * held flat at the position's entry value (the executor already splits
+     * partial closes into separate {@code TradePosition} rows, so each call
+     * here corresponds to a single immutable leg).
+     *
+     * <p>Returns {@link BigDecimal#ZERO} when funding history has no rows in
+     * the window — same behavior as a cold-start symbol or a non-perp pair.
+     */
+    public BigDecimal computePerEvent(
+            BigDecimal notional,
+            String side,
+            String symbol,
+            LocalDateTime entryTime,
+            LocalDateTime exitTime
+    ) {
+        if (notional == null || notional.signum() <= 0) return BigDecimal.ZERO;
+        if (entryTime == null || exitTime == null) return BigDecimal.ZERO;
+        if (!exitTime.isAfter(entryTime)) return BigDecimal.ZERO;
+        if (side == null || symbol == null || symbol.isBlank()) return BigDecimal.ZERO;
+
+        List<FundingRate> events = fundingRateRepository.findInWindow(symbol, entryTime, exitTime);
+        if (events.isEmpty()) return BigDecimal.ZERO;
+
+        BigDecimal total = BigDecimal.ZERO;
+        for (FundingRate ev : events) {
+            BigDecimal eventCost = notional
+                    .multiply(ev.getFundingRate())
+                    .setScale(SCALE, RoundingMode.HALF_UP);
+            total = total.add(eventCost);
+        }
+
+        boolean isShort = "SHORT".equalsIgnoreCase(side);
+        return isShort ? total.negate() : total;
     }
 }

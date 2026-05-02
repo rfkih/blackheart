@@ -175,6 +175,16 @@ public class FeatureStore {
     @Column(name = "signed_er_20", precision = 24, scale = 8)
     private BigDecimal signedEr20;
 
+    // Funding (V35 — perp-only; null on spot symbols or cold-start)
+    @Column(name = "funding_rate_8h", precision = 18, scale = 10)
+    private BigDecimal fundingRate8h;
+
+    @Column(name = "funding_rate_7d_avg", precision = 18, scale = 10)
+    private BigDecimal fundingRate7dAvg;
+
+    @Column(name = "funding_rate_z", precision = 18, scale = 10)
+    private BigDecimal fundingRateZ;
+
     @Column(name = "created_time", nullable = false, updatable = false)
     @CreationTimestamp
     private Instant createdTime;

@@ -95,6 +95,7 @@ public class StrategyPromotionService {
     private final StrategyPromotionLogRepository promotionLogRepository;
     private final AuditEventRepository auditEventRepository;
     private final ObjectMapper objectMapper;
+    private final id.co.blackheart.repository.StrategyParamRepository strategyParamRepository;
 
     /**
      * Called by the live executor. Records a simulated trade decision
@@ -240,6 +241,27 @@ public class StrategyPromotionService {
             throw new IllegalStateException(
                     "Illegal promotion: " + fromState + " → " + toState
                             + ". See StrategyPromotionService.ALLOWED_TRANSITIONS for the legal graph.");
+        }
+
+        // Guard: any transition that lights up the live path
+        // (enabled=true → PAPER_TRADE or PROMOTED) requires an active
+        // strategy_param preset. AccountStrategyService.create() and the V30
+        // backfill auto-seed a default preset for every account_strategy, so
+        // this only fires if an operator has explicitly soft-deleted or
+        // deactivated every preset on the strategy. The check belongs here
+        // (not in the executor) so the promotion attempt fails loudly with a
+        // 4xx instead of silently letting the strategy run on archetype
+        // defaults.
+        if (STATE_PAPER_TRADE.equals(toState) || STATE_PROMOTED.equals(toState)) {
+            boolean hasActivePreset = strategyParamRepository
+                    .findActiveByAccountStrategyId(accountStrategyId)
+                    .isPresent();
+            if (!hasActivePreset) {
+                throw new IllegalStateException(
+                        "Cannot promote account_strategy=" + accountStrategyId
+                                + " to " + toState + ": no active strategy_param preset. "
+                                + "Create one via POST /api/v1/strategy-params with activate=true first.");
+            }
         }
 
         // Apply the state flip on account_strategy. The boolean fields

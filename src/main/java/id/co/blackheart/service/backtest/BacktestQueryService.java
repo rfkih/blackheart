@@ -216,6 +216,13 @@ public class BacktestQueryService {
                 .paramSnapshot(paramSnapshot)
                 .gitCommitSha(r.getGitCommitSha())
                 .appVersion(r.getAppVersion())
+                .triggeredBy(r.getTriggeredBy())
+                .allowLong(r.getAllowLong())
+                .allowShort(r.getAllowShort())
+                .maxConcurrentStrategies(r.getMaxConcurrentStrategies())
+                .strategyAllocations(r.getStrategyAllocations())
+                .strategyIntervals(r.getStrategyIntervals())
+                .fundingRateBpsPer8h(r.getFundingRateBpsPer8h())
                 .metrics(metrics)
                 .build();
     }

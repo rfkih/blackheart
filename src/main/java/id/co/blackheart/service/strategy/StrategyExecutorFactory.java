@@ -31,6 +31,7 @@ public class StrategyExecutorFactory {
     private final LsrStrategyService lsrStrategyService;
     private final TrendPullbackStrategyService trendPullbackStrategyService;
     private final VolatilityBreakoutStrategyService volatilityBreakoutStrategyService;
+    private final FundingCarryStrategyService fundingCarryStrategyService;
 
     // ── Parametric path. Disabled by default; opt-in per environment. ────────
     private final StrategyDefinitionRepository definitionRepository;
@@ -50,6 +51,7 @@ public class StrategyExecutorFactory {
                                    LsrStrategyService lsrStrategyService,
                                    TrendPullbackStrategyService trendPullbackStrategyService,
                                    VolatilityBreakoutStrategyService volatilityBreakoutStrategyService,
+                                   FundingCarryStrategyService fundingCarryStrategyService,
                                    StrategyDefinitionRepository definitionRepository,
                                    StrategyEngineRegistry engineRegistry,
                                    SpecVersionAdapter specVersionAdapter,
@@ -62,6 +64,7 @@ public class StrategyExecutorFactory {
         this.lsrStrategyService = lsrStrategyService;
         this.trendPullbackStrategyService = trendPullbackStrategyService;
         this.volatilityBreakoutStrategyService = volatilityBreakoutStrategyService;
+        this.fundingCarryStrategyService = fundingCarryStrategyService;
         this.definitionRepository = definitionRepository;
         this.engineRegistry = engineRegistry;
         this.specVersionAdapter = specVersionAdapter;
@@ -164,6 +167,7 @@ public class StrategyExecutorFactory {
             case "LSR" -> lsrStrategyService;
             case "TPR" -> trendPullbackStrategyService;
             case "VBO" -> volatilityBreakoutStrategyService;
+            case "FCARRY" -> fundingCarryStrategyService;
             default -> throw new IllegalArgumentException("Unknown strategy: " + strategyCode);
         };
     }
