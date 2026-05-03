@@ -99,4 +99,26 @@ public class StrategyDefinition extends BaseEntity {
 
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
+
+    /**
+     * Global kill-switch (V40). When false, {@code StrategyExecutorFactory} skips
+     * this strategy for ALL accounts regardless of {@code account_strategy.enabled}.
+     * Operator-controlled via {@code POST /api/v1/strategy-promotion/definition/{strategyCode}/promote}.
+     * Defaults to false so any newly-seeded definition row is opt-in.
+     */
+    @Column(name = "enabled", nullable = false)
+    @Builder.Default
+    private Boolean enabled = false;
+
+    /**
+     * Global paper-trade flag (V40). When true, {@code LiveTradingDecisionExecutorService}
+     * routes {@code OPEN_LONG}/{@code OPEN_SHORT} to {@code paper_trade_run} for every
+     * account, even if {@code account_strategy.simulated=false}.
+     *
+     * <p>{@code CLOSE_*}/{@code UPDATE_POSITION_MANAGEMENT} always fall through to real
+     * execution. Bug 1 audit invariant — do not modify scope.
+     */
+    @Column(name = "simulated", nullable = false)
+    @Builder.Default
+    private Boolean simulated = true;
 }

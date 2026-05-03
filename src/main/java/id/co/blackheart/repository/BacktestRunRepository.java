@@ -1,6 +1,8 @@
 package id.co.blackheart.repository;
 
 import id.co.blackheart.model.BacktestRun;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -121,6 +123,56 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             @Param("fromDate") LocalDateTime fromDate,
             @Param("toDate") LocalDateTime toDate
     );
+
+    /**
+     * Research-log feed for the /research dashboard. Returns COMPLETED runs
+     * that have an analysis snapshot, optionally narrowed by strategy / asset /
+     * interval, paginated and ordered newest-first.
+     *
+     * <p>{@code userId} is matched permissively — rows with {@code user_id IS NULL}
+     * (legacy / orchestrator-driven runs) are visible to every admin caller so
+     * agent-produced research isn't hidden behind a tenant boundary the agent
+     * never sets. This mirrors the prior in-memory filter in
+     * {@code ResearchController.getResearchLog}.
+     *
+     * <p>Each filter is nullable. {@code CAST(:p AS TEXT)} pins the JDBC type
+     * (otherwise Hibernate infers {@code bytea} for nullable strings, breaking
+     * {@code UPPER(?)} / {@code ILIKE ?} on Postgres).
+     */
+    @Query(value = """
+            SELECT * FROM backtest_run
+            WHERE status = 'COMPLETED'
+              AND analysis_snapshot IS NOT NULL
+              AND analysis_snapshot <> ''
+              AND (user_id IS NULL OR user_id = :userId)
+              AND (CAST(:strategyCode AS TEXT) IS NULL
+                   OR UPPER(strategy_code) = UPPER(CAST(:strategyCode AS TEXT)))
+              AND (CAST(:asset AS TEXT) IS NULL
+                   OR UPPER(asset) = UPPER(CAST(:asset AS TEXT)))
+              AND (CAST(:intervalName AS TEXT) IS NULL
+                   OR interval_name = CAST(:intervalName AS TEXT))
+            ORDER BY created_time DESC NULLS LAST
+            """,
+           countQuery = """
+            SELECT COUNT(*) FROM backtest_run
+            WHERE status = 'COMPLETED'
+              AND analysis_snapshot IS NOT NULL
+              AND analysis_snapshot <> ''
+              AND (user_id IS NULL OR user_id = :userId)
+              AND (CAST(:strategyCode AS TEXT) IS NULL
+                   OR UPPER(strategy_code) = UPPER(CAST(:strategyCode AS TEXT)))
+              AND (CAST(:asset AS TEXT) IS NULL
+                   OR UPPER(asset) = UPPER(CAST(:asset AS TEXT)))
+              AND (CAST(:intervalName AS TEXT) IS NULL
+                   OR interval_name = CAST(:intervalName AS TEXT))
+            """,
+           nativeQuery = true)
+    Page<BacktestRun> findResearchLog(
+            @Param("userId") UUID userId,
+            @Param("strategyCode") String strategyCode,
+            @Param("asset") String asset,
+            @Param("intervalName") String intervalName,
+            Pageable pageable);
 
     /**
      * Fetch a single run by id, scoped to its owner. Returns empty if the run

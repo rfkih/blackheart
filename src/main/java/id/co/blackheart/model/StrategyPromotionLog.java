@@ -17,12 +17,14 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * Append-only audit row for every promote/demote transition on an
- * account_strategy. The {@code chk_promotion_states} CHECK constraint
- * in V15 enforces legal {@code (from_state, to_state)} pairs at the DB
- * layer — bypassing requires ALTER TABLE which leaves its own audit trail.
+ * Append-only audit row for every promote/demote transition. The
+ * {@code chk_promotion_states} CHECK constraint in V15 enforces legal
+ * {@code (from_state, to_state)} pairs at the DB layer; V40 added the
+ * {@code chk_promotion_log_scope} CHECK so each row is unambiguously
+ * either account-scoped (V15+) or definition-scoped (V40+).
  *
- * <p>Schema: see {@code db/flyway/V15__create_promotion_pipeline.sql}.
+ * <p>Schema: see {@code db/flyway/V15__create_promotion_pipeline.sql}
+ * and {@code db/flyway/V40__add_promotion_state_to_strategy_definition.sql}.
  */
 @Getter
 @Setter
@@ -37,8 +39,19 @@ public class StrategyPromotionLog {
     @Column(name = "promotion_id", nullable = false, updatable = false)
     private UUID promotionId;
 
-    @Column(name = "account_strategy_id", nullable = false)
+    /**
+     * Set for account-scoped (V15) promotions. Null for definition-scoped (V40).
+     * The {@code chk_promotion_log_scope} CHECK constraint enforces that exactly
+     * one of {@code accountStrategyId} / {@code strategyDefinitionId} is set.
+     */
+    @Column(name = "account_strategy_id")
     private UUID accountStrategyId;
+
+    /**
+     * Set for definition-scoped (V40) promotions. Null for account-scoped rows.
+     */
+    @Column(name = "strategy_definition_id")
+    private UUID strategyDefinitionId;
 
     @Column(name = "strategy_code", nullable = false, length = 20)
     private String strategyCode;

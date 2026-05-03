@@ -9,6 +9,10 @@ import id.co.blackheart.repository.StrategyDefinitionRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +21,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -49,6 +54,38 @@ public class StrategyDefinitionService {
                 .sorted(Comparator.comparing(StrategyDefinition::getStrategyCode))
                 .map(this::toResponse)
                 .toList();
+    }
+
+    /**
+     * Filterable + paginated list. The query param does substring match on
+     * both code and name. Sort field whitelist mirrors what the dashboard
+     * panel exposes — anything else falls back to {@code strategyCode,asc} so
+     * a malformed param can't drop the page into an undefined order.
+     */
+    @Transactional(readOnly = true)
+    public Page<StrategyDefinitionResponse> listPaged(String query, String sort, int page, int size) {
+        String normalized = (query == null || query.isBlank()) ? null : query.trim();
+        int cappedSize = Math.max(1, Math.min(size, 100));
+        Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize, parseSort(sort));
+        return repository.findFiltered(normalized, pageable).map(this::toResponse);
+    }
+
+    private static final Set<String> SORTABLE_FIELDS =
+            Set.of("strategyCode", "strategyName", "strategyType", "archetype", "createdTime");
+
+    private static Sort parseSort(String sort) {
+        if (sort == null || sort.isBlank()) {
+            return Sort.by(Sort.Order.asc("strategyCode"));
+        }
+        String[] parts = sort.split(",", 2);
+        String field = parts[0].trim();
+        if (!SORTABLE_FIELDS.contains(field)) {
+            return Sort.by(Sort.Order.asc("strategyCode"));
+        }
+        Sort.Direction dir = (parts.length > 1 && "desc".equalsIgnoreCase(parts[1].trim()))
+                ? Sort.Direction.DESC
+                : Sort.Direction.ASC;
+        return Sort.by(new Sort.Order(dir, field));
     }
 
     @Transactional(readOnly = true)

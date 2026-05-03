@@ -61,7 +61,15 @@ public class LiveTradingCoordinatorService {
         String strategyCode = accountStrategy.getStrategyCode();
 
         try {
-            StrategyExecutor executor = strategyExecutorFactory.get(strategyCode);
+            // V40 — definition-scope kill-switch. When the strategy_definition
+            // is disabled, skip resolution entirely so no decision is evaluated
+            // and no order/paper-trade row can be written for ANY account.
+            java.util.Optional<StrategyExecutor> executorOpt =
+                    strategyExecutorFactory.getIfDefinitionEnabled(strategyCode);
+            if (executorOpt.isEmpty()) {
+                return;
+            }
+            StrategyExecutor executor = executorOpt.get();
             StrategyRequirements requirements = executor.getRequirements();
 
             LiveState liveState = loadLiveState(account, accountStrategy, asset, interval);

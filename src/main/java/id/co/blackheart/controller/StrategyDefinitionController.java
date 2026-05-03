@@ -39,12 +39,25 @@ public class StrategyDefinitionController {
     private final JwtService jwtService;
 
     @GetMapping
-    @Operation(summary = "List every strategy definition",
+    @Operation(summary = "List strategy definitions — paginated, filterable, sortable",
                security = @SecurityRequirement(name = "bearerAuth"))
-    public ResponseEntity<ResponseDto> list() {
+    public ResponseEntity<ResponseDto> list(
+            @RequestParam(name = "query", required = false) String query,
+            @RequestParam(name = "sort", required = false) String sort,
+            @RequestParam(name = "page", required = false) Integer page,
+            @RequestParam(name = "size", required = false) Integer size) {
+        // No pagination params at all → preserve the legacy "every row, no
+        // envelope" shape so existing callers (strategy pickers, etc.) keep
+        // working. The /research panel always passes page/size.
+        if (query == null && sort == null && page == null && size == null) {
+            return ResponseEntity.ok(ResponseDto.builder()
+                    .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                    .data(service.list())
+                    .build());
+        }
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(service.list())
+                .data(service.listPaged(query, sort, page == null ? 0 : page, size == null ? 50 : size))
                 .build());
     }
 

@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -70,16 +71,18 @@ public class StrategyPromotionController {
                 body.getEvidence(),
                 reviewerUserId
         );
+        // HashMap, not Map.of: Map.of disallows null values, and reviewerUserId
+        // is nullable on StrategyPromotionLog (system-initiated rows have no JWT).
+        HashMap<String, Object> data = new HashMap<>();
+        data.put("promotionId", row.getPromotionId());
+        data.put("fromState", row.getFromState());
+        data.put("toState", row.getToState());
+        data.put("reviewerUserId", row.getReviewerUserId());
+        data.put("createdTime", row.getCreatedTime());
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .responseDesc("Promotion recorded")
-                .data(Map.of(
-                        "promotionId", row.getPromotionId(),
-                        "fromState", row.getFromState(),
-                        "toState", row.getToState(),
-                        "reviewerUserId", row.getReviewerUserId(),
-                        "createdTime", row.getCreatedTime()
-                ))
+                .data(data)
                 .build());
     }
 
@@ -120,6 +123,31 @@ public class StrategyPromotionController {
                 .build());
     }
 
+    @GetMapping("/recent/search")
+    @Operation(summary = "Filterable + paginated recent promotions feed",
+               description = "Like /recent but supports filtering by strategyCode and toState, "
+                       + "and pagination via page/size. Page size capped at 100 server-side. "
+                       + "Returns Spring Data Page envelope (content[], totalElements, totalPages, number).",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> recentFiltered(
+            @RequestParam(value = "strategyCode", required = false) String strategyCode,
+            @RequestParam(value = "toState", required = false) String toState,
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            @RequestParam(value = "size", defaultValue = "25") int size) {
+        org.springframework.data.domain.Page<StrategyPromotionLog> result =
+                promotionService.recentFiltered(strategyCode, toState, page, size);
+        HashMap<String, Object> data = new HashMap<>();
+        data.put("content", result.getContent());
+        data.put("totalElements", result.getTotalElements());
+        data.put("totalPages", result.getTotalPages());
+        data.put("number", result.getNumber());
+        data.put("size", result.getSize());
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(data)
+                .build());
+    }
+
     @GetMapping("/{accountStrategyId}/paper-trades")
     @Operation(summary = "Recent paper-trade events for the strategy (latest first)",
                security = @SecurityRequirement(name = "bearerAuth"))
@@ -128,6 +156,68 @@ public class StrategyPromotionController {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(rows)
+                .build());
+    }
+
+    // ── definition-scope (V40) ───────────────────────────────────────────
+    //
+    // Promotion lifecycle now lives on strategy_definition (one decision per
+    // strategy code, applies to every account). Per-account endpoints above
+    // remain for back-compat / per-account overrides; the /research dashboard
+    // drives the panel from these definition-scope endpoints.
+
+    @PostMapping("/definition/{strategyCode}/promote")
+    @Operation(summary = "Transition a strategy_definition between promotion states",
+               description = "Admin-only. Atomically updates strategy_definition.enabled/.simulated "
+                       + "AND writes a strategy_promotion_log row (definition-scope). "
+                       + "Mirrors POST /{accountStrategyId}/promote at strategy scope.",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> promoteDefinition(
+            @PathVariable String strategyCode,
+            @RequestBody PromoteRequest body,
+            @RequestHeader("Authorization") String authHeader) {
+        UUID reviewerUserId = jwtService.extractUserId(authHeader);
+        StrategyPromotionLog row = promotionService.promoteDefinition(
+                strategyCode,
+                body.getToState(),
+                body.getReason(),
+                body.getEvidence(),
+                reviewerUserId
+        );
+        // HashMap, not Map.of: see note on /{accountStrategyId}/promote.
+        HashMap<String, Object> data = new HashMap<>();
+        data.put("promotionId", row.getPromotionId());
+        data.put("strategyCode", row.getStrategyCode());
+        data.put("fromState", row.getFromState());
+        data.put("toState", row.getToState());
+        data.put("reviewerUserId", row.getReviewerUserId());
+        data.put("createdTime", row.getCreatedTime());
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .responseDesc("Promotion recorded")
+                .data(data)
+                .build());
+    }
+
+    @GetMapping("/definition/{strategyCode}/state")
+    @Operation(summary = "Current definition-scope promotion state",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> currentDefinitionState(@PathVariable String strategyCode) {
+        String state = promotionService.currentDefinitionStateByCode(strategyCode);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(Map.of("strategyCode", strategyCode, "state", state))
+                .build());
+    }
+
+    @GetMapping("/definition/{strategyCode}/history")
+    @Operation(summary = "Full definition-scope promotion history (latest first)",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> definitionHistory(@PathVariable String strategyCode) {
+        List<StrategyPromotionLog> history = promotionService.definitionHistory(strategyCode);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(history)
                 .build());
     }
 

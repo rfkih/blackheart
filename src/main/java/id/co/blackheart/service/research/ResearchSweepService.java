@@ -31,6 +31,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -39,6 +40,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
 /**
  * Orchestrates multi-run parameter sweeps. Given a {@link SweepSpec} with a
@@ -360,6 +364,73 @@ public class ResearchSweepService {
                 SweepState::getCreatedAt,
                 Comparator.nullsLast(Comparator.reverseOrder())));
         return out;
+    }
+
+    /**
+     * Filterable + paginated sweep list. Sweeps live in an in-memory map so
+     * filtering/sorting/paging happens in service code rather than via SQL.
+     * The page envelope mirrors Spring Data's {@link Page} so the frontend
+     * sees the same shape regardless of storage.
+     *
+     * @param userId        owner — null returns all (used by admin tooling).
+     * @param statusFilter  upper-cased status set, or empty for "any".
+     *                      Honours CSV like {@code "RUNNING,PENDING"} parsed
+     *                      at the controller boundary.
+     * @param sort          {@code "createdAt,desc"} (default), {@code "status"},
+     *                      etc. Field ∈ {createdAt, status, finishedCombos,
+     *                      totalCombos}; direction ∈ {asc, desc}.
+     */
+    public Page<SweepState> listSweepsPaged(
+            UUID userId, Set<String> statusFilter, String sort, Pageable pageable) {
+        List<SweepState> filtered = new ArrayList<>();
+        for (SweepState s : sweeps.values()) {
+            if (userId != null && s.getUserId() != null && !userId.equals(s.getUserId())) continue;
+            if (statusFilter != null && !statusFilter.isEmpty()) {
+                String st = s.getStatus() == null ? "" : s.getStatus().toUpperCase(Locale.ROOT);
+                if (!statusFilter.contains(st)) continue;
+            }
+            enrichDsrThreshold(s);
+            filtered.add(s);
+        }
+        filtered.sort(sweepComparator(sort));
+
+        int total = filtered.size();
+        int from = (int) Math.min(pageable.getOffset(), total);
+        int to = Math.min(from + pageable.getPageSize(), total);
+        List<SweepState> pageRows = filtered.subList(from, to);
+        return new PageImpl<>(new ArrayList<>(pageRows), pageable, total);
+    }
+
+    /** Parse {@code field,direction} (Spring's convention). Defaults: createdAt,desc. */
+    private static Comparator<SweepState> sweepComparator(String sort) {
+        String field = "createdAt";
+        boolean desc = true;
+        if (sort != null && !sort.isBlank()) {
+            String[] parts = sort.split(",", 2);
+            field = parts[0].trim();
+            if (parts.length > 1) desc = "desc".equalsIgnoreCase(parts[1].trim());
+        }
+        Comparator<SweepState> cmp;
+        switch (field) {
+            case "status":
+                cmp = Comparator.comparing(
+                        SweepState::getStatus,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                break;
+            case "finishedCombos":
+                cmp = Comparator.comparingInt(SweepState::getFinishedCombos);
+                break;
+            case "totalCombos":
+                cmp = Comparator.comparingInt(SweepState::getTotalCombos);
+                break;
+            case "createdAt":
+            default:
+                cmp = Comparator.comparing(
+                        SweepState::getCreatedAt,
+                        Comparator.nullsLast(Comparator.naturalOrder()));
+                break;
+        }
+        return desc ? cmp.reversed() : cmp;
     }
 
     // ── Orchestrator ────────────────────────────────────────────────────────

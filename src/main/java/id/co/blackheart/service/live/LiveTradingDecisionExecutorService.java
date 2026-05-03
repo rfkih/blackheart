@@ -8,6 +8,7 @@ import id.co.blackheart.model.Account;
 import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
+import id.co.blackheart.repository.StrategyDefinitionRepository;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.promotion.StrategyPromotionService;
@@ -49,6 +50,7 @@ public class LiveTradingDecisionExecutorService {
     private final RiskGuardService riskGuardService;
     private final BookVolTargetingService bookVolTargetingService;
     private final StrategyPromotionService strategyPromotionService;
+    private final StrategyDefinitionRepository strategyDefinitionRepository;
 
     public void execute(
             Trades activeTrade,
@@ -104,10 +106,11 @@ public class LiveTradingDecisionExecutorService {
             }
         }
 
-        // Promotion-pipeline guardrail (V15+). If account_strategy.simulated
-        // is TRUE, the strategy is in PAPER_TRADE state — record OPEN
-        // intents into paper_trade_run and short-circuit BEFORE any
-        // real-order code path runs.
+        // Promotion-pipeline guardrail (V15+, V40 widened). If EITHER scope
+        // says paper (definition.simulated OR account_strategy.simulated),
+        // the strategy is in PAPER_TRADE state — record OPEN intents into
+        // paper_trade_run and short-circuit BEFORE any real-order code path
+        // runs. Fail-safe: if either says paper, paper wins.
         //
         // CRITICAL: only OPEN_LONG / OPEN_SHORT are diverted. CLOSE_*
         // and UPDATE_POSITION_MANAGEMENT MUST always fall through to real
@@ -115,7 +118,8 @@ public class LiveTradingDecisionExecutorService {
         // on a strategy with open positions would strand them — the close
         // signal would be recorded as paper trade and the live position
         // would never actually close. This is the V15 audit fix
-        // (Bug 1, identified 2026-04-28).
+        // (Bug 1, identified 2026-04-28). V40 widens the predicate ONLY,
+        // not the scope — CLOSE_* still fall through.
         //
         // The implication for promotion workflow: an operator demoting a
         // PROMOTED strategy that has open positions blocks NEW entries
@@ -125,14 +129,21 @@ public class LiveTradingDecisionExecutorService {
         boolean isOpenAction =
                 decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
                         || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
-        if (isOpenAction
-                && context.getAccountStrategy() != null
-                && Boolean.TRUE.equals(context.getAccountStrategy().getSimulated())) {
-            UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
-            log.info("[PaperTrade] {} {} — simulated=true, recording without placing order",
-                    decision.getStrategyCode(), decision.getDecisionType());
-            strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
-            return;
+        if (isOpenAction && context.getAccountStrategy() != null) {
+            boolean accountSimulated =
+                    Boolean.TRUE.equals(context.getAccountStrategy().getSimulated());
+            boolean definitionSimulated = strategyDefinitionRepository
+                    .findByStrategyCode(decision.getStrategyCode())
+                    .map(d -> Boolean.TRUE.equals(d.getSimulated()))
+                    .orElse(false);
+            if (accountSimulated || definitionSimulated) {
+                UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
+                log.info("[PaperTrade] {} {} — simulated (def={}, acct={}), recording without placing order",
+                        decision.getStrategyCode(), decision.getDecisionType(),
+                        definitionSimulated, accountSimulated);
+                strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
+                return;
+            }
         }
 
         switch (decision.getDecisionType()) {

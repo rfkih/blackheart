@@ -21,16 +21,23 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -144,31 +151,27 @@ public class ResearchController {
      */
     @GetMapping("/log")
     @PreAuthorize("hasRole('ADMIN')")
-    @Operation(summary = "Research log — one row per completed run, newest first",
+    @Operation(summary = "Research log — paginated/filterable feed of completed runs, newest first",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> getResearchLog(
             @RequestHeader("Authorization") String authHeader,
             @RequestParam(name = "strategyCode", required = false) String strategyCode,
-            @RequestParam(name = "limit", defaultValue = "50") int limit) {
+            @RequestParam(name = "asset", required = false) String asset,
+            @RequestParam(name = "interval", required = false) String interval,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "50") int size) {
         UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        // Normalize blanks → null so the repo's `IS NULL` short-circuits engage
+        // when the user clears a filter (the form sends an empty string).
+        String code = (strategyCode == null || strategyCode.isBlank()) ? null : strategyCode.trim();
+        String assetFilter = (asset == null || asset.isBlank()) ? null : asset.trim();
+        String intervalFilter = (interval == null || interval.isBlank()) ? null : interval.trim();
+        int cappedSize = Math.max(1, Math.min(size, 200));
+        Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize);
 
-        List<BacktestRun> runs = runRepository.findAll().stream()
-                .filter(r -> "COMPLETED".equalsIgnoreCase(r.getStatus()))
-                .filter(r -> r.getAnalysisSnapshot() != null && !r.getAnalysisSnapshot().isBlank())
-                .filter(r -> r.getUserId() == null || r.getUserId().equals(userId))
-                .filter(r -> strategyCode == null
-                        || (r.getStrategyCode() != null
-                            && r.getStrategyCode().equalsIgnoreCase(strategyCode)))
-                .sorted(Comparator.comparing(
-                        BacktestRun::getCreatedTime,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .limit(limit)
-                .toList();
-
-        List<Map<String, Object>> rows = new ArrayList<>(runs.size());
-        for (BacktestRun r : runs) {
-            rows.add(toLogRow(r));
-        }
+        Page<BacktestRun> runs = runRepository.findResearchLog(
+                userId, code, assetFilter, intervalFilter, pageable);
+        Page<Map<String, Object>> rows = runs.map(this::toLogRow);
 
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -212,15 +215,36 @@ public class ResearchController {
     }
 
     @GetMapping("/sweeps")
-    @Operation(summary = "List all sweeps the caller owns",
+    @Operation(summary = "List sweeps the caller owns — paginated, filterable, sortable",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> listSweeps(
-            @RequestHeader("Authorization") String authHeader) {
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "sort", required = false) String sort,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "25") int size) {
         UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        Set<String> statusFilter = parseCsvUpper(status);
+        // Cap size to keep dashboards from accidentally loading thousands of rows
+        // through the in-memory filter (the same cap RecentPromotions uses).
+        int cappedSize = Math.max(1, Math.min(size, 100));
+        Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize);
+        Page<SweepState> result = sweepService.listSweepsPaged(userId, statusFilter, sort, pageable);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(sweepService.listSweeps(userId))
+                .data(result)
                 .build());
+    }
+
+    /** "RUNNING,PENDING" → {RUNNING, PENDING}. Empty/null → empty set (= no filter). */
+    private static Set<String> parseCsvUpper(String csv) {
+        if (csv == null || csv.isBlank()) return Set.of();
+        Set<String> out = new HashSet<>();
+        for (String token : csv.split(",")) {
+            String t = token.trim().toUpperCase(Locale.ROOT);
+            if (!t.isEmpty()) out.add(t);
+        }
+        return out;
     }
 
     @PostMapping("/sweeps/{sweepId}/cancel")

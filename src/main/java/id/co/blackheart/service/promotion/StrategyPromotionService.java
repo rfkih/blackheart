@@ -7,10 +7,12 @@ import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.model.AccountStrategy;
 import id.co.blackheart.model.AuditEvent;
 import id.co.blackheart.model.PaperTradeRun;
+import id.co.blackheart.model.StrategyDefinition;
 import id.co.blackheart.model.StrategyPromotionLog;
 import id.co.blackheart.repository.AccountStrategyRepository;
 import id.co.blackheart.repository.AuditEventRepository;
 import id.co.blackheart.repository.PaperTradeRunRepository;
+import id.co.blackheart.repository.StrategyDefinitionRepository;
 import id.co.blackheart.repository.StrategyPromotionLogRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -96,6 +98,7 @@ public class StrategyPromotionService {
     private final AuditEventRepository auditEventRepository;
     private final ObjectMapper objectMapper;
     private final id.co.blackheart.repository.StrategyParamRepository strategyParamRepository;
+    private final StrategyDefinitionRepository strategyDefinitionRepository;
 
     /**
      * Called by the live executor. Records a simulated trade decision
@@ -324,7 +327,152 @@ public class StrategyPromotionService {
                 org.springframework.data.domain.PageRequest.of(0, safeLimit));
     }
 
+    /**
+     * Filterable + paginated counterpart of {@link #recent}. Empty/blank filters
+     * are treated as "no filter on that column". Page size is capped at 100 to
+     * bound payload; callers can paginate forward via {@code page} (0-indexed).
+     */
+    public org.springframework.data.domain.Page<StrategyPromotionLog> recentFiltered(
+            String strategyCode,
+            String toState,
+            int page,
+            int size
+    ) {
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        String codeFilter = (strategyCode == null || strategyCode.isBlank()) ? null : strategyCode.trim();
+        String stateFilter = (toState == null || toState.isBlank()) ? null : toState.trim();
+        return promotionLogRepository.findRecentFiltered(
+                codeFilter,
+                stateFilter,
+                org.springframework.data.domain.PageRequest.of(safePage, safeSize));
+    }
+
+    // ── definition-scope (V40) ───────────────────────────────────────────
+
+    /**
+     * Definition-scope counterpart of {@link #promote}. The promotion lifecycle
+     * is now a property of the strategy itself ({@code strategy_definition})
+     * rather than each per-account row. Atomic: state-flag flip on
+     * {@code strategy_definition.enabled}/{@code .simulated} and the
+     * {@code strategy_promotion_log} row (with {@code strategy_definition_id}
+     * set, {@code account_strategy_id} null) live in the same transaction.
+     *
+     * <p>Concurrent callers serialize on the pessimistic write lock acquired
+     * by {@link StrategyDefinitionRepository#findByStrategyCodeForUpdate} —
+     * mirrors the per-account guard against duplicate transitions.
+     */
+    @Transactional
+    public StrategyPromotionLog promoteDefinition(
+            String strategyCode,
+            String toState,
+            String reason,
+            JsonNode evidence,
+            UUID reviewerUserId
+    ) {
+        if (strategyCode == null || strategyCode.isBlank()) {
+            throw new IllegalArgumentException("strategyCode is required");
+        }
+        if (toState == null || toState.isBlank()) {
+            throw new IllegalArgumentException("toState is required");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new IllegalArgumentException("reason is required for every promotion");
+        }
+
+        StrategyDefinition def = strategyDefinitionRepository
+                .findByStrategyCodeForUpdate(strategyCode)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "strategy_definition not found: " + strategyCode));
+
+        String fromState = currentDefinitionState(def.getStrategyDefinitionId());
+        String key = fromState + "→" + toState;
+        if (!ALLOWED_TRANSITIONS.contains(key)) {
+            throw new IllegalStateException(
+                    "Illegal promotion: " + fromState + " → " + toState
+                            + ". See StrategyPromotionService.ALLOWED_TRANSITIONS for the legal graph.");
+        }
+
+        // Note on preset-availability asymmetry vs account-scope promote():
+        // The account-scope path throws if no active strategy_param preset exists,
+        // because that promotion flips account_strategy.enabled=true and would
+        // strand the account on archetype defaults. Definition-scope promote does
+        // NOT flip individual account_strategy.enabled values — it only changes
+        // global gates (kill-switch + global paper flag). A missing per-account
+        // preset therefore cannot brick a previously-disabled account through
+        // this path, and LEGACY_JAVA strategies (LSR/VCB/VBO) fall back to
+        // defaults() so they are safe regardless. The check is intentionally
+        // omitted; preset enforcement remains at the account-scope endpoint.
+
+        applyStateToDefinition(def, toState);
+        strategyDefinitionRepository.save(def);
+
+        StrategyPromotionLog logRow = StrategyPromotionLog.builder()
+                .promotionId(UUID.randomUUID())
+                .accountStrategyId(null)
+                .strategyDefinitionId(def.getStrategyDefinitionId())
+                .strategyCode(def.getStrategyCode())
+                .fromState(fromState)
+                .toState(toState)
+                .reviewerUserId(reviewerUserId)
+                .reason(reason)
+                .evidence(evidence)
+                .createdTime(LocalDateTime.now())
+                .build();
+        promotionLogRepository.save(logRow);
+
+        log.warn("[Promotion-Definition] strategy={} def_id={} {} → {} reviewer={} reason={}",
+                def.getStrategyCode(), def.getStrategyDefinitionId(), fromState, toState,
+                reviewerUserId, reason);
+
+        return logRow;
+    }
+
+    /**
+     * Definition-scope counterpart of {@link #currentState}. RESEARCH for
+     * any definition that has never been promoted (no log row), regardless
+     * of {@code enabled}/{@code simulated} on the row.
+     */
+    public String currentDefinitionState(UUID strategyDefinitionId) {
+        Optional<StrategyPromotionLog> last =
+                promotionLogRepository.findFirstByStrategyDefinitionIdOrderByCreatedTimeDesc(strategyDefinitionId);
+        return last.map(StrategyPromotionLog::getToState).orElse(STATE_RESEARCH);
+    }
+
+    public String currentDefinitionStateByCode(String strategyCode) {
+        StrategyDefinition def = strategyDefinitionRepository.findByStrategyCode(strategyCode)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "strategy_definition not found: " + strategyCode));
+        return currentDefinitionState(def.getStrategyDefinitionId());
+    }
+
+    public List<StrategyPromotionLog> definitionHistory(String strategyCode) {
+        StrategyDefinition def = strategyDefinitionRepository.findByStrategyCode(strategyCode)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "strategy_definition not found: " + strategyCode));
+        return promotionLogRepository
+                .findByStrategyDefinitionIdOrderByCreatedTimeDesc(def.getStrategyDefinitionId());
+    }
+
     // ── internals ────────────────────────────────────────────────────────
+
+    private void applyStateToDefinition(StrategyDefinition def, String toState) {
+        switch (toState) {
+            case STATE_PAPER_TRADE -> {
+                def.setEnabled(Boolean.TRUE);
+                def.setSimulated(Boolean.TRUE);
+            }
+            case STATE_PROMOTED -> {
+                def.setEnabled(Boolean.TRUE);
+                def.setSimulated(Boolean.FALSE);
+            }
+            case STATE_DEMOTED, STATE_REJECTED -> {
+                def.setEnabled(Boolean.FALSE);
+                def.setSimulated(Boolean.FALSE);
+            }
+            default -> throw new IllegalStateException("Unmapped toState: " + toState);
+        }
+    }
 
     private void applyStateToAccountStrategy(AccountStrategy as, String toState) {
         switch (toState) {

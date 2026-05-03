@@ -85,6 +85,26 @@ public class StrategyExecutorFactory {
     }
 
     /**
+     * V40 — definition-scope kill-switch. Returns empty when a
+     * {@code strategy_definition} row exists for {@code strategyCode} with
+     * {@code enabled=false}; otherwise returns the resolved executor.
+     *
+     * <p>Only the live path consults this. Backtest continues to use
+     * {@link #get(String)} so research can still run sweeps on disabled
+     * strategies. Legacy codes without a definition row fall through and
+     * resolve normally — the kill-switch only fires when the operator has
+     * explicitly demoted the definition.
+     */
+    public Optional<StrategyExecutor> getIfDefinitionEnabled(String strategyCode) {
+        Optional<StrategyDefinition> defOpt = definitionRepository.findByStrategyCode(strategyCode);
+        if (defOpt.isPresent() && Boolean.FALSE.equals(defOpt.get().getEnabled())) {
+            log.debug("strategy_definition {} disabled at definition scope; skipping", strategyCode);
+            return Optional.empty();
+        }
+        return Optional.of(get(strategyCode));
+    }
+
+    /**
      * Drop the adapter cache. Call after a {@code strategy_definition} mutation
      * that changes archetype, version, or spec body — otherwise the running
      * adapter keeps the old shape until the next JVM restart.
