@@ -25,9 +25,13 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Reverse proxy on the trading JVM forwarding research-only endpoints to the
@@ -82,6 +86,28 @@ public class ResearchProxyController {
     @Value("${app.research.base-url:http://127.0.0.1:8081}")
     private String researchBaseUrl;
 
+    /**
+     * Per-request upstream timeout (seconds). Deliberately defaulted to
+     * <b>18</b> — just under the frontend axios timeout of 20s.
+     *
+     * <p>Why not longer:
+     * <ul>
+     *   <li>If we wait longer than the browser, the user always sees axios's
+     *       generic "timeout of 20000ms exceeded" instead of our 504 envelope
+     *       with a clear "Research service did not respond" message.</li>
+     *   <li>The proxy continues holding the upstream socket open after the
+     *       browser disconnects — that's what produces the {@code CLOSE_WAIT}
+     *       pile-up on port 8081 when the JVM is slow. Returning early lets
+     *       the JDK HttpClient close the connection, freeing both ends.</li>
+     * </ul>
+     *
+     * <p>Override via {@code app.research.request-timeout-seconds} for
+     * exceptionally long single calls (e.g. a backtest that legitimately
+     * runs synchronously for &gt;18s). Most read calls return in &lt;1s.
+     */
+    @Value("${app.research.request-timeout-seconds:18}")
+    private int requestTimeoutSeconds;
+
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NEVER)
@@ -106,7 +132,7 @@ public class ResearchProxyController {
                 + (query != null ? "?" + query : ""));
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(target)
-                .timeout(Duration.ofSeconds(120));
+                .timeout(Duration.ofSeconds(requestTimeoutSeconds));
 
         // Method + body. HttpRequest.Builder rejects bodies on GET/DELETE/HEAD
         // by default; use the no-body publisher for those.
@@ -144,9 +170,12 @@ public class ResearchProxyController {
             return jsonError(HttpStatus.BAD_GATEWAY,
                     "Research service unavailable. Try again in a moment.");
         } catch (HttpTimeoutException e) {
-            log.warn("Research JVM timeout for {} {}: {}", method, path, e.getMessage());
+            log.warn("Research JVM timeout for {} {} after {}s: {}",
+                    method, path, requestTimeoutSeconds, e.getMessage());
             return jsonError(HttpStatus.GATEWAY_TIMEOUT,
-                    "Research service did not respond in time.");
+                    "Research service did not respond within "
+                            + requestTimeoutSeconds + "s. The upstream JVM may be hung — "
+                            + "check thread state (CLOSE_WAIT count, jstack) and consider restarting.");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return jsonError(HttpStatus.SERVICE_UNAVAILABLE,
@@ -183,12 +212,36 @@ public class ResearchProxyController {
         return (s != null && s.endsWith("/")) ? s.substring(0, s.length() - 1) : s;
     }
 
+    /**
+     * Build the standard error envelope for upstream-failure responses. Uses
+     * Jackson rather than hand-rolled string concatenation so messages with
+     * special characters (quotes, control chars, newlines, unicode) serialise
+     * correctly. Return type is {@code ResponseEntity<byte[]>} to match the
+     * proxy's success-path signature; the LoggingService now decodes byte[]
+     * bodies as UTF-8 JSON for the log line, so this no longer surfaces as
+     * base64 in the request log.
+     */
+    private static final ObjectMapper ERROR_MAPPER = new ObjectMapper();
+
     private static ResponseEntity<byte[]> jsonError(HttpStatus status, String message) {
-        String body = "{\"responseCode\":\"" + status.value()
-                + "00\",\"responseDesc\":\"" + status.getReasonPhrase()
-                + "\",\"errorMessage\":\"" + message.replace("\"", "\\\"") + "\",\"data\":null}";
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("responseCode", status.value() + "00");
+        envelope.put("responseDesc", status.getReasonPhrase());
+        envelope.put("errorMessage", message);
+        envelope.put("data", null);
+        byte[] body;
+        try {
+            body = ERROR_MAPPER.writeValueAsBytes(envelope);
+        } catch (JsonProcessingException e) {
+            // ObjectMapper on a Map<String,String|null> can't actually fail —
+            // but the checked exception forces us to handle it. Fall back to
+            // a minimal hard-coded envelope so the client still gets JSON.
+            body = ("{\"responseCode\":\"" + status.value() + "00\",\"responseDesc\":\""
+                    + status.getReasonPhrase() + "\",\"errorMessage\":\"serialization failed\",\"data\":null}")
+                    .getBytes(StandardCharsets.UTF_8);
+        }
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        return new ResponseEntity<>(body.getBytes(StandardCharsets.UTF_8), headers, status);
+        return new ResponseEntity<>(body, headers, status);
     }
 }

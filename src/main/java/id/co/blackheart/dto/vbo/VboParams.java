@@ -48,6 +48,8 @@ public class VboParams implements Serializable {
     @Builder.Default private boolean    requireDonchianBreak     = false;
     @Builder.Default private boolean    requireTrendAlignment    = false;
     @Builder.Default private BigDecimal ema50SlopeMin            = new BigDecimal("0");
+    @Builder.Default private boolean    requireSlope200Gate      = false;
+    @Builder.Default private BigDecimal slope200Min              = new BigDecimal("0");
     @Builder.Default private BigDecimal atrExpansionMin          = new BigDecimal("1.30");
     @Builder.Default private BigDecimal rvolMin                  = new BigDecimal("1.20");
 
@@ -120,6 +122,8 @@ public class VboParams implements Serializable {
             case "requireDonchianBreak"     -> { Boolean b = bool(raw); if (b == null) return false; this.requireDonchianBreak     = b; }
             case "requireTrendAlignment"    -> { Boolean b = bool(raw); if (b == null) return false; this.requireTrendAlignment    = b; }
             case "ema50SlopeMin"            -> { BigDecimal v = bd(raw); if (v == null) return false; this.ema50SlopeMin            = v; }
+            case "requireSlope200Gate"      -> { Boolean b = bool(raw); if (b == null) return false; this.requireSlope200Gate      = b; }
+            case "slope200Min"              -> { BigDecimal v = bd(raw); if (v == null) return false; this.slope200Min              = v; }
             case "atrExpansionMin"          -> { BigDecimal v = bd(raw); if (v == null) return false; this.atrExpansionMin          = v; }
             case "rvolMin"                  -> { BigDecimal v = bd(raw); if (v == null) return false; this.rvolMin                  = v; }
             case "bodyRatioMin"             -> { BigDecimal v = bd(raw); if (v == null) return false; this.bodyRatioMin             = v; }

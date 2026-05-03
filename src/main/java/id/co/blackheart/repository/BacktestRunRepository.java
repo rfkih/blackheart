@@ -127,17 +127,17 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
     /**
      * Research-log feed for the /research dashboard. Returns COMPLETED runs
      * that have an analysis snapshot, optionally narrowed by strategy / asset /
-     * interval, paginated and ordered newest-first.
+     * interval / free-text search, with configurable sort and pagination.
      *
      * <p>{@code userId} is matched permissively — rows with {@code user_id IS NULL}
-     * (legacy / orchestrator-driven runs) are visible to every admin caller so
-     * agent-produced research isn't hidden behind a tenant boundary the agent
-     * never sets. This mirrors the prior in-memory filter in
-     * {@code ResearchController.getResearchLog}.
+     * (legacy / orchestrator-driven runs) are visible to every admin caller.
      *
-     * <p>Each filter is nullable. {@code CAST(:p AS TEXT)} pins the JDBC type
-     * (otherwise Hibernate infers {@code bytea} for nullable strings, breaking
-     * {@code UPPER(?)} / {@code ILIKE ?} on Postgres).
+     * <p>Each filter is nullable. {@code CAST(:p AS TEXT)} pins the JDBC type to
+     * avoid Hibernate inferring {@code bytea} for nullable strings on Postgres.
+     *
+     * <p>{@code sortColumn} must be validated against a whitelist by the caller
+     * before being passed here. {@code sortDir} must be {@code "ASC"} or
+     * {@code "DESC"} — the CASE fallback lands on {@code created_time DESC}.
      */
     @Query(value = """
             SELECT * FROM backtest_run
@@ -151,7 +151,27 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
                    OR UPPER(asset) = UPPER(CAST(:asset AS TEXT)))
               AND (CAST(:intervalName AS TEXT) IS NULL
                    OR interval_name = CAST(:intervalName AS TEXT))
-            ORDER BY created_time DESC NULLS LAST
+              AND (CAST(:search AS TEXT) IS NULL
+                   OR strategy_code ILIKE CONCAT('%', CAST(:search AS TEXT), '%')
+                   OR asset         ILIKE CONCAT('%', CAST(:search AS TEXT), '%'))
+            ORDER BY
+              CASE WHEN :sortColumn = 'createdAt'       AND UPPER(:sortDir) = 'ASC'  THEN created_time     END ASC  NULLS LAST,
+              CASE WHEN :sortColumn = 'createdAt'       AND UPPER(:sortDir) = 'DESC' THEN created_time     END DESC NULLS LAST,
+              CASE WHEN :sortColumn = 'tradeCount'      AND UPPER(:sortDir) = 'ASC'  THEN total_trades     END ASC  NULLS LAST,
+              CASE WHEN :sortColumn = 'tradeCount'      AND UPPER(:sortDir) = 'DESC' THEN total_trades     END DESC NULLS LAST,
+              CASE WHEN :sortColumn = 'winRate'         AND UPPER(:sortDir) = 'ASC'  THEN win_rate         END ASC  NULLS LAST,
+              CASE WHEN :sortColumn = 'winRate'         AND UPPER(:sortDir) = 'DESC' THEN win_rate         END DESC NULLS LAST,
+              CASE WHEN :sortColumn = 'profitFactor'    AND UPPER(:sortDir) = 'ASC'  THEN profit_factor    END ASC  NULLS LAST,
+              CASE WHEN :sortColumn = 'profitFactor'    AND UPPER(:sortDir) = 'DESC' THEN profit_factor    END DESC NULLS LAST,
+              CASE WHEN :sortColumn = 'maxDrawdown'     AND UPPER(:sortDir) = 'ASC'  THEN max_drawdown_pct END ASC  NULLS LAST,
+              CASE WHEN :sortColumn = 'maxDrawdown'     AND UPPER(:sortDir) = 'DESC' THEN max_drawdown_pct END DESC NULLS LAST,
+              CASE WHEN :sortColumn = 'strategyCode'    AND UPPER(:sortDir) = 'ASC'  THEN strategy_code   END ASC,
+              CASE WHEN :sortColumn = 'strategyCode'    AND UPPER(:sortDir) = 'DESC' THEN strategy_code   END DESC,
+              CASE WHEN :sortColumn = 'asset'           AND UPPER(:sortDir) = 'ASC'  THEN asset            END ASC,
+              CASE WHEN :sortColumn = 'asset'           AND UPPER(:sortDir) = 'DESC' THEN asset            END DESC,
+              CASE WHEN :sortColumn = 'strategyVersion' AND UPPER(:sortDir) = 'ASC'  THEN strategy_version END ASC,
+              CASE WHEN :sortColumn = 'strategyVersion' AND UPPER(:sortDir) = 'DESC' THEN strategy_version END DESC,
+              created_time DESC NULLS LAST
             """,
            countQuery = """
             SELECT COUNT(*) FROM backtest_run
@@ -165,6 +185,9 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
                    OR UPPER(asset) = UPPER(CAST(:asset AS TEXT)))
               AND (CAST(:intervalName AS TEXT) IS NULL
                    OR interval_name = CAST(:intervalName AS TEXT))
+              AND (CAST(:search AS TEXT) IS NULL
+                   OR strategy_code ILIKE CONCAT('%', CAST(:search AS TEXT), '%')
+                   OR asset         ILIKE CONCAT('%', CAST(:search AS TEXT), '%'))
             """,
            nativeQuery = true)
     Page<BacktestRun> findResearchLog(
@@ -172,6 +195,9 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             @Param("strategyCode") String strategyCode,
             @Param("asset") String asset,
             @Param("intervalName") String intervalName,
+            @Param("search") String search,
+            @Param("sortColumn") String sortColumn,
+            @Param("sortDir") String sortDir,
             Pageable pageable);
 
     /**
@@ -198,6 +224,60 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
      * {@code idx_backtest_run_holdout_per_sweep} additionally enforces
      * "at most one holdout per sweep" at the DB level.
      */
+    /**
+     * Recent completed runs for a strategy that have enough trades to be
+     * statistically meaningful. Used by {@code KellySizingService} to compute
+     * a PSR-discounted Kelly fraction from backtest statistics.
+     *
+     * <p>Ordered most-recent first; {@code limit} caps how many runs we pull
+     * in — 5 recent runs is plenty for a stable Kelly estimate and avoids
+     * stale parameter regimes that no longer reflect current market conditions.
+     *
+     * <p>Matches both single-strategy runs ({@code account_strategy_id} column)
+     * and multi-strategy runs where the target id appears in the
+     * {@code strategy_account_strategy_ids} JSONB map. The map shape is
+     * {@code {strategyCode -> accountStrategyId}} where the key is unknown,
+     * so jsonb {@code @>} can't be used (it requires structurally-identical
+     * fragments). A text-cast + LIKE substring scan covers the "value anywhere"
+     * case correctly. The row count on {@code backtest_run} is small enough
+     * that a sequential scan on the JSONB branch is acceptable for the
+     * interactive Kelly recompute path.
+     *
+     * <p>Without the JSONB branch, strategies that only show up in multi-
+     * strategy backtests would produce zero qualifying runs and Kelly would
+     * silently no-op.
+     *
+     * <p>{@code uuidText} must be the same UUID as {@code accountStrategyId}
+     * rendered as its canonical lowercase string. Pass via the
+     * {@link #findRecentCompletedByAccountStrategyId(UUID, int, int)} default
+     * wrapper to enforce that contract.
+     */
+    @Query(value = """
+            SELECT * FROM backtest_run
+            WHERE (account_strategy_id = :accountStrategyId
+                   OR strategy_account_strategy_ids::text ILIKE CONCAT('%', :uuidText, '%'))
+              AND status = 'COMPLETED'
+              AND total_trades >= :minTrades
+              AND win_rate IS NOT NULL
+              AND avg_win IS NOT NULL
+              AND avg_loss IS NOT NULL
+            ORDER BY created_time DESC
+            LIMIT :limitVal
+            """, nativeQuery = true)
+    List<BacktestRun> findRecentCompletedByAccountStrategyIdValueScan(
+            @Param("accountStrategyId") UUID accountStrategyId,
+            @Param("uuidText") String uuidText,
+            @Param("minTrades") int minTrades,
+            @Param("limitVal") int limitVal
+    );
+
+    /** Convenience wrapper — derives the lowercase UUID text needle from the id. */
+    default List<BacktestRun> findRecentCompletedByAccountStrategyId(
+            UUID accountStrategyId, int minTrades, int limitVal) {
+        return findRecentCompletedByAccountStrategyIdValueScan(
+                accountStrategyId, accountStrategyId.toString(), minTrades, limitVal);
+    }
+
     @Modifying
     @Transactional
     @Query(value = """

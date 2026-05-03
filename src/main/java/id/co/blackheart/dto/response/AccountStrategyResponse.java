@@ -38,4 +38,11 @@ public class AccountStrategyResponse {
     private Boolean isKillSwitchTripped;
     private LocalDateTime killSwitchTrippedAt;
     private String killSwitchReason;
+    /** Regime gate (V43) — gate live entries on FeatureStore regime columns. */
+    private Boolean regimeGateEnabled;
+    private String allowedTrendRegimes;
+    private String allowedVolatilityRegimes;
+    /** Kelly/bankroll sizing (V45) — PSR-discounted half-Kelly multiplier. */
+    private Boolean kellySizingEnabled;
+    private BigDecimal kellyMaxFraction;
 }

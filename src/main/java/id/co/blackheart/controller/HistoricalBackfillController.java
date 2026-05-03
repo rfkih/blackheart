@@ -139,6 +139,21 @@ public class HistoricalBackfillController {
     }
 
     /**
+     * Patch {@code slope_200} on every feature_store row that has it NULL.
+     * Auto-discovers all affected (symbol, interval) pairs — no params needed.
+     * Idempotent: already-filled rows are untouched.
+     */
+    @PostMapping("/backfill-slope200")
+    public ResponseEntity<ResponseDto> backfillSlope200() {
+        java.util.Map<String, Integer> result = technicalIndicatorService.backfillSlope200();
+        int total = result.values().stream().mapToInt(Integer::intValue).sum();
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(Map.of("byPair", result, "totalRowsUpdated", total))
+                .build());
+    }
+
+    /**
      * @deprecated Use {@code /backfill-features} instead. This endpoint only
      * patched VCB-specific columns; the new endpoint recomputes the full
      * feature set used by every strategy. Kept for back-compat — delegates

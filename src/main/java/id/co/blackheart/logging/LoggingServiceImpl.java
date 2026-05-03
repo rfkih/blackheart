@@ -22,7 +22,26 @@ public class LoggingServiceImpl implements LoggingService {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingServiceImpl.class);
 
-    private static final Set<String> RESTRICTED_HEADERS = Set.of("authorization", "user_key");
+    /**
+     * Header names whose values must be fully redacted before being logged.
+     * Stored lowercase; comparison is case-insensitive (HTTP header names are
+     * case-insensitive per RFC 7230, and clients send {@code Authorization}
+     * with a capital A while our prior comparison was lowercase-only — that
+     * bug exposed full bearer tokens in the request log).
+     *
+     * <p>{@code cookie} and {@code set-cookie} are included because the JWT
+     * also rides as a cookie ({@code blackheart-token}); leaving them in the
+     * clear effectively reverses the {@code authorization}-header redaction.
+     */
+    private static final Set<String> RESTRICTED_HEADERS = Set.of(
+            "authorization",
+            "cookie",
+            "set-cookie",
+            "user_key",
+            "x-api-key",
+            "x-auth-token",
+            "proxy-authorization"
+    );
 
     /**
      * Field names (case-insensitive, substring match) whose values must never
@@ -92,9 +111,25 @@ public class LoggingServiceImpl implements LoggingService {
      * Serialise a body to JSON with password/secret/token fields scrubbed.
      * Walks the parsed tree so nested structures (login wrapper → user object,
      * envelope → data.accessToken, etc.) get caught without field-class lists.
+     *
+     * <p>{@code byte[]} bodies (used by the research proxy and other byte-array
+     * endpoints) are decoded as UTF-8 and re-parsed as JSON when possible.
+     * Without this branch Jackson defaults to base64-encoding the array, which
+     * produces logs full of {@code "eyJyZXNwb25zZUNvZGUi..."} that are useless
+     * for debugging. Falls back to the UTF-8 string (or the raw object) if
+     * the bytes aren't valid JSON.
      */
     private String serialiseWithRedaction(Object body) throws Exception {
-        JsonNode tree = mapper.valueToTree(body);
+        Object effective = body;
+        if (body instanceof byte[] bytes) {
+            String asText = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            try {
+                effective = mapper.readTree(asText);
+            } catch (Exception parseFail) {
+                effective = asText;
+            }
+        }
+        JsonNode tree = mapper.valueToTree(effective);
         redactSensitiveFields(tree);
         return mapper.writeValueAsString(tree);
     }
@@ -139,14 +174,9 @@ public class LoggingServiceImpl implements LoggingService {
                 .stream()
                 .collect(Collectors.toMap(
                         key -> key,
-                        request::getHeader,
+                        key -> redactIfSensitiveHeader(key, request.getHeader(key)),
                         (a, b) -> a,
                         LinkedHashMap::new));
-
-        RESTRICTED_HEADERS.forEach(name -> headers.computeIfPresent(name, (k, v) -> {
-            int mid = v.length() < 50 ? Math.max(v.length() / 4, 1) : 12;
-            return v.substring(0, mid) + "..." + v.substring(v.length() - mid);
-        }));
 
         // Ensure X-Request-ID and X-Correlation-ID are present (set by interceptor via MDC)
         headers.computeIfAbsent(HeaderName.X_REQUEST_ID.getValue(),
@@ -159,8 +189,26 @@ public class LoggingServiceImpl implements LoggingService {
 
     private Map<String, String> buildHeadersMapRes(HttpServletResponse response) {
         Map<String, String> map = new LinkedHashMap<>();
-        response.getHeaderNames().forEach(h -> map.put(h, response.getHeader(h)));
+        response.getHeaderNames().forEach(h -> map.put(h, redactIfSensitiveHeader(h, response.getHeader(h))));
         return map;
+    }
+
+    /**
+     * Replace the value of any {@link #RESTRICTED_HEADERS} entry with the
+     * redacted sentinel. Returns the original value otherwise. Comparison is
+     * case-insensitive — a {@code null} or empty value passes through so the
+     * log still records the header was present.
+     *
+     * <p>We deliberately replace the whole value instead of masking the middle
+     * because partial values still leak the JWT header + claims (alg, sub,
+     * role, exp), which is enough to fingerprint the user / impersonate within
+     * the visible window.
+     */
+    private static String redactIfSensitiveHeader(String name, String value) {
+        if (value == null || value.isEmpty()) return value;
+        if (name == null) return value;
+        if (RESTRICTED_HEADERS.contains(name.toLowerCase(Locale.ROOT))) return REDACTED;
+        return value;
     }
 
     private Map<String, String> buildParametersMap(HttpServletRequest request) {

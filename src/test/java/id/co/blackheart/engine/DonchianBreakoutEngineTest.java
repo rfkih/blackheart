@@ -62,9 +62,9 @@ class DonchianBreakoutEngineTest {
     }
 
     @Test
-    void prevCloseNotAboveDonchianUpper_holds() {
+    void closeNotAboveDonchianUpper_holds() {
         EnrichedStrategyContext ctx = longEntryContext();
-        // Move donchian above prev close so the breakout gate fails.
+        // Push channel above current close (100500) so the breakout gate fails.
         ctx.getPreviousFeatureStore().setDonchianUpper20(new BigDecimal("100600"));
         StrategyDecision d = engine.evaluate(spec(), ctx);
         assertEquals(DecisionType.HOLD, d.getDecisionType());
@@ -87,9 +87,9 @@ class DonchianBreakoutEngineTest {
     }
 
     @Test
-    void continuationFailing_holds() {
+    void closeAtPrevCloseLevel_belowChannel_holds() {
         EnrichedStrategyContext ctx = longEntryContext();
-        // close ≤ prevClose: not a continuation candle.
+        // close=100400 < donchianUpper=100450 → breakout gate fails (close must exceed channel).
         ctx.getMarketData().setClosePrice(new BigDecimal("100400"));
         StrategyDecision d = engine.evaluate(spec(), ctx);
         assertEquals(DecisionType.HOLD, d.getDecisionType());
@@ -147,10 +147,11 @@ class DonchianBreakoutEngineTest {
         md.setLowPrice(new BigDecimal("100350"));
         md.setOpenPrice(new BigDecimal("100380"));
 
-        // prev close = 100400, donchian upper = 100300 → breakout sustained
+        // prev close = 100400, donchian upper = 100450 (realistic: >= prevBar.high >= prevClose)
+        // current close = 100500 breaks above 100450 → long breakout fires
         FeatureStore prev = new FeatureStore();
         prev.setPrice(new BigDecimal("100400"));
-        prev.setDonchianUpper20(new BigDecimal("100300"));
+        prev.setDonchianUpper20(new BigDecimal("100450"));
         prev.setDonchianLower20(new BigDecimal("99000"));
 
         return baseCtx(md, now, prev, false, null);
@@ -172,11 +173,12 @@ class DonchianBreakoutEngineTest {
         md.setLowPrice(new BigDecimal("99400"));
         md.setOpenPrice(new BigDecimal("99620"));
 
-        // prev close = 99600, donchian lower = 99700 → breakdown sustained
+        // prev close = 99600, donchian lower = 99550 (realistic: <= prevBar.low <= prevClose)
+        // current close = 99500 breaks below 99550 → short breakdown fires
         FeatureStore prev = new FeatureStore();
         prev.setPrice(new BigDecimal("99600"));
         prev.setDonchianUpper20(new BigDecimal("101000"));
-        prev.setDonchianLower20(new BigDecimal("99700"));
+        prev.setDonchianLower20(new BigDecimal("99550"));
 
         return baseCtx(md, now, prev, false, null);
     }

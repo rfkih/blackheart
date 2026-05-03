@@ -43,6 +43,61 @@ public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long
     );
 
     @Query(value = """
+    SELECT DISTINCT symbol, interval
+    FROM feature_store
+    WHERE slope_200 IS NULL
+    ORDER BY symbol, interval
+    """, nativeQuery = true)
+    List<Object[]> findDistinctSymbolIntervalWhereSlope200IsNull();
+
+    @Query(value = """
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND slope_200 IS NULL
+    ORDER BY start_time ASC
+    """, nativeQuery = true)
+    List<FeatureStore> findBySymbolIntervalWhereSlope200IsNull(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval
+    );
+
+    @Query(value = """
+    SELECT *
+    FROM feature_store
+    WHERE symbol = :symbol
+      AND interval = :interval
+      AND slope_200 IS NULL
+      AND start_time BETWEEN :startTime AND :endTime
+    ORDER BY start_time ASC
+    """, nativeQuery = true)
+    List<FeatureStore> findBySymbolIntervalWhereSlope200IsNullInRange(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    @Query(value = """
+    SELECT MIN(start_time) FROM feature_store
+    WHERE symbol = :symbol AND interval = :interval AND slope_200 IS NULL
+    """, nativeQuery = true)
+    java.sql.Timestamp findMinStartTimeWhereSlope200IsNull(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval
+    );
+
+    @Query(value = """
+    SELECT MAX(start_time) FROM feature_store
+    WHERE symbol = :symbol AND interval = :interval AND slope_200 IS NULL
+    """, nativeQuery = true)
+    java.sql.Timestamp findMaxStartTimeWhereSlope200IsNull(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval
+    );
+
+    @Query(value = """
     SELECT *
     FROM feature_store
     WHERE symbol = :symbol
@@ -174,6 +229,19 @@ public interface FeatureStoreRepository extends JpaRepository<FeatureStore, Long
      *
      * <p>Returns the number of rows deleted.
      */
+    @Query(value = """
+    SELECT COUNT(*) FROM feature_store
+    WHERE symbol   = :symbol
+      AND interval = :interval
+      AND start_time BETWEEN :startTime AND :endTime
+    """, nativeQuery = true)
+    long countBySymbolIntervalAndRange(
+            @Param("symbol") String symbol,
+            @Param("interval") String interval,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
     @Modifying
     @Transactional
     @Query(value = """

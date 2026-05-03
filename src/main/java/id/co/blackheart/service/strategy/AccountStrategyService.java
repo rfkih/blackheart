@@ -14,6 +14,7 @@ import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.alert.AlertService;
 import id.co.blackheart.service.alert.AlertSeverity;
 import id.co.blackheart.service.audit.AuditService;
+import id.co.blackheart.service.risk.KellySizingService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +41,7 @@ public class AccountStrategyService {
     private final EngineMetrics engineMetrics;
     private final StrategyParamService strategyParamService;
     private final AlertService alertService;
+    private final KellySizingService kellySizingService;
 
     /**
      * Returns all account strategies belonging to every account owned by the given user.
@@ -67,6 +69,20 @@ public class AccountStrategyService {
     public AccountStrategyResponse getStrategyById(UUID userId, UUID accountStrategyId) {
         AccountStrategy strategy = loadOwnedActive(userId, accountStrategyId);
         return toResponse(strategy);
+    }
+
+    /**
+     * Returns the live Kelly status for a strategy: enabled flag, current
+     * effective multiplier, configured cap, qualifying-run count, and a
+     * human-readable reason. Used by the strategy detail page to surface
+     * what Kelly is actually doing right now (which is otherwise only
+     * visible in JVM logs).
+     */
+    @Transactional(readOnly = true)
+    public KellySizingService.KellyStatus getKellyStatus(UUID userId, UUID accountStrategyId) {
+        // Tenant scope check — same pattern as the other read endpoints.
+        loadOwnedActive(userId, accountStrategyId);
+        return kellySizingService.getStatus(accountStrategyId);
     }
 
     /**
@@ -380,6 +396,43 @@ public class AccountStrategyService {
                     strategy.getAccountStrategyId(), req.getPriorityOrder());
         }
 
+        // ── Regime gate (optional, V43) ─────────────────────────────────
+        if (req.getRegimeGateEnabled() != null
+                && !req.getRegimeGateEnabled().equals(strategy.getRegimeGateEnabled())) {
+            strategy.setRegimeGateEnabled(req.getRegimeGateEnabled());
+            dirty = true;
+            log.info("Updated strategy id={} regimeGateEnabled -> {}",
+                    strategy.getAccountStrategyId(), req.getRegimeGateEnabled());
+        }
+        if (req.getAllowedTrendRegimes() != null) {
+            String val = req.getAllowedTrendRegimes().isBlank() ? null
+                    : req.getAllowedTrendRegimes().trim().toUpperCase();
+            strategy.setAllowedTrendRegimes(val);
+            dirty = true;
+        }
+        if (req.getAllowedVolatilityRegimes() != null) {
+            String val = req.getAllowedVolatilityRegimes().isBlank() ? null
+                    : req.getAllowedVolatilityRegimes().trim().toUpperCase();
+            strategy.setAllowedVolatilityRegimes(val);
+            dirty = true;
+        }
+
+        // ── Kelly / bankroll sizing (optional, V45) ─────────────────────
+        if (req.getKellySizingEnabled() != null
+                && !req.getKellySizingEnabled().equals(strategy.getKellySizingEnabled())) {
+            strategy.setKellySizingEnabled(req.getKellySizingEnabled());
+            dirty = true;
+            log.info("Updated strategy id={} kellySizingEnabled -> {}",
+                    strategy.getAccountStrategyId(), req.getKellySizingEnabled());
+        }
+        if (req.getKellyMaxFraction() != null
+                && req.getKellyMaxFraction().compareTo(strategy.getKellyMaxFraction()) != 0) {
+            strategy.setKellyMaxFraction(req.getKellyMaxFraction());
+            dirty = true;
+            log.info("Updated strategy id={} kellyMaxFraction -> {}",
+                    strategy.getAccountStrategyId(), req.getKellyMaxFraction());
+        }
+
         if (!dirty) {
             return toResponse(strategy);
         }
@@ -397,13 +450,23 @@ public class AccountStrategyService {
     private record AccountStrategySnapshot(
             String intervalName,
             Integer priorityOrder,
-            Boolean enabled
+            Boolean enabled,
+            Boolean regimeGateEnabled,
+            String allowedTrendRegimes,
+            String allowedVolatilityRegimes,
+            Boolean kellySizingEnabled,
+            java.math.BigDecimal kellyMaxFraction
     ) {
         static AccountStrategySnapshot of(AccountStrategy s) {
             return new AccountStrategySnapshot(
                     s.getIntervalName(),
                     s.getPriorityOrder(),
-                    s.getEnabled()
+                    s.getEnabled(),
+                    s.getRegimeGateEnabled(),
+                    s.getAllowedTrendRegimes(),
+                    s.getAllowedVolatilityRegimes(),
+                    s.getKellySizingEnabled(),
+                    s.getKellyMaxFraction()
             );
         }
     }
@@ -514,6 +577,11 @@ public class AccountStrategyService {
                 .isKillSwitchTripped(s.getIsKillSwitchTripped())
                 .killSwitchTrippedAt(s.getKillSwitchTrippedAt())
                 .killSwitchReason(s.getKillSwitchReason())
+                .regimeGateEnabled(s.getRegimeGateEnabled())
+                .allowedTrendRegimes(s.getAllowedTrendRegimes())
+                .allowedVolatilityRegimes(s.getAllowedVolatilityRegimes())
+                .kellySizingEnabled(s.getKellySizingEnabled())
+                .kellyMaxFraction(s.getKellyMaxFraction())
                 .build();
     }
 }

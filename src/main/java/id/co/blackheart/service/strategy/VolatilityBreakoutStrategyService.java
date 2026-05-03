@@ -558,16 +558,22 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         if (close.compareTo(f.getEma50()) <= 0) return false;
         // Allow neutral or rising EMA50 — we don't require a positive slope on
         // a regime-transition strategy, just no strong opposing slope.
-        return f.getEma50Slope() == null
-                || f.getEma50Slope().compareTo(p.getEma50SlopeMin().negate()) >= 0;
+        if (!(f.getEma50Slope() == null
+                || f.getEma50Slope().compareTo(p.getEma50SlopeMin().negate()) >= 0)) return false;
+        if (p.isRequireSlope200Gate() && f.getSlope200() != null
+                && f.getSlope200().compareTo(p.getSlope200Min()) < 0) return false;
+        return true;
     }
 
     private boolean hasBearishTrendAlignment(MarketData md, FeatureStore f, VboParams p) {
         if (f.getEma50() == null) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(f.getEma50()) >= 0) return false;
-        return f.getEma50Slope() == null
-                || f.getEma50Slope().compareTo(p.getEma50SlopeMin()) <= 0;
+        if (!(f.getEma50Slope() == null
+                || f.getEma50Slope().compareTo(p.getEma50SlopeMin()) <= 0)) return false;
+        if (p.isRequireSlope200Gate() && f.getSlope200() != null
+                && f.getSlope200().compareTo(p.getSlope200Min().negate()) > 0) return false;
+        return true;
     }
 
     // ── Scoring ───────────────────────────────────────────────────────────────

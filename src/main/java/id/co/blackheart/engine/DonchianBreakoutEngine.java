@@ -26,9 +26,10 @@ import java.util.Map;
  * Donchian breakout archetype — generalisation of the discarded DCT pattern
  * with the lessons baked in (rvol floor, ADX-rising filter optional via spec).
  *
- * <p>Long entry: previous bar closed above the previous Donchian-N upper
- * channel; current bar continues higher; relative volume above floor; ADX
- * above floor. Symmetric short. Single TP at {@code tpR * initial_risk};
+ * <p>Long entry: current bar closes above the Donchian-N upper channel of the
+ * previous bar (= max high of the 20 bars ending at prevBar, which does NOT
+ * include the current bar); relative volume above floor; ADX above floor.
+ * Symmetric short. Single TP at {@code tpR * initial_risk};
  * stop at {@code stopAtrMult * ATR} from entry. Break-even shift after
  * {@code breakEvenR}; force-exit at {@code maxBarsHeld}.
  *
@@ -134,12 +135,12 @@ public class DonchianBreakoutEngine implements StrategyEngine {
     private StrategyDecision tryLongEntry(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
                                           FeatureStore f, FeatureStore prev, Tuning t) {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
-        BigDecimal prevClose = strategyHelper.safe(prev.getPrice());
 
         if (prev.getDonchianUpper20() == null) return null;
         BigDecimal donchianUpper = prev.getDonchianUpper20();
-        if (prevClose.compareTo(donchianUpper) <= 0) return null;
-        if (close.compareTo(prevClose) <= 0) return null;
+        // prev.getDonchianUpper20() = max(high[t-1..t-20]) — does NOT include current bar.
+        // close > donchianUpper implies close > prevBar.high >= prevClose (continuation implied).
+        if (close.compareTo(donchianUpper) <= 0) return null;
 
         if (f.getRelativeVolume20() == null
                 || f.getRelativeVolume20().compareTo(t.rvolMin) < 0) return null;
@@ -185,12 +186,12 @@ public class DonchianBreakoutEngine implements StrategyEngine {
     private StrategyDecision tryShortEntry(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
                                            FeatureStore f, FeatureStore prev, Tuning t) {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
-        BigDecimal prevClose = strategyHelper.safe(prev.getPrice());
 
         if (prev.getDonchianLower20() == null) return null;
         BigDecimal donchianLower = prev.getDonchianLower20();
-        if (prevClose.compareTo(donchianLower) >= 0) return null;
-        if (close.compareTo(prevClose) >= 0) return null;
+        // prev.getDonchianLower20() = min(low[t-1..t-20]) — does NOT include current bar.
+        // close < donchianLower implies close < prevBar.low <= prevClose (continuation implied).
+        if (close.compareTo(donchianLower) >= 0) return null;
 
         if (f.getRelativeVolume20() == null
                 || f.getRelativeVolume20().compareTo(t.rvolMin) < 0) return null;

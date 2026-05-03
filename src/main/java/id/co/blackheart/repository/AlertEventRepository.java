@@ -20,14 +20,16 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
 
     /**
      * Filterable feed for the admin /alerts inbox. All filter args are
-     * nullable — null means "no filter on this dimension". `since` is
-     * inclusive. Suppressed rows are included by default so the operator
-     * can see flap rate; the UI can toggle them off via the param.
+     * nullable — null means "no filter on this dimension". {@code since} is
+     * inclusive. {@code search} does ILIKE across message and kind.
+     *
+     * {@code sortColumn} must be pre-validated by the caller against an
+     * allowlist (supported: {@code createdAt}, {@code severity}).
+     * {@code sortDir} must be {@code "ASC"} or {@code "DESC"}.
+     * Severity sort uses an ordinal CASE (CRITICAL=3 > WARN=2 > INFO=1).
      *
      * Native query required: PostgreSQL cannot infer the type of a null
-     * literal in JPQL's `? IS NULL` pattern for typed columns (timestamp).
-     * CAST gives the driver an explicit type so the prepared-statement plan
-     * compiles even when since=null.
+     * literal in JPQL's {@code ? IS NULL} pattern for typed columns (timestamp).
      */
     @Query(value = """
             SELECT * FROM alert_event a
@@ -35,7 +37,19 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
               AND (:kind IS NULL OR a.kind = :kind)
               AND (CAST(:since AS timestamp) IS NULL OR a.created_at >= CAST(:since AS timestamp))
               AND (CAST(:includeSuppressed AS boolean) = true OR a.suppressed = false)
-            ORDER BY a.created_at DESC
+              AND (CAST(:search AS text) IS NULL
+                   OR a.message ILIKE CONCAT('%', CAST(:search AS text), '%')
+                   OR a.kind    ILIKE CONCAT('%', CAST(:search AS text), '%'))
+            ORDER BY
+              CASE WHEN :sortColumn = 'createdAt' AND UPPER(:sortDir) = 'ASC'  THEN a.created_at END ASC  NULLS LAST,
+              CASE WHEN :sortColumn = 'createdAt' AND UPPER(:sortDir) = 'DESC' THEN a.created_at END DESC NULLS LAST,
+              CASE WHEN :sortColumn = 'severity'  AND UPPER(:sortDir) = 'ASC'
+                   THEN CASE a.severity WHEN 'INFO' THEN 1 WHEN 'WARN' THEN 2 WHEN 'CRITICAL' THEN 3 ELSE 0 END
+              END ASC  NULLS LAST,
+              CASE WHEN :sortColumn = 'severity'  AND UPPER(:sortDir) = 'DESC'
+                   THEN CASE a.severity WHEN 'INFO' THEN 1 WHEN 'WARN' THEN 2 WHEN 'CRITICAL' THEN 3 ELSE 0 END
+              END DESC NULLS LAST,
+              a.created_at DESC
             """,
             countQuery = """
             SELECT COUNT(*) FROM alert_event a
@@ -43,6 +57,9 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
               AND (:kind IS NULL OR a.kind = :kind)
               AND (CAST(:since AS timestamp) IS NULL OR a.created_at >= CAST(:since AS timestamp))
               AND (CAST(:includeSuppressed AS boolean) = true OR a.suppressed = false)
+              AND (CAST(:search AS text) IS NULL
+                   OR a.message ILIKE CONCAT('%', CAST(:search AS text), '%')
+                   OR a.kind    ILIKE CONCAT('%', CAST(:search AS text), '%'))
             """,
             nativeQuery = true)
     Page<AlertEvent> findFiltered(
@@ -50,6 +67,9 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
             @Param("kind") String kind,
             @Param("since") LocalDateTime since,
             @Param("includeSuppressed") boolean includeSuppressed,
+            @Param("search") String search,
+            @Param("sortColumn") String sortColumn,
+            @Param("sortDir") String sortDir,
             Pageable pageable);
 
     /**

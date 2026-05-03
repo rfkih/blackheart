@@ -13,6 +13,7 @@ import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.service.promotion.StrategyPromotionService;
 import id.co.blackheart.service.risk.BookVolTargetingService;
+import id.co.blackheart.service.risk.KellySizingService;
 import id.co.blackheart.service.risk.RiskGuardService;
 import id.co.blackheart.service.strategy.StrategyDecisionInvariants;
 import id.co.blackheart.service.trade.TradeService;
@@ -48,6 +49,7 @@ public class LiveTradingDecisionExecutorService {
     private final PortfolioService portfolioService;
     private final TradeService tradeService;
     private final RiskGuardService riskGuardService;
+    private final KellySizingService kellySizingService;
     private final BookVolTargetingService bookVolTargetingService;
     private final StrategyPromotionService strategyPromotionService;
     private final StrategyDefinitionRepository strategyDefinitionRepository;
@@ -85,7 +87,8 @@ public class LiveTradingDecisionExecutorService {
             if (accountStrategyId != null) {
                 String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
                         ? SIDE_LONG : SIDE_SHORT;
-                RiskGuardService.GuardVerdict verdict = riskGuardService.canOpen(accountStrategyId, side);
+                RiskGuardService.GuardVerdict verdict = riskGuardService.canOpen(
+                        accountStrategyId, side, context.getFeatureStore());
                 if (!verdict.allowed()) {
                     log.warn("[RiskGuard] BLOCKED {} | strategy={} reason={}",
                             decision.getDecisionType(), decision.getStrategyCode(), verdict.reason());
@@ -97,6 +100,16 @@ public class LiveTradingDecisionExecutorService {
                 // can be decomposed into signal-alpha / exec-drift /
                 // sizing-residual at close.
                 captureIntent(side, decision, context);
+
+                // Phase 2d — Kelly/bankroll sizing. Applies a PSR-discounted
+                // half-Kelly multiplier derived from recent qualifying backtest
+                // runs. Off by default (kellySizingEnabled=false); when off
+                // the service returns 1.0 and the size is unchanged.
+                // Pass the UUID alongside the entity so the service can fall
+                // back to a DB lookup when context.getAccountStrategy() is null
+                // (decision.accountStrategyId can be set without context loading
+                // the entity in some legacy code paths).
+                applyKellySizing(context.getAccountStrategy(), accountStrategyId, side, decision);
 
                 // Phase 2b — book vol-targeting. Scales the strategy's
                 // computed size so realized vol hits target and correlated
@@ -132,10 +145,25 @@ public class LiveTradingDecisionExecutorService {
         if (isOpenAction && context.getAccountStrategy() != null) {
             boolean accountSimulated =
                     Boolean.TRUE.equals(context.getAccountStrategy().getSimulated());
-            boolean definitionSimulated = strategyDefinitionRepository
-                    .findByStrategyCode(decision.getStrategyCode())
+            // Single definition lookup covers both the enabled kill-switch and
+            // the simulated gate — avoids the double findByStrategyCode that the
+            // prior coordinator call (getIfDefinitionEnabled) used to issue.
+            var defOpt = strategyDefinitionRepository.findByStrategyCode(decision.getStrategyCode());
+            boolean definitionDisabled = defOpt
+                    .map(d -> Boolean.FALSE.equals(d.getEnabled()))
+                    .orElse(false);
+            boolean definitionSimulated = defOpt
                     .map(d -> Boolean.TRUE.equals(d.getSimulated()))
                     .orElse(false);
+
+            // Kill-switch: definition disabled → drop entry silently (no paper
+            // trade either). CLOSE_*/UPDATE bypass this block entirely and always
+            // fall through to real execution — preserving the V15 Bug 1 invariant.
+            if (definitionDisabled) {
+                log.info("[KillSwitch] {} {} — definition disabled, dropping entry signal",
+                        decision.getStrategyCode(), decision.getDecisionType());
+                return;
+            }
             if (accountSimulated || definitionSimulated) {
                 UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
                 log.info("[PaperTrade] {} {} — simulated (def={}, acct={}), recording without placing order",
@@ -405,6 +433,41 @@ public class LiveTradingDecisionExecutorService {
         if (decision.getIntendedEntryPrice() == null
                 && context.getMarketData() != null) {
             decision.setIntendedEntryPrice(context.getMarketData().getClosePrice());
+        }
+    }
+
+    /**
+     * Apply PSR-discounted half-Kelly multiplier to the entry size in-place.
+     * LONG scales {@code notionalSize}; SHORT scales {@code positionSize}.
+     * Returns without mutating when Kelly is disabled or returns 1.0 (no-op).
+     *
+     * <p>Prefers the already-loaded {@code accountStrategy} (no DB hit). Falls
+     * back to a {@code accountStrategyId}-based lookup when the entity is
+     * null — without this fallback Kelly silently no-ops on any code path
+     * that populates {@code decision.accountStrategyId} but leaves
+     * {@code context.accountStrategy} unloaded.
+     */
+    private void applyKellySizing(id.co.blackheart.model.AccountStrategy accountStrategy,
+                                  UUID accountStrategyId,
+                                  String side, StrategyDecision decision) {
+        BigDecimal baseSize = SIDE_LONG.equalsIgnoreCase(side)
+                ? decision.getNotionalSize()
+                : decision.getPositionSize();
+        if (baseSize == null || baseSize.signum() <= 0) return;
+
+        BigDecimal multiplier = accountStrategy != null
+                ? kellySizingService.computeKellyMultiplier(accountStrategy)
+                : kellySizingService.computeKellyMultiplier(accountStrategyId);
+        if (multiplier.compareTo(BigDecimal.ONE) == 0) return;
+
+        BigDecimal scaled = baseSize.multiply(multiplier).setScale(8, RoundingMode.HALF_UP);
+        log.info("[Kelly] {} {} | base={} → scaled={} (multiplier={})",
+                decision.getStrategyCode(), side, baseSize, scaled,
+                multiplier.setScale(4, RoundingMode.HALF_UP));
+        if (SIDE_LONG.equalsIgnoreCase(side)) {
+            decision.setNotionalSize(scaled);
+        } else {
+            decision.setPositionSize(scaled);
         }
     }
 

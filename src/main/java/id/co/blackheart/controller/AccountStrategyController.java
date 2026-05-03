@@ -152,6 +152,26 @@ public class AccountStrategyController {
     }
 
     /**
+     * Returns the live Kelly sizing status — enabled flag, current effective
+     * multiplier (computed from the most recent qualifying backtest runs),
+     * configured cap, and a human-readable reason. Use this on the strategy
+     * detail page to show operators what Kelly is doing right now without
+     * making them grep JVM logs.
+     */
+    @GetMapping("/{accountStrategyId}/kelly-status")
+    @Operation(summary = "Get the current Kelly sizing multiplier and qualifying-run count.",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> getKellyStatus(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountStrategyId) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountStrategyService.getKellyStatus(userId, accountStrategyId))
+                .build());
+    }
+
+    /**
      * Clear the drawdown kill-switch on this strategy. The endpoint is
      * deliberately explicit — the trip is the "look at this" signal, and
      * the user must consciously acknowledge it before live trading

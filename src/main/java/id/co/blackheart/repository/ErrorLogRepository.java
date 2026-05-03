@@ -4,6 +4,7 @@ import id.co.blackheart.model.ErrorLog;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -14,28 +15,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface ErrorLogRepository extends JpaRepository<ErrorLog, UUID> {
-
-    /**
-     * Filterable feed for the admin /admin/errors inbox. All filter args are
-     * nullable — null means "no filter on this dimension". `since` is
-     * inclusive on lastSeenAt so a long-running fingerprint with stale
-     * occurredAt but recent re-occurrence still surfaces in the cutoff.
-     */
-    @Query("""
-            SELECT e FROM ErrorLog e
-            WHERE (:severity IS NULL OR e.severity = :severity)
-              AND (:status IS NULL OR e.status = :status)
-              AND (:jvm IS NULL OR e.jvm = :jvm)
-              AND (:since IS NULL OR e.lastSeenAt >= :since)
-            ORDER BY e.lastSeenAt DESC
-            """)
-    Page<ErrorLog> findFiltered(
-            @Param("severity") String severity,
-            @Param("status") String status,
-            @Param("jvm") String jvm,
-            @Param("since") LocalDateTime since,
-            Pageable pageable);
+public interface ErrorLogRepository extends JpaRepository<ErrorLog, UUID>, JpaSpecificationExecutor<ErrorLog> {
 
     /**
      * Count of currently-open rows (status NEW/INVESTIGATING) at or above the

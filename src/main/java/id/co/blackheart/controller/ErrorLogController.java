@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -28,7 +29,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.jpa.domain.Specification;
+
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +70,9 @@ public class ErrorLogController {
      * stuffs them in. We can't audit every call site that puts things into
      * MDC, so the inbox redacts on the way out as defense in depth.
      */
+    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of(
+            "lastSeenAt", "occurredAt", "occurrenceCount");
+
     private static final Set<String> MDC_REDACT_KEYS = Set.of(
             "authorization", "password", "token", "secret",
             "apikey", "api_key", "cookie", "set-cookie",
@@ -76,7 +84,7 @@ public class ErrorLogController {
 
     @GetMapping
     @Operation(
-            summary = "List error_log rows, newest last-seen first, with optional filters",
+            summary = "List error_log rows with optional filters, search, and sort",
             security = @SecurityRequirement(name = "bearerAuth")
     )
     public ResponseEntity<ResponseDto> list(
@@ -85,19 +93,35 @@ public class ErrorLogController {
             @RequestParam(required = false) String jvm,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime since,
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "lastSeenAt,desc") String sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size
     ) {
         int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
-        Pageable pageable = PageRequest.of(safePage, safeSize);
+        Pageable pageable = PageRequest.of(safePage, safeSize, parseSort(sort));
 
-        String sevFilter = normaliseUpper(severity, ALLOWED_SEVERITY);
+        String sevFilter    = normaliseUpper(severity, ALLOWED_SEVERITY);
         String statusFilter = normaliseUpper(status, ALLOWED_STATUS);
-        String jvmFilter = (jvm == null || jvm.isBlank()) ? null : jvm.trim();
+        String jvmFilter    = (jvm == null || jvm.isBlank()) ? null : jvm.trim();
+        String searchLike   = (search == null || search.isBlank())
+                ? null : "%" + search.trim().toLowerCase() + "%";
 
-        Page<ErrorLog> rows = errorLogRepository.findFiltered(
-                sevFilter, statusFilter, jvmFilter, since, pageable);
+        Specification<ErrorLog> spec = (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (sevFilter != null)    predicates.add(cb.equal(root.get("severity"), sevFilter));
+            if (statusFilter != null) predicates.add(cb.equal(root.get("status"), statusFilter));
+            if (jvmFilter != null)    predicates.add(cb.equal(root.get("jvm"), jvmFilter));
+            if (since != null)        predicates.add(cb.greaterThanOrEqualTo(root.get("lastSeenAt"), since));
+            if (searchLike != null)   predicates.add(cb.or(
+                    cb.like(cb.lower(root.get("message")), searchLike),
+                    cb.like(cb.lower(root.get("loggerName")), searchLike),
+                    cb.like(cb.lower(root.get("exceptionClass")), searchLike)
+            ));
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+        Page<ErrorLog> rows = errorLogRepository.findAll(spec, pageable);
 
         List<Map<String, Object>> content = rows.getContent().stream()
                 .map(ErrorLogController::toListRow)
@@ -206,6 +230,17 @@ public class ErrorLogController {
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(data)
                 .build());
+    }
+
+    private static Sort parseSort(String sort) {
+        if (sort == null || sort.isBlank())
+            return Sort.by(Sort.Direction.DESC, "lastSeenAt");
+        String[] parts = sort.split(",", 2);
+        String field = parts[0].trim();
+        if (!ALLOWED_SORT_FIELDS.contains(field)) field = "lastSeenAt";
+        Sort.Direction dir = (parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim()))
+                ? Sort.Direction.ASC : Sort.Direction.DESC;
+        return Sort.by(dir, field);
     }
 
     private String resolveActor(HttpServletRequest request) {

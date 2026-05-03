@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Admin-only feed of {@link AlertEvent}s — the operator's "inbox" for
@@ -43,12 +44,13 @@ import java.util.Map;
 public class AlertEventController {
 
     private static final int MAX_PAGE_SIZE = 200;
+    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of("createdAt", "severity");
 
     private final AlertEventRepository alertEventRepository;
 
     @GetMapping
     @Operation(
-            summary = "List alert events, newest first, with optional filters",
+            summary = "List alert events with optional filters, search, and sort",
             security = @SecurityRequirement(name = "bearerAuth")
     )
     public ResponseEntity<ResponseDto> list(
@@ -57,6 +59,8 @@ public class AlertEventController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime since,
             @RequestParam(defaultValue = "true") boolean includeSuppressed,
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "createdAt,desc") String sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size
     ) {
@@ -64,14 +68,16 @@ public class AlertEventController {
         int safePage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(safePage, safeSize);
 
-        // Empty severity / kind strings come through as "" from a frontend
-        // that hasn't bothered to omit the param. Treat them as no-filter
-        // to spare the caller from having to special-case its query builder.
-        String sevFilter = (severity == null || severity.isBlank()) ? null : severity.trim().toUpperCase();
-        String kindFilter = (kind == null || kind.isBlank()) ? null : kind.trim();
+        String sevFilter    = (severity == null || severity.isBlank()) ? null : severity.trim().toUpperCase();
+        String kindFilter   = (kind == null || kind.isBlank()) ? null : kind.trim();
+        String searchFilter = (search == null || search.isBlank()) ? null : search.trim();
+
+        String[] parts = sort.split(",", 2);
+        String sortColumn = ALLOWED_SORT_FIELDS.contains(parts[0].trim()) ? parts[0].trim() : "createdAt";
+        String sortDir = (parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim())) ? "ASC" : "DESC";
 
         Page<AlertEvent> events = alertEventRepository.findFiltered(
-                sevFilter, kindFilter, since, includeSuppressed, pageable);
+                sevFilter, kindFilter, since, includeSuppressed, searchFilter, sortColumn, sortDir, pageable);
 
         List<Map<String, Object>> rows = events.getContent().stream()
                 .map(AlertEventController::toRow)

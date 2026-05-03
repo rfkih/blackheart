@@ -115,4 +115,40 @@ public class AccountStrategy extends BaseEntity {
     @Column(name = "kill_switch_reason", columnDefinition = "TEXT")
     private String killSwitchReason;
 
+    /**
+     * Regime-aware entry gate (V43). When {@code true}, live entries are blocked
+     * unless the current bar's {@code trend_regime} / {@code volatility_regime}
+     * are in the allowed sets below. Default {@code false} preserves all
+     * pre-V43 behaviour.
+     */
+    @Column(name = "regime_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean regimeGateEnabled = Boolean.FALSE;
+
+    /** Comma-separated {@code trend_regime} values allowed for new entries (e.g. "BULL,NEUTRAL"). Null = any. */
+    @Column(name = "allowed_trend_regimes", length = 100)
+    private String allowedTrendRegimes;
+
+    /** Comma-separated {@code volatility_regime} values allowed for new entries (e.g. "NORMAL,LOW"). Null = any. */
+    @Column(name = "allowed_volatility_regimes", length = 100)
+    private String allowedVolatilityRegimes;
+
+    /**
+     * Kelly/bankroll sizing (V45). When {@code true}, {@link KellySizingService}
+     * applies a PSR-discounted half-Kelly multiplier to the entry size before
+     * vol-targeting. Default {@code false} preserves all pre-V45 behaviour.
+     */
+    @Column(name = "kelly_sizing_enabled", nullable = false)
+    @Builder.Default
+    private Boolean kellySizingEnabled = Boolean.FALSE;
+
+    /**
+     * Hard cap on the Kelly fraction regardless of what the formula computes.
+     * Default 0.25 (25% of intended size) protects against over-leverage on
+     * noisy backtests. Operator can raise per-strategy via admin UI.
+     */
+    @Column(name = "kelly_max_fraction", nullable = false, precision = 5, scale = 4)
+    @Builder.Default
+    private BigDecimal kellyMaxFraction = new BigDecimal("0.2500");
+
 }

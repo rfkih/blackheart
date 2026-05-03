@@ -38,6 +38,7 @@ public class BacktestService {
     private final ObjectMapper objectMapper;
     private final BuildInfoService buildInfoService;
     private final SlippageCalibrationService slippageCalibrationService;
+    private final BacktestDataValidatorService backtestDataValidatorService;
 
     /**
      * Persist the backtest as PENDING, hand it off to the dedicated backtest
@@ -49,6 +50,9 @@ public class BacktestService {
      */
     public BacktestRunResponse runBacktest(UUID userId, BacktestRunRequest request) {
         validateRequest(request);
+        backtestDataValidatorService.validate(
+                request.getAsset(), request.getInterval(),
+                request.getStartTime(), request.getEndTime());
 
         ownershipGuard.assertOwned(userId, request.getAccountStrategyId());
         if (request.getStrategyAccountStrategyIds() != null) {

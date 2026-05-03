@@ -144,10 +144,19 @@ public class ResearchController {
 
     // ── Research log ─────────────────────────────────────────────────────────
 
+    private static final Set<String> ALLOWED_LOG_SORT = Set.of(
+            "createdAt", "tradeCount", "winRate", "profitFactor",
+            "maxDrawdown", "strategyCode", "asset", "strategyVersion");
+
     /**
      * Compact progression view — one row per completed backtest with the
      * headline metrics flattened out. Lets us see version-over-version deltas
      * at a glance (v0.1 → v0.2b → v0.3 → v0.4).
+     *
+     * <p>{@code sort} follows Spring's "field,direction" convention
+     * (e.g. {@code "createdAt,desc"}, {@code "tradeCount,asc"}). The field is
+     * validated against {@link #ALLOWED_LOG_SORT}; an unknown field falls back
+     * to {@code "createdAt"}. Direction defaults to {@code DESC}.
      */
     @GetMapping("/log")
     @PreAuthorize("hasRole('ADMIN')")
@@ -158,25 +167,34 @@ public class ResearchController {
             @RequestParam(name = "strategyCode", required = false) String strategyCode,
             @RequestParam(name = "asset", required = false) String asset,
             @RequestParam(name = "interval", required = false) String interval,
+            @RequestParam(name = "search", required = false) String search,
+            @RequestParam(name = "sort", defaultValue = "createdAt,desc") String sort,
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "50") int size) {
         UUID userId = jwtService.extractUserId(authHeader.substring(7));
-        // Normalize blanks → null so the repo's `IS NULL` short-circuits engage
-        // when the user clears a filter (the form sends an empty string).
-        String code = (strategyCode == null || strategyCode.isBlank()) ? null : strategyCode.trim();
-        String assetFilter = (asset == null || asset.isBlank()) ? null : asset.trim();
-        String intervalFilter = (interval == null || interval.isBlank()) ? null : interval.trim();
+        String code          = blankToNull(strategyCode);
+        String assetFilter   = blankToNull(asset);
+        String intervalFilter= blankToNull(interval);
+        String searchFilter  = blankToNull(search);
         int cappedSize = Math.max(1, Math.min(size, 200));
         Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize);
 
+        String[] parts = sort.split(",", 2);
+        String sortColumn = ALLOWED_LOG_SORT.contains(parts[0].trim()) ? parts[0].trim() : "createdAt";
+        String sortDir = (parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim())) ? "ASC" : "DESC";
+
         Page<BacktestRun> runs = runRepository.findResearchLog(
-                userId, code, assetFilter, intervalFilter, pageable);
+                userId, code, assetFilter, intervalFilter, searchFilter, sortColumn, sortDir, pageable);
         Page<Map<String, Object>> rows = runs.map(this::toLogRow);
 
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(rows)
                 .build());
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
     }
 
     // ── Sweep driver ─────────────────────────────────────────────────────────

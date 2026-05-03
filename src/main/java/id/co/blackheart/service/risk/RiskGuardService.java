@@ -2,9 +2,11 @@ package id.co.blackheart.service.risk;
 
 import id.co.blackheart.model.Account;
 import id.co.blackheart.model.AccountStrategy;
+import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.AccountStrategyRepository;
+import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.alert.AlertService;
 import id.co.blackheart.service.alert.AlertSeverity;
@@ -59,7 +61,10 @@ public class RiskGuardService {
     private final AccountStrategyRepository accountStrategyRepository;
     private final AccountRepository accountRepository;
     private final TradesRepository tradesRepository;
+    private final FeatureStoreRepository featureStoreRepository;
     private final AlertService alertService;
+    private final RegimeGuardService regimeGuardService;
+    private final CorrelationGuardService correlationGuardService;
 
     /**
      * Verdict for one entry attempt. {@link #allowed} is the gate; the
@@ -80,12 +85,29 @@ public class RiskGuardService {
     }
 
     /**
-     * Check whether the strategy can open a new {@code side} entry. Side
-     * effects: trips and persists the kill-switch when DD exceeds threshold
-     * and it wasn't already tripped, so subsequent calls short-circuit.
+     * Check whether the strategy can open a new {@code side} entry.
+     * Convenience overload that queries the FeatureStore from the DB — use the
+     * 3-arg form when the caller already has the current bar's FeatureStore to
+     * avoid a redundant round-trip and a subtle per-candle race condition.
      */
     @Transactional
     public GuardVerdict canOpen(UUID accountStrategyId, String side) {
+        return canOpen(accountStrategyId, side, null);
+    }
+
+    /**
+     * Check whether the strategy can open a new {@code side} entry. Side
+     * effects: trips and persists the kill-switch when DD exceeds threshold
+     * and it wasn't already tripped, so subsequent calls short-circuit.
+     *
+     * @param featureStore the current bar's FeatureStore, or {@code null} to
+     *                     let this method fetch it from the DB. Pass the
+     *                     already-loaded instance when available so the call
+     *                     does not issue a duplicate query and the regime gate
+     *                     evaluates the same bar the strategy decision used.
+     */
+    @Transactional
+    public GuardVerdict canOpen(UUID accountStrategyId, String side, FeatureStore featureStore) {
         AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId).orElse(null);
         if (strategy == null) {
             return GuardVerdict.deny("Account strategy not found: " + accountStrategyId,
@@ -131,6 +153,24 @@ public class RiskGuardService {
                     String.format("Concurrent %s positions (%d) at account cap %d",
                             side.toUpperCase(), concurrent, cap),
                     ddPct, concurrent);
+        }
+
+        // (4) Regime gate — use the caller-supplied FeatureStore when available;
+        //     only fall back to a DB query when the caller didn't have one.
+        FeatureStore effectiveFs = featureStore != null ? featureStore
+                : featureStoreRepository.findLatestCompletedBySymbolAndInterval(
+                        strategy.getSymbol(), strategy.getIntervalName(), LocalDateTime.now())
+                        .orElse(null);
+        RegimeGuardService.RegimeVerdict regimeVerdict = regimeGuardService.check(strategy, effectiveFs);
+        if (!regimeVerdict.allowed()) {
+            return GuardVerdict.deny(regimeVerdict.reason(), ddPct, concurrent);
+        }
+
+        // (5) Correlation / concentration — guard against correlated same-side stacking.
+        CorrelationGuardService.ConcentrationVerdict concVerdict =
+                correlationGuardService.check(strategy, account, side);
+        if (!concVerdict.allowed()) {
+            return GuardVerdict.deny(concVerdict.reason(), ddPct, concurrent);
         }
 
         return GuardVerdict.allow(ddPct, concurrent);

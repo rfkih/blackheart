@@ -109,4 +109,22 @@ public class Account extends BaseEntity {
     @Column(name = "book_vol_target_pct", nullable = false, precision = 5, scale = 2)
     private BigDecimal bookVolTargetPct;
 
+    /**
+     * Pearson correlation threshold (0.0–1.0, V44). When the requesting strategy's
+     * 30-day daily P&L series is correlated at or above this level with any other
+     * same-side open strategy on this account, the new entry is blocked. Null
+     * disables the correlation check entirely.
+     */
+    @Column(name = "max_corr_block_threshold", precision = 5, scale = 4)
+    private BigDecimal maxCorrBlockThreshold;
+
+    /**
+     * Max percentage-point sum of {@code capitalAllocationPct} across all open
+     * same-direction strategies on this account (V44). E.g. 80 means "do not open
+     * another LONG if existing LONGs already hold ≥80% combined allocation". Null
+     * disables the concentration check.
+     */
+    @Column(name = "max_capital_concentration_pct", precision = 5, scale = 2)
+    private BigDecimal maxCapitalConcentrationPct;
+
 }

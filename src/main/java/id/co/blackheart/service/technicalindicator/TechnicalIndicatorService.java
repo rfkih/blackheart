@@ -118,6 +118,21 @@ public class TechnicalIndicatorService {
             featureData.setEma200Slope(BigDecimal.ZERO);
         }
 
+        // slope_200: average per-bar EMA200 change over 200 bars — positive = bull, negative = bear
+        if (endIndex >= 200) {
+            featureData.setSlope200(
+                    toBigDecimal(ema200.getValue(endIndex).minus(ema200.getValue(endIndex - 200)))
+                            .divide(new BigDecimal("200"), 8, RoundingMode.HALF_UP)
+            );
+        } else if (endIndex > 0) {
+            featureData.setSlope200(
+                    toBigDecimal(ema200.getValue(endIndex).minus(ema200.getValue(0)))
+                            .divide(BigDecimal.valueOf(endIndex), 8, RoundingMode.HALF_UP)
+            );
+        } else {
+            featureData.setSlope200(BigDecimal.ZERO);
+        }
+
         // Trend strength
         ADXIndicator adx = new ADXIndicator(series, 14);
         PlusDIIndicator plusDI = new PlusDIIndicator(series, 14);
@@ -748,6 +763,109 @@ public class TechnicalIndicatorService {
 
         log.info("Funding-column backfill complete: updated={} for {}/{} [{} → {}] (series_size={})",
                 updated, symbol, interval, from, to, series.size());
+        return updated;
+    }
+
+    /**
+     * Patch {@code slope_200} on every feature_store row that has it NULL.
+     * Auto-discovers all affected (symbol, interval) pairs — no params needed.
+     * Idempotent: rows that already have slope_200 are untouched.
+     *
+     * <p>For each pair: loads market_data (with 40-day EMA200 warmup), builds
+     * the full EMA200 series once, then walks only the NULL rows and computes
+     * the value in-memory. Saves in 500-row chunks. O(N) per pair.
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public java.util.Map<String, Integer> backfillSlope200() {
+        List<Object[]> combos = featureStoreRepository.findDistinctSymbolIntervalWhereSlope200IsNull();
+        java.util.Map<String, Integer> result = new java.util.LinkedHashMap<>();
+        for (Object[] row : combos) {
+            String symbol   = (String) row[0];
+            String interval = (String) row[1];
+            int updated = backfillSlope200ForPair(symbol, interval);
+            result.put(symbol + "/" + interval, updated);
+        }
+        return result;
+    }
+
+    private int backfillSlope200ForPair(String symbol, String interval) {
+        java.sql.Timestamp minTs = featureStoreRepository.findMinStartTimeWhereSlope200IsNull(symbol, interval);
+        java.sql.Timestamp maxTs = featureStoreRepository.findMaxStartTimeWhereSlope200IsNull(symbol, interval);
+        if (minTs == null || maxTs == null) return 0;
+
+        LocalDateTime earliest = minTs.toLocalDateTime();
+        LocalDateTime latest   = maxTs.toLocalDateTime();
+
+        // Both the NULL-rows query AND the market-data load are chunked by 1-month
+        // windows. This keeps heap bounded for high-frequency intervals (5m BTCUSDT
+        // has ~8.6k bars/month; TA4j BarSeries overhead makes larger windows OOM
+        // at -Xmx1500m).
+        int total = 0;
+        LocalDateTime windowStart = earliest;
+        while (!windowStart.isAfter(latest)) {
+            LocalDateTime windowEnd = windowStart.plusMonths(1);
+            if (windowEnd.isAfter(latest)) windowEnd = latest;
+            total += backfillSlope200Window(symbol, interval, windowStart, windowEnd);
+            windowStart = windowEnd.plusNanos(1);
+        }
+
+        log.info("slope_200 backfill: updated={} for {}/{}", total, symbol, interval);
+        return total;
+    }
+
+    private int backfillSlope200Window(String symbol, String interval,
+                                       LocalDateTime windowStart, LocalDateTime windowEnd) {
+        // Fetch only the NULL rows in this window — bounded set.
+        List<FeatureStore> nullRows = featureStoreRepository
+                .findBySymbolIntervalWhereSlope200IsNullInRange(symbol, interval, windowStart, windowEnd);
+        if (nullRows.isEmpty()) return 0;
+
+        // Load market data with 40-day EMA200 warmup before the window.
+        List<MarketData> allData = marketDataRepository.findBySymbolIntervalAndRange(
+                symbol, interval, windowStart.minusDays(40), windowEnd);
+        if (allData == null || allData.size() < 2) return 0;
+        allData.sort(Comparator.comparing(MarketData::getStartTime));
+
+        BarSeries series = convertToBarSeries(allData, interval);
+        EMAIndicator ema200 = new EMAIndicator(new ClosePriceIndicator(series), 200);
+
+        java.util.Map<LocalDateTime, Integer> timeToIndex = new java.util.HashMap<>();
+        for (int i = 0; i < allData.size(); i++) {
+            timeToIndex.put(allData.get(i).getStartTime(), i);
+        }
+
+        final int CHUNK = 500;
+        int updated = 0;
+        List<FeatureStore> buffer = new java.util.ArrayList<>(CHUNK);
+
+        for (FeatureStore fs : nullRows) {
+            Integer idx = timeToIndex.get(fs.getStartTime());
+            if (idx == null) continue;
+
+            BigDecimal slope200;
+            if (idx >= 200) {
+                slope200 = toBigDecimal(ema200.getValue(idx).minus(ema200.getValue(idx - 200)))
+                        .divide(new BigDecimal("200"), 8, RoundingMode.HALF_UP);
+            } else if (idx > 0) {
+                slope200 = toBigDecimal(ema200.getValue(idx).minus(ema200.getValue(0)))
+                        .divide(BigDecimal.valueOf(idx), 8, RoundingMode.HALF_UP);
+            } else {
+                slope200 = BigDecimal.ZERO;
+            }
+
+            fs.setSlope200(slope200);
+            buffer.add(fs);
+            updated++;
+            if (buffer.size() >= CHUNK) {
+                featureStoreRepository.saveAll(buffer);
+                featureStoreRepository.flush();
+                buffer.clear();
+            }
+        }
+        if (!buffer.isEmpty()) {
+            featureStoreRepository.saveAll(buffer);
+            featureStoreRepository.flush();
+        }
         return updated;
     }
 

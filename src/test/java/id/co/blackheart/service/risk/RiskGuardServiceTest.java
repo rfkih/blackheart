@@ -5,7 +5,9 @@ import id.co.blackheart.model.AccountStrategy;
 import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.AccountStrategyRepository;
+import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.TradesRepository;
+import id.co.blackheart.service.alert.AlertService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,6 +41,10 @@ class RiskGuardServiceTest {
     @Mock private AccountStrategyRepository accountStrategyRepository;
     @Mock private AccountRepository accountRepository;
     @Mock private TradesRepository tradesRepository;
+    @Mock private FeatureStoreRepository featureStoreRepository;
+    @Mock private AlertService alertService;
+    @Mock private RegimeGuardService regimeGuardService;
+    @Mock private CorrelationGuardService correlationGuardService;
     @InjectMocks private RiskGuardService guard;
 
     private UUID accountStrategyId;
@@ -60,6 +66,17 @@ class RiskGuardServiceTest {
         account.setAccountId(accountId);
         account.setMaxConcurrentLongs(2);
         account.setMaxConcurrentShorts(2);
+
+        // Lenient stubs for steps (4) and (5) — regime gate and correlation guard.
+        // These are lenient so tests that short-circuit before these steps (e.g.
+        // kill-switch-already-tripped, DD-exceeded) don't fail with "unnecessary
+        // stubbing" in strict mode.
+        lenient().when(featureStoreRepository.findLatestCompletedBySymbolAndInterval(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        lenient().when(regimeGuardService.check(any(), any()))
+                .thenReturn(RegimeGuardService.RegimeVerdict.allow());
+        lenient().when(correlationGuardService.check(any(), any(), any()))
+                .thenReturn(CorrelationGuardService.ConcentrationVerdict.allow());
     }
 
     @Test

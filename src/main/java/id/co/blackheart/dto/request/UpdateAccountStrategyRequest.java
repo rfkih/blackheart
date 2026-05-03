@@ -1,11 +1,15 @@
 package id.co.blackheart.dto.request;
 
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
 
 /**
  * Partial-update request for an existing account strategy.
@@ -34,4 +38,25 @@ public class UpdateAccountStrategyRequest {
      */
     @Min(1) @Max(99)
     private Integer priorityOrder;
+
+    /** Enable/disable the regime gate (V43). Null leaves unchanged. */
+    private Boolean regimeGateEnabled;
+
+    /** Comma-separated allowed trend_regime values (e.g. "BULL,NEUTRAL"). Null leaves unchanged. */
+    @Size(max = 100)
+    private String allowedTrendRegimes;
+
+    /** Comma-separated allowed volatility_regime values (e.g. "NORMAL,LOW"). Null leaves unchanged. */
+    @Size(max = 100)
+    private String allowedVolatilityRegimes;
+
+    /** Enable/disable Kelly/bankroll sizing (V45). Null leaves unchanged. */
+    private Boolean kellySizingEnabled;
+
+    /**
+     * Hard cap on the Kelly fraction [0.05, 1.00]. Null leaves unchanged.
+     * Values below MIN_KELLY (0.05) are rejected — the floor is intentional.
+     */
+    @DecimalMin("0.05") @DecimalMax("1.00")
+    private BigDecimal kellyMaxFraction;
 }

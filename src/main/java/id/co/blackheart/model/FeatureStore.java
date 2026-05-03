@@ -61,6 +61,9 @@ public class FeatureStore {
     @Column(name = "ema_200_slope", precision = 24, scale = 8)
     private BigDecimal ema200Slope;
 
+    @Column(name = "slope_200", precision = 24, scale = 8)
+    private BigDecimal slope200;
+
     // Trend strength
     @Column(name = "adx", precision = 24, scale = 8)
     private BigDecimal adx;
