@@ -1,0 +1,1521 @@
+-- =============================================================================
+-- V1 BASELINE — Complete final schema (all columns from V2-V41 included)
+-- V2-V41 are no-ops. This is the single source of truth for a fresh DB.
+-- =============================================================================
+
+BEGIN;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 1. market_data
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS market_data (
+    id                     BIGSERIAL      PRIMARY KEY,
+    symbol                 VARCHAR(10)    NOT NULL,
+    interval               VARCHAR(5)     NOT NULL,
+    start_time             TIMESTAMP      NOT NULL,
+    end_time               TIMESTAMP      NOT NULL,
+    open_price             NUMERIC(24,12) NOT NULL,
+    close_price            NUMERIC(24,12) NOT NULL,
+    high_price             NUMERIC(24,12) NOT NULL,
+    low_price              NUMERIC(24,12) NOT NULL,
+    volume                 NUMERIC(24,12) NOT NULL,
+    trade_count            BIGINT         NOT NULL,
+    quote_asset_volume     NUMERIC(24,12) NOT NULL,
+    taker_buy_base_volume  NUMERIC(24,12) NOT NULL,
+    taker_buy_quote_volume NUMERIC(24,12) NOT NULL,
+    created_time           TIMESTAMP      NOT NULL DEFAULT NOW()
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 2. feature_store  (V35 adds funding columns)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS feature_store (
+    id                    BIGSERIAL     PRIMARY KEY,
+    id_market_data        BIGINT        NOT NULL,
+    symbol                VARCHAR(20)   NOT NULL,
+    interval              VARCHAR(10)   NOT NULL,
+    start_time            TIMESTAMP     NOT NULL,
+    end_time              TIMESTAMP     NOT NULL,
+    price                 NUMERIC(24,8) NOT NULL,
+    ema_20                NUMERIC(24,8),
+    ema_50                NUMERIC(24,8),
+    ema_200               NUMERIC(24,8),
+    ema_50_slope          NUMERIC(24,8),
+    ema_200_slope         NUMERIC(24,8),
+    adx                   NUMERIC(24,8),
+    plus_di               NUMERIC(24,8),
+    minus_di              NUMERIC(24,8),
+    efficiency_ratio_20   NUMERIC(24,8),
+    atr                   NUMERIC(24,8),
+    atr_pct               NUMERIC(24,8),
+    macd                  NUMERIC(24,8),
+    macd_signal           NUMERIC(24,8),
+    macd_histogram        NUMERIC(24,8),
+    rsi                   NUMERIC(24,8),
+    donchian_upper_20     NUMERIC(24,8),
+    donchian_lower_20     NUMERIC(24,8),
+    donchian_mid_20       NUMERIC(24,8),
+    highest_high_20       NUMERIC(24,8),
+    lowest_low_20         NUMERIC(24,8),
+    body_size             NUMERIC(24,8),
+    candle_range          NUMERIC(24,8),
+    body_to_range_ratio   NUMERIC(24,8),
+    close_location_value  NUMERIC(24,8),
+    relative_volume_20    NUMERIC(24,8),
+    trend_score           INTEGER,
+    trend_regime          VARCHAR(10),
+    volatility_regime     VARCHAR(10),
+    is_bullish_breakout   BOOLEAN,
+    is_bearish_breakout   BOOLEAN,
+    is_bullish_pullback   BOOLEAN,
+    is_bearish_pullback   BOOLEAN,
+    entry_bias            VARCHAR(10),
+    bb_upper_band         NUMERIC(24,8),
+    bb_lower_band         NUMERIC(24,8),
+    bb_width              NUMERIC(24,8),
+    kc_upper_band         NUMERIC(24,8),
+    kc_lower_band         NUMERIC(24,8),
+    kc_width              NUMERIC(24,8),
+    atr_ratio             NUMERIC(24,8),
+    signed_er_20          NUMERIC(24,8),
+    funding_rate_8h       NUMERIC(18,10),
+    funding_rate_7d_avg   NUMERIC(18,10),
+    funding_rate_z        NUMERIC(18,10),
+    created_time          TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_time          TIMESTAMP     NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_feature_store_symbol_interval_start UNIQUE (symbol, interval, start_time)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 3. users
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+    user_id        UUID         PRIMARY KEY,
+    email          VARCHAR(255) NOT NULL,
+    password_hash  VARCHAR(255) NOT NULL,
+    full_name      VARCHAR(255) NOT NULL,
+    phone_number   VARCHAR(30),
+    role           VARCHAR(30)  NOT NULL,
+    status         VARCHAR(30)  NOT NULL,
+    email_verified BOOLEAN      NOT NULL DEFAULT FALSE,
+    last_login_at  TIMESTAMP,
+    created_time   TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by     VARCHAR(150),
+    updated_time   TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by     VARCHAR(150),
+    CONSTRAINT uk_users_email UNIQUE (email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_status ON users (status);
+CREATE INDEX IF NOT EXISTS idx_users_email  ON users (email);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 4. strategy_definition  (V17 adds spec cols, V40 adds enabled/simulated)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS strategy_definition (
+    strategy_definition_id UUID         PRIMARY KEY,
+    strategy_code          VARCHAR(100) NOT NULL,
+    strategy_name          VARCHAR(200) NOT NULL,
+    strategy_type          VARCHAR(100) NOT NULL,
+    description            TEXT,
+    status                 VARCHAR(20)  NOT NULL,
+    archetype              VARCHAR(64)  NOT NULL DEFAULT 'LEGACY_JAVA',
+    archetype_version      INTEGER      NOT NULL DEFAULT 1,
+    spec_jsonb             JSONB,
+    spec_schema_version    INTEGER      NOT NULL DEFAULT 1,
+    is_deleted             BOOLEAN      NOT NULL DEFAULT FALSE,
+    deleted_at             TIMESTAMP,
+    enabled                BOOLEAN      NOT NULL DEFAULT FALSE,
+    simulated              BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_time           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by             VARCHAR(150),
+    updated_time           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by             VARCHAR(150),
+    CONSTRAINT uq_strategy_definition_code UNIQUE (strategy_code),
+    CONSTRAINT chk_strategy_def_promotion_state CHECK (enabled IS NOT NULL AND simulated IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_definition_archetype_active
+    ON strategy_definition (archetype) WHERE is_deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_strategy_definition_spec_gin
+    ON strategy_definition USING GIN (spec_jsonb) WHERE spec_jsonb IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5. accounts  (user_id FK to users, V2 adds max_concurrent_trades,
+--               session adds concurrency caps + vol-targeting + audit cols)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS accounts (
+    account_id             UUID           PRIMARY KEY,
+    username               VARCHAR(50)    NOT NULL,
+    is_active              VARCHAR(1)     NOT NULL,
+    exchange               VARCHAR(3)     NOT NULL,
+    risk_amount            NUMERIC(5,2),
+    confidence             NUMERIC(5,2),
+    take_profit            NUMERIC(20,12) NOT NULL,
+    stop_loss              NUMERIC(20,12) NOT NULL,
+    api_key                VARCHAR(1024)  NOT NULL,
+    api_secret             VARCHAR(1024)  NOT NULL,
+    user_id                UUID,
+    max_concurrent_longs   INTEGER        NOT NULL DEFAULT 2,
+    max_concurrent_shorts  INTEGER        NOT NULL DEFAULT 2,
+    vol_targeting_enabled  BOOLEAN        NOT NULL DEFAULT FALSE,
+    book_vol_target_pct    NUMERIC(5,2)   NOT NULL DEFAULT 15.00,
+    max_concurrent_trades  INTEGER,
+    created_time           TIMESTAMP      NOT NULL DEFAULT NOW(),
+    created_by             VARCHAR(150),
+    updated_time           TIMESTAMP      NOT NULL DEFAULT NOW(),
+    updated_by             VARCHAR(150),
+    CONSTRAINT uq_accounts_username UNIQUE (username),
+    CONSTRAINT fk_accounts_user_id FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts (user_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 6. account_strategy  (session adds soft-delete + kill-switch + audit cols,
+--                        V15 adds simulated)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS account_strategy (
+    account_strategy_id      UUID         PRIMARY KEY,
+    account_id               UUID         NOT NULL,
+    strategy_definition_id   UUID         NOT NULL,
+    strategy_code            VARCHAR(100) NOT NULL,
+    preset_name              VARCHAR(80),
+    symbol                   VARCHAR(30)  NOT NULL,
+    interval_name            VARCHAR(20)  NOT NULL,
+    enabled                  BOOLEAN      NOT NULL,
+    allow_long               BOOLEAN      NOT NULL,
+    allow_short              BOOLEAN      NOT NULL,
+    max_open_positions       INTEGER      NOT NULL,
+    capital_allocation_pct   NUMERIC(8,4) NOT NULL,
+    priority_order           INTEGER      NOT NULL,
+    current_status           VARCHAR(30)  NOT NULL,
+    is_deleted               BOOLEAN      NOT NULL DEFAULT FALSE,
+    deleted_at               TIMESTAMP,
+    dd_kill_threshold_pct    NUMERIC(5,2) NOT NULL DEFAULT 25.00,
+    is_kill_switch_tripped   BOOLEAN      NOT NULL DEFAULT FALSE,
+    kill_switch_tripped_at   TIMESTAMP,
+    kill_switch_reason       TEXT,
+    simulated                BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_time             TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by               VARCHAR(150),
+    updated_time             TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by               VARCHAR(150),
+    CONSTRAINT fk_account_strategy_account
+        FOREIGN KEY (account_id) REFERENCES accounts(account_id),
+    CONSTRAINT fk_account_strategy_definition
+        FOREIGN KEY (strategy_definition_id) REFERENCES strategy_definition(strategy_definition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_strategy_active
+    ON account_strategy (account_id) WHERE is_deleted = FALSE;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 7. strategy_config
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS strategy_config (
+    strategy_config_id UUID         PRIMARY KEY,
+    strategy_name      VARCHAR(100) NOT NULL,
+    interval_name      VARCHAR(20)  NOT NULL,
+    symbol             VARCHAR(30),
+    status             VARCHAR(20)  NOT NULL,
+    version            INTEGER      NOT NULL,
+    enabled            BOOLEAN      NOT NULL,
+    created_time       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by         VARCHAR(150),
+    updated_time       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by         VARCHAR(150)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 8. trend_following_config_detail
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trend_following_config_detail (
+    trend_following_config_detail_id UUID          PRIMARY KEY,
+    strategy_config_id               UUID          NOT NULL,
+    min_adx                          NUMERIC(18,8) NOT NULL,
+    min_efficiency_ratio             NUMERIC(18,8) NOT NULL,
+    min_relative_volume              NUMERIC(18,8) NOT NULL,
+    stop_atr_multiplier              NUMERIC(18,8) NOT NULL,
+    take_profit_atr_multiplier       NUMERIC(18,8) NOT NULL,
+    trailing_atr_multiplier          NUMERIC(18,8) NOT NULL,
+    allow_long                       BOOLEAN       NOT NULL,
+    allow_short                      BOOLEAN       NOT NULL,
+    allow_breakout_entry             BOOLEAN       NOT NULL,
+    allow_pullback_entry             BOOLEAN       NOT NULL,
+    allow_bias_entry                 BOOLEAN       NOT NULL,
+    created_time                     TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by                       VARCHAR(150),
+    updated_time                     TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_by                       VARCHAR(150),
+    CONSTRAINT uq_trend_following_config_strategy_config UNIQUE (strategy_config_id),
+    CONSTRAINT fk_trend_following_config_strategy_config
+        FOREIGN KEY (strategy_config_id) REFERENCES strategy_config(strategy_config_id)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 9. trades  (session adds attribution + audit cols)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trades (
+    trade_id              UUID           PRIMARY KEY,
+    account_id            UUID           NOT NULL,
+    account_strategy_id   UUID           NOT NULL,
+    strategy_name         VARCHAR(100)   NOT NULL,
+    interval              VARCHAR(20)    NOT NULL,
+    exchange              VARCHAR(20)    NOT NULL,
+    asset                 VARCHAR(30)    NOT NULL,
+    side                  VARCHAR(10)    NOT NULL,
+    status                VARCHAR(30)    NOT NULL,
+    trade_mode            VARCHAR(30)    NOT NULL,
+    avg_entry_price       NUMERIC(24,12) NOT NULL,
+    avg_exit_price        NUMERIC(24,12),
+    total_entry_qty       NUMERIC(24,12) NOT NULL,
+    total_entry_quote_qty NUMERIC(24,12) NOT NULL,
+    total_remaining_qty   NUMERIC(24,12) NOT NULL,
+    realized_pnl_amount   NUMERIC(24,12),
+    realized_pnl_percent  NUMERIC(12,6),
+    total_fee_amount      NUMERIC(24,12),
+    total_fee_currency    VARCHAR(20),
+    exit_reason           VARCHAR(50),
+    entry_trend_regime    VARCHAR(20),
+    entry_adx             NUMERIC(24,8),
+    entry_atr             NUMERIC(24,8),
+    entry_rsi             NUMERIC(24,8),
+    intended_entry_price  NUMERIC(24,12),
+    intended_size         NUMERIC(24,12),
+    decision_time         TIMESTAMP,
+    entry_time            TIMESTAMP      NOT NULL,
+    exit_time             TIMESTAMP,
+    created_time          TIMESTAMP      NOT NULL DEFAULT NOW(),
+    created_by            VARCHAR(150),
+    updated_time          TIMESTAMP      NOT NULL DEFAULT NOW(),
+    updated_by            VARCHAR(150)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_account_id          ON trades (account_id);
+CREATE INDEX IF NOT EXISTS idx_trades_account_strategy_id ON trades (account_strategy_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 10. trade_positions
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trade_positions (
+    trade_position_id         UUID           PRIMARY KEY,
+    trade_id                  UUID           NOT NULL,
+    account_id                UUID           NOT NULL,
+    account_strategy_id       UUID           NOT NULL,
+    asset                     VARCHAR(30)    NOT NULL,
+    interval                  VARCHAR(20)    NOT NULL,
+    exchange                  VARCHAR(20)    NOT NULL,
+    side                      VARCHAR(10)    NOT NULL,
+    position_role             VARCHAR(20)    NOT NULL,
+    status                    VARCHAR(30)    NOT NULL,
+    entry_price               NUMERIC(24,12) NOT NULL,
+    entry_qty                 NUMERIC(24,12) NOT NULL,
+    entry_quote_qty           NUMERIC(24,12) NOT NULL,
+    remaining_qty             NUMERIC(24,12) NOT NULL,
+    exit_price                NUMERIC(24,12),
+    exit_executed_qty         NUMERIC(24,12),
+    exit_executed_quote_qty   NUMERIC(24,12),
+    entry_fee                 NUMERIC(24,12),
+    entry_fee_currency        VARCHAR(20),
+    exit_fee                  NUMERIC(24,12),
+    exit_fee_currency         VARCHAR(20),
+    initial_stop_loss_price   NUMERIC(24,12) NOT NULL,
+    current_stop_loss_price   NUMERIC(24,12) NOT NULL,
+    trailing_stop_price       NUMERIC(24,12),
+    take_profit_price         NUMERIC(24,12),
+    highest_price_since_entry NUMERIC(24,12),
+    lowest_price_since_entry  NUMERIC(24,12),
+    realized_pnl_amount       NUMERIC(24,12),
+    realized_pnl_percent      NUMERIC(12,6),
+    exit_reason               VARCHAR(50),
+    entry_time                TIMESTAMP      NOT NULL,
+    exit_time                 TIMESTAMP,
+    created_time              TIMESTAMP      NOT NULL DEFAULT NOW(),
+    created_by                VARCHAR(150),
+    updated_time              TIMESTAMP      NOT NULL DEFAULT NOW(),
+    updated_by                VARCHAR(150)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_positions_trade_id ON trade_positions (trade_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 11. portfolio
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS portfolio (
+    portfolio_id UUID          PRIMARY KEY,
+    account_id   UUID          NOT NULL,
+    asset        VARCHAR(10)   NOT NULL,
+    is_active    VARCHAR(1)    NOT NULL,
+    balance      NUMERIC(20,8) NOT NULL,
+    locked       NUMERIC(20,8) NOT NULL,
+    created_time TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by   VARCHAR(150),
+    updated_time TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_by   VARCHAR(150),
+    CONSTRAINT uq_portfolio_account_asset UNIQUE (account_id, asset)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 12. training_jobs
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS training_jobs (
+    id                  BIGSERIAL    PRIMARY KEY,
+    model               VARCHAR(255) NOT NULL,
+    status              VARCHAR(255) NOT NULL,
+    training_duration   VARCHAR(255),
+    training_accuracy   NUMERIC(24,12),
+    validation_accuracy NUMERIC(24,12),
+    label_buy_count     INTEGER,
+    label_hold_count    INTEGER,
+    label_sell_count    INTEGER,
+    training_data_count INTEGER,
+    created_time        TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by          VARCHAR(150),
+    updated_time        TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by          VARCHAR(150)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 13. scheduler_jobs  (V27 adds last_run_at)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS scheduler_jobs (
+    id              BIGSERIAL    PRIMARY KEY,
+    job_name        VARCHAR(255) NOT NULL,
+    job_type        VARCHAR(255) NOT NULL,
+    cron_expression VARCHAR(255) NOT NULL,
+    status          VARCHAR(255) NOT NULL,
+    last_run_at     TIMESTAMP,
+    created_time    TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by      VARCHAR(150),
+    updated_time    TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by      VARCHAR(150),
+    CONSTRAINT uq_scheduler_jobs_job_name UNIQUE (job_name)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 14. strategy_daily_realized_curve
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS strategy_daily_realized_curve (
+    strategy_daily_realized_curve_id UUID           PRIMARY KEY,
+    account_id                       UUID           NOT NULL,
+    account_strategy_id              UUID           NOT NULL,
+    curve_date                       DATE           NOT NULL,
+    daily_realized_pnl_amount        NUMERIC(24,12) NOT NULL,
+    cumulative_realized_pnl_amount   NUMERIC(24,12) NOT NULL,
+    daily_closed_notional            NUMERIC(24,12) NOT NULL,
+    daily_weighted_return_pct        NUMERIC(24,12) NOT NULL,
+    cumulative_weighted_return_index NUMERIC(24,12) NOT NULL,
+    closed_position_count            INTEGER        NOT NULL,
+    win_position_count               INTEGER        NOT NULL,
+    loss_position_count              INTEGER        NOT NULL,
+    breakeven_position_count         INTEGER        NOT NULL,
+    calculation_version              VARCHAR(20)    NOT NULL,
+    created_time                     TIMESTAMP      NOT NULL DEFAULT NOW(),
+    created_by                       VARCHAR(150),
+    updated_time                     TIMESTAMP      NOT NULL DEFAULT NOW(),
+    updated_by                       VARCHAR(150),
+    CONSTRAINT uq_strategy_daily_realized_curve UNIQUE (account_strategy_id, curve_date)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 15. backtest_run  (session + V22 + V31 + V32 add many columns)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS backtest_run (
+    backtest_run_id              UUID          PRIMARY KEY,
+    account_strategy_id          UUID,
+    strategy_code                VARCHAR(100)  NOT NULL,
+    strategy_name                VARCHAR(150),
+    strategy_version             VARCHAR(50),
+    asset                        VARCHAR(30)   NOT NULL,
+    interval_name                VARCHAR(20)   NOT NULL,
+    start_time                   TIMESTAMP     NOT NULL,
+    end_time                     TIMESTAMP     NOT NULL,
+    initial_capital              NUMERIC(24,8) NOT NULL,
+    risk_per_trade_pct           NUMERIC(12,6),
+    fee_pct                      NUMERIC(12,6),
+    slippage_pct                 NUMERIC(12,6),
+    min_notional                 NUMERIC(24,8),
+    min_qty                      NUMERIC(24,8),
+    qty_step                     NUMERIC(24,8),
+    allow_long                   BOOLEAN,
+    allow_short                  BOOLEAN,
+    max_open_positions           INTEGER,
+    config_snapshot              TEXT,
+    run_label                    VARCHAR(150),
+    notes                        VARCHAR(1000),
+    total_trades                 INTEGER,
+    total_wins                   INTEGER,
+    total_losses                 INTEGER,
+    win_rate                     NUMERIC(12,6),
+    gross_profit                 NUMERIC(24,8),
+    gross_loss                   NUMERIC(24,8),
+    net_profit                   NUMERIC(24,8),
+    return_pct                   NUMERIC(12,6),
+    profit_factor                NUMERIC(12,6),
+    expectancy                   NUMERIC(24,8),
+    avg_win                      NUMERIC(24,8),
+    avg_loss                     NUMERIC(24,8),
+    max_drawdown_pct             NUMERIC(12,6),
+    max_drawdown_amount          NUMERIC(24,8),
+    ending_balance               NUMERIC(24,8),
+    sharpe_ratio                 NUMERIC(12,6),
+    sortino_ratio                NUMERIC(12,6),
+    status                       VARCHAR(30)   NOT NULL,
+    progress_percent             INTEGER,
+    analysis_snapshot            TEXT,
+    git_commit_sha               VARCHAR(40),
+    app_version                  VARCHAR(50),
+    psr                          NUMERIC(10,6),
+    is_holdout_run               BOOLEAN       NOT NULL DEFAULT FALSE,
+    holdout_for_sweep_id         UUID,
+    max_concurrent_strategies    INTEGER,
+    strategy_allocations         JSONB,
+    strategy_intervals           JSONB,
+    strategy_account_strategy_ids JSONB,
+    funding_rate_bps_per_8h      NUMERIC(12,6) DEFAULT 0,
+    strategy_param_ids           JSONB,
+    triggered_by                 VARCHAR(20)   NOT NULL DEFAULT 'USER',
+    created_time                 TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by                   VARCHAR(150),
+    updated_time                 TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_by                   VARCHAR(150),
+    CONSTRAINT chk_backtest_run_triggered_by CHECK (triggered_by IN ('USER', 'RESEARCHER'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_run_strategy_code ON backtest_run (strategy_code);
+CREATE INDEX IF NOT EXISTS idx_backtest_run_status        ON backtest_run (status);
+CREATE INDEX IF NOT EXISTS idx_backtest_run_triggered_by  ON backtest_run (triggered_by);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_backtest_run_holdout_per_sweep
+    ON backtest_run (holdout_for_sweep_id) WHERE is_holdout_run = TRUE;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 16. backtest_trade  (session adds attribution + audit cols)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS backtest_trade (
+    backtest_trade_id              UUID          PRIMARY KEY,
+    backtest_run_id                UUID          NOT NULL,
+    account_strategy_id            UUID,
+    strategy_code                  VARCHAR(100),
+    strategy_name                  VARCHAR(150),
+    strategy_version               VARCHAR(50),
+    interval                       VARCHAR(20),
+    bias_interval                  VARCHAR(20),
+    exchange                       VARCHAR(30),
+    asset                          VARCHAR(30)   NOT NULL,
+    side                           VARCHAR(10)   NOT NULL,
+    status                         VARCHAR(30)   NOT NULL,
+    trade_mode                     VARCHAR(50)   NOT NULL,
+    signal_type                    VARCHAR(100),
+    setup_type                     VARCHAR(100),
+    entry_reason                   VARCHAR(500),
+    exit_reason                    VARCHAR(100),
+    notional_size                  NUMERIC(24,8),
+    avg_entry_price                NUMERIC(24,8),
+    avg_exit_price                 NUMERIC(24,8),
+    total_entry_qty                NUMERIC(24,8),
+    total_entry_quote_qty          NUMERIC(24,8),
+    total_exit_qty                 NUMERIC(24,8),
+    total_exit_quote_qty           NUMERIC(24,8),
+    total_remaining_qty            NUMERIC(24,8),
+    slippage_amount                NUMERIC(24,8),
+    slippage_percent               NUMERIC(24,8),
+    initial_stop_loss_price        NUMERIC(24,8),
+    final_stop_loss_price          NUMERIC(24,8),
+    initial_trailing_stop_price    NUMERIC(24,8),
+    last_trailing_stop_price       NUMERIC(24,8),
+    initial_risk_per_unit          NUMERIC(24,8),
+    initial_risk_amount            NUMERIC(24,8),
+    initial_risk_percent           NUMERIC(24,8),
+    gross_pnl_amount               NUMERIC(24,8),
+    realized_pnl_amount            NUMERIC(24,8),
+    realized_pnl_percent           NUMERIC(24,8),
+    realized_r_multiple            NUMERIC(24,8),
+    total_fee_amount               NUMERIC(24,8),
+    total_fee_currency             VARCHAR(20),
+    highest_price_during_trade     NUMERIC(24,8),
+    lowest_price_during_trade      NUMERIC(24,8),
+    max_favorable_excursion_amount NUMERIC(24,8),
+    max_adverse_excursion_amount   NUMERIC(24,8),
+    max_favorable_excursion_r      NUMERIC(24,8),
+    max_adverse_excursion_r        NUMERIC(24,8),
+    entry_trend_regime             VARCHAR(50),
+    entry_signal_score             NUMERIC(24,8),
+    entry_confidence_score         NUMERIC(24,8),
+    entry_adx                      NUMERIC(24,8),
+    entry_atr                      NUMERIC(24,8),
+    entry_rsi                      NUMERIC(24,8),
+    entry_macd_histogram           NUMERIC(24,8),
+    entry_signed_er20              NUMERIC(24,8),
+    entry_relative_volume20        NUMERIC(24,8),
+    entry_plus_di                  NUMERIC(24,8),
+    entry_minus_di                 NUMERIC(24,8),
+    entry_ema20                    NUMERIC(24,8),
+    entry_ema50                    NUMERIC(24,8),
+    entry_ema200                   NUMERIC(24,8),
+    entry_ema50_slope              NUMERIC(24,8),
+    entry_ema200_slope             NUMERIC(24,8),
+    entry_close_location_value     NUMERIC(24,8),
+    entry_is_bullish_breakout      BOOLEAN,
+    entry_is_bearish_breakout      BOOLEAN,
+    bias_trend_regime              VARCHAR(50),
+    bias_adx                       NUMERIC(24,8),
+    bias_atr                       NUMERIC(24,8),
+    bias_rsi                       NUMERIC(24,8),
+    bias_macd_histogram            NUMERIC(24,8),
+    bias_signed_er20               NUMERIC(24,8),
+    bias_plus_di                   NUMERIC(24,8),
+    bias_minus_di                  NUMERIC(24,8),
+    bias_ema50                     NUMERIC(24,8),
+    bias_ema200                    NUMERIC(24,8),
+    bias_ema200_slope              NUMERIC(24,8),
+    intended_entry_price           NUMERIC(24,12),
+    intended_size                  NUMERIC(24,12),
+    decision_time                  TIMESTAMP,
+    entry_time                     TIMESTAMP     NOT NULL,
+    exit_time                      TIMESTAMP,
+    holding_minutes                BIGINT,
+    bars_held                      INTEGER,
+    created_time                   TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by                     VARCHAR(150),
+    updated_time                   TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_by                     VARCHAR(150),
+    CONSTRAINT fk_backtest_trade_run
+        FOREIGN KEY (backtest_run_id) REFERENCES backtest_run(backtest_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_trade_run_id ON backtest_trade (backtest_run_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 17. backtest_trade_position
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS backtest_trade_position (
+    trade_position_id         UUID          PRIMARY KEY,
+    backtest_trade_id         UUID          NOT NULL,
+    backtest_run_id           UUID          NOT NULL,
+    account_strategy_id       UUID,
+    asset                     VARCHAR(30)   NOT NULL,
+    interval                  VARCHAR(20),
+    exchange                  VARCHAR(30),
+    side                      VARCHAR(10)   NOT NULL,
+    position_role             VARCHAR(30)   NOT NULL,
+    status                    VARCHAR(30)   NOT NULL,
+    entry_price               NUMERIC(24,8),
+    entry_qty                 NUMERIC(24,8),
+    entry_quote_qty           NUMERIC(24,8),
+    remaining_qty             NUMERIC(24,8),
+    exit_price                NUMERIC(24,8),
+    exit_executed_qty         NUMERIC(24,8),
+    exit_executed_quote_qty   NUMERIC(24,8),
+    entry_fee                 NUMERIC(24,8),
+    entry_fee_currency        VARCHAR(20),
+    exit_fee                  NUMERIC(24,8),
+    exit_fee_currency         VARCHAR(20),
+    initial_stop_loss_price   NUMERIC(24,8),
+    current_stop_loss_price   NUMERIC(24,8),
+    trailing_stop_price       NUMERIC(24,8),
+    take_profit_price         NUMERIC(24,8),
+    highest_price_since_entry NUMERIC(24,8),
+    lowest_price_since_entry  NUMERIC(24,8),
+    realized_pnl_amount       NUMERIC(24,8),
+    realized_pnl_percent      NUMERIC(24,8),
+    exit_reason               VARCHAR(50),
+    entry_time                TIMESTAMP     NOT NULL,
+    exit_time                 TIMESTAMP,
+    created_time              TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by                VARCHAR(150),
+    updated_time              TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_by                VARCHAR(150),
+    CONSTRAINT fk_backtest_trade_position_trade
+        FOREIGN KEY (backtest_trade_id) REFERENCES backtest_trade(backtest_trade_id),
+    CONSTRAINT fk_backtest_trade_position_run
+        FOREIGN KEY (backtest_run_id) REFERENCES backtest_run(backtest_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_trade_position_trade_id ON backtest_trade_position (backtest_trade_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_trade_position_run_id   ON backtest_trade_position (backtest_run_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 18. backtest_run_strategy
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS backtest_run_strategy (
+    backtest_run_strategy_id UUID         PRIMARY KEY,
+    backtest_run_id          UUID         NOT NULL,
+    strategy_name            VARCHAR(100) NOT NULL,
+    strategy_version         VARCHAR(50),
+    parameter_json           TEXT,
+    weight                   NUMERIC(12,6),
+    created_time             TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by               VARCHAR(150),
+    updated_time             TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by               VARCHAR(150),
+    CONSTRAINT fk_backtest_run_strategy_run
+        FOREIGN KEY (backtest_run_id) REFERENCES backtest_run(backtest_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_run_strategy_run_id ON backtest_run_strategy (backtest_run_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 19. backtest_equity_point
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS backtest_equity_point (
+    backtest_equity_point_id UUID           PRIMARY KEY,
+    backtest_run_id          UUID           NOT NULL,
+    account_id               UUID           NOT NULL,
+    equity_date              DATE           NOT NULL,
+    cash_balance             NUMERIC(24,12) NOT NULL,
+    asset_value              NUMERIC(24,12) NOT NULL,
+    total_equity             NUMERIC(24,12) NOT NULL,
+    drawdown_percent         NUMERIC(12,6),
+    daily_return_pct         NUMERIC(12,6),
+    open_positions           INTEGER        NOT NULL,
+    created_time             TIMESTAMP      NOT NULL DEFAULT NOW(),
+    created_by               VARCHAR(150),
+    updated_time             TIMESTAMP      NOT NULL DEFAULT NOW(),
+    updated_by               VARCHAR(150),
+    CONSTRAINT uq_backtest_equity_point UNIQUE (backtest_run_id, equity_date),
+    CONSTRAINT fk_backtest_equity_point_run
+        FOREIGN KEY (backtest_run_id) REFERENCES backtest_run(backtest_run_id)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 20. backtest_trade_event
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS backtest_trade_event (
+    backtest_trade_event_id UUID         PRIMARY KEY,
+    backtest_run_id         UUID         NOT NULL,
+    trade_id                UUID,
+    trade_position_id       UUID,
+    event_type              VARCHAR(50)  NOT NULL,
+    event_time              TIMESTAMP    NOT NULL,
+    candle_time             TIMESTAMP,
+    price                   NUMERIC(24,8),
+    qty                     NUMERIC(24,8),
+    note                    TEXT,
+    created_time            TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by              VARCHAR(150),
+    updated_time            TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by              VARCHAR(150),
+    CONSTRAINT fk_backtest_trade_event_run
+        FOREIGN KEY (backtest_run_id) REFERENCES backtest_run(backtest_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_trade_event_run_id ON backtest_trade_event (backtest_run_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 21. monte_carlo_run
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS monte_carlo_run (
+    monte_carlo_run_id             UUID          PRIMARY KEY,
+    backtest_run_id                UUID          NOT NULL,
+    account_strategy_id            UUID,
+    simulation_mode                VARCHAR(50)   NOT NULL,
+    number_of_simulations          INTEGER       NOT NULL,
+    trades_used                    INTEGER       NOT NULL,
+    horizon_trades                 INTEGER,
+    initial_capital                NUMERIC(24,8) NOT NULL,
+    ruin_threshold_pct             NUMERIC(12,6),
+    max_acceptable_drawdown_pct    NUMERIC(12,6),
+    random_seed                    BIGINT,
+    effective_seed                 BIGINT,
+    mean_final_equity              NUMERIC(24,8),
+    median_final_equity            NUMERIC(24,8),
+    min_final_equity               NUMERIC(24,8),
+    max_final_equity               NUMERIC(24,8),
+    p5_final_equity                NUMERIC(24,8),
+    p25_final_equity               NUMERIC(24,8),
+    p75_final_equity               NUMERIC(24,8),
+    p95_final_equity               NUMERIC(24,8),
+    mean_total_return_pct          NUMERIC(12,6),
+    median_total_return_pct        NUMERIC(12,6),
+    mean_max_drawdown_pct          NUMERIC(12,6),
+    median_max_drawdown_pct        NUMERIC(12,6),
+    worst_max_drawdown_pct         NUMERIC(12,6),
+    probability_of_ruin            NUMERIC(12,6),
+    probability_of_drawdown_breach NUMERIC(12,6),
+    probability_of_profit          NUMERIC(12,6),
+    status                         VARCHAR(20),
+    created_time                   TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by                     VARCHAR(150),
+    updated_time                   TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_by                     VARCHAR(150),
+    CONSTRAINT fk_monte_carlo_run_backtest_run
+        FOREIGN KEY (backtest_run_id) REFERENCES backtest_run(backtest_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monte_carlo_run_backtest_run_id ON monte_carlo_run (backtest_run_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 22. trade_execution_log
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trade_execution_log (
+    trade_execution_log_id UUID         PRIMARY KEY,
+    execution_type         VARCHAR(10)  NOT NULL,
+    side                   VARCHAR(10),
+    status                 VARCHAR(10)  NOT NULL,
+    account_id             UUID,
+    username               VARCHAR(50),
+    asset                  VARCHAR(20),
+    strategy_name          VARCHAR(100),
+    execution_reason       VARCHAR(200),
+    trade_id               UUID,
+    error_message          TEXT,
+    executed_at            TIMESTAMP    NOT NULL,
+    created_time           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by             VARCHAR(150),
+    updated_time           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by             VARCHAR(150)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_execution_log_account_id  ON trade_execution_log (account_id);
+CREATE INDEX IF NOT EXISTS idx_trade_execution_log_executed_at ON trade_execution_log (executed_at DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 23. server_ip_log
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS server_ip_log (
+    server_ip_log_id UUID         PRIMARY KEY,
+    ip_address       VARCHAR(255) NOT NULL,
+    previous_ip      VARCHAR(255),
+    event            VARCHAR(255) NOT NULL,
+    recorded_at      TIMESTAMP    NOT NULL,
+    created_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by       VARCHAR(150),
+    updated_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by       VARCHAR(150)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 24. error_log  (FK to code_review_finding added after that table exists)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS error_log (
+    error_id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    occurred_at           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    last_seen_at          TIMESTAMP    NOT NULL DEFAULT NOW(),
+    jvm                   VARCHAR(20)  NOT NULL,
+    logger_name           VARCHAR(255) NOT NULL,
+    thread_name           VARCHAR(120),
+    level                 VARCHAR(10)  NOT NULL,
+    message               TEXT         NOT NULL,
+    exception_class       VARCHAR(255),
+    stack_trace           TEXT,
+    mdc                   JSONB        NOT NULL DEFAULT '{}',
+    fingerprint           VARCHAR(64)  NOT NULL,
+    occurrence_count      INTEGER      NOT NULL DEFAULT 1,
+    severity              VARCHAR(20)  NOT NULL DEFAULT 'MEDIUM',
+    status                VARCHAR(20)  NOT NULL DEFAULT 'NEW',
+    developer_finding_id  UUID,
+    resolved_at           TIMESTAMP,
+    resolved_by           VARCHAR(150),
+    notified_at           TIMESTAMP,
+    notification_channels TEXT[],
+    CONSTRAINT chk_error_log_severity CHECK (severity IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW')),
+    CONSTRAINT chk_error_log_status   CHECK (status   IN ('NEW', 'INVESTIGATING', 'RESOLVED', 'IGNORED', 'WONT_FIX'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_error_log_fingerprint_open
+    ON error_log (fingerprint) WHERE status IN ('NEW', 'INVESTIGATING');
+CREATE INDEX IF NOT EXISTS idx_error_log_status_severity ON error_log (status, severity, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_error_log_last_seen        ON error_log (last_seen_at DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 25. lsr_strategy_param
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lsr_strategy_param (
+    account_strategy_id UUID      NOT NULL,
+    param_overrides     JSONB     NOT NULL DEFAULT '{}',
+    version             BIGINT    NOT NULL DEFAULT 0,
+    created_time        TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_by          VARCHAR(150),
+    updated_time        TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_by          VARCHAR(150),
+    CONSTRAINT pk_lsr_strategy_param PRIMARY KEY (account_strategy_id),
+    CONSTRAINT fk_lsr_param_account_strategy
+        FOREIGN KEY (account_strategy_id) REFERENCES account_strategy(account_strategy_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_lsr_param_overrides_gin ON lsr_strategy_param USING GIN (param_overrides);
+
+CREATE OR REPLACE FUNCTION update_lsr_param_updated_time() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_time = NOW(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_lsr_param_updated_time ON lsr_strategy_param;
+CREATE TRIGGER trg_lsr_param_updated_time
+    BEFORE UPDATE ON lsr_strategy_param FOR EACH ROW EXECUTE FUNCTION update_lsr_param_updated_time();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 26. vcb_strategy_param
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vcb_strategy_param (
+    account_strategy_id UUID      NOT NULL,
+    param_overrides     JSONB     NOT NULL DEFAULT '{}',
+    version             BIGINT    NOT NULL DEFAULT 0,
+    created_time        TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_by          VARCHAR(150),
+    updated_time        TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_by          VARCHAR(150),
+    CONSTRAINT pk_vcb_strategy_param PRIMARY KEY (account_strategy_id),
+    CONSTRAINT fk_vcb_param_account_strategy
+        FOREIGN KEY (account_strategy_id) REFERENCES account_strategy(account_strategy_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_vcb_param_overrides_gin ON vcb_strategy_param USING GIN (param_overrides);
+
+CREATE OR REPLACE FUNCTION update_vcb_param_updated_time() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_time = NOW(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_vcb_param_updated_time ON vcb_strategy_param;
+CREATE TRIGGER trg_vcb_param_updated_time
+    BEFORE UPDATE ON vcb_strategy_param FOR EACH ROW EXECUTE FUNCTION update_vcb_param_updated_time();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 27. vbo_strategy_param
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS vbo_strategy_param (
+    account_strategy_id UUID      NOT NULL,
+    param_overrides     JSONB     NOT NULL DEFAULT '{}',
+    version             BIGINT    NOT NULL DEFAULT 0,
+    created_time        TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_by          VARCHAR(150),
+    updated_time        TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_by          VARCHAR(150),
+    CONSTRAINT pk_vbo_strategy_param PRIMARY KEY (account_strategy_id),
+    CONSTRAINT fk_vbo_param_account_strategy
+        FOREIGN KEY (account_strategy_id) REFERENCES account_strategy(account_strategy_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_vbo_param_overrides_gin ON vbo_strategy_param USING GIN (param_overrides);
+
+CREATE OR REPLACE FUNCTION update_vbo_param_updated_time() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_time = NOW(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_vbo_param_updated_time ON vbo_strategy_param;
+CREATE TRIGGER trg_vbo_param_updated_time
+    BEFORE UPDATE ON vbo_strategy_param FOR EACH ROW EXECUTE FUNCTION update_vbo_param_updated_time();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 28. research_iteration_log  (V9 base + V11 stat-rigor columns)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS research_iteration_log (
+    iteration_id                  UUID        NOT NULL,
+    strategy_code                 VARCHAR(60) NOT NULL,
+    iteration_number              INTEGER     NOT NULL,
+    backtest_run_id               UUID,
+    params_snapshot               JSONB       NOT NULL DEFAULT '{}',
+    code_change_summary           TEXT,
+    change_reasoning              TEXT,
+    metrics_snapshot              JSONB       NOT NULL DEFAULT '{}',
+    feature_buckets               JSONB,
+    notable_trades                JSONB,
+    verdict                       VARCHAR(20) NOT NULL,
+    next_action                   TEXT,
+    diagnostics                   TEXT,
+    git_commit_hash               VARCHAR(64),
+    hypothesis_predicted          TEXT,
+    hypothesis_outcome            TEXT,
+    hypothesis_match              BOOLEAN,
+    confidence_intervals          JSONB,
+    statistical_verdict           VARCHAR(40),
+    effective_pf_after_slippage   NUMERIC(12,6),
+    sample_size_adequate          BOOLEAN,
+    quant_audit_notes             TEXT,
+    created_time                  TIMESTAMP   NOT NULL DEFAULT NOW(),
+    created_by                    VARCHAR(150),
+    updated_time                  TIMESTAMP   NOT NULL DEFAULT NOW(),
+    updated_by                    VARCHAR(150),
+    CONSTRAINT pk_research_iteration_log PRIMARY KEY (iteration_id),
+    CONSTRAINT uq_research_iteration_strategy_n UNIQUE (strategy_code, iteration_number),
+    CONSTRAINT chk_research_iteration_verdict
+        CHECK (verdict IN ('PASS', 'ITERATE', 'DISCARD', 'FAILED')),
+    CONSTRAINT chk_research_iteration_statistical_verdict
+        CHECK (statistical_verdict IS NULL OR statistical_verdict IN (
+            'SIGNIFICANT_EDGE', 'INSUFFICIENT_EVIDENCE', 'NO_EDGE', 'NOT_TESTED'
+        ))
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_iteration_strategy_iter ON research_iteration_log (strategy_code, iteration_number DESC);
+CREATE INDEX IF NOT EXISTS idx_research_iteration_run_id        ON research_iteration_log (backtest_run_id);
+CREATE INDEX IF NOT EXISTS idx_research_iteration_created_time  ON research_iteration_log (created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_research_iteration_metrics_gin   ON research_iteration_log USING GIN (metrics_snapshot);
+CREATE INDEX IF NOT EXISTS idx_research_iteration_params_gin    ON research_iteration_log USING GIN (params_snapshot);
+CREATE INDEX IF NOT EXISTS idx_research_iteration_stat_verdict  ON research_iteration_log (statistical_verdict);
+
+CREATE OR REPLACE FUNCTION update_research_iteration_updated_time() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_time = NOW(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_research_iteration_updated_time ON research_iteration_log;
+CREATE TRIGGER trg_research_iteration_updated_time
+    BEFORE UPDATE ON research_iteration_log FOR EACH ROW EXECUTE FUNCTION update_research_iteration_updated_time();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 29. research_journal  (V10)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS research_journal (
+    journal_id          UUID         NOT NULL,
+    entry_type          VARCHAR(40)  NOT NULL,
+    strategy_code       VARCHAR(60),
+    interval_name       VARCHAR(20),
+    instrument          VARCHAR(30),
+    title               VARCHAR(300) NOT NULL,
+    content             TEXT         NOT NULL,
+    structured_data     JSONB        NOT NULL DEFAULT '{}',
+    status              VARCHAR(20)  NOT NULL DEFAULT 'ACTIVE',
+    iteration_id_refs   UUID[],
+    related_journal_ids UUID[],
+    created_time        TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by          VARCHAR(150),
+    updated_time        TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by          VARCHAR(150),
+    CONSTRAINT pk_research_journal PRIMARY KEY (journal_id),
+    CONSTRAINT chk_research_journal_entry_type
+        CHECK (entry_type IN ('STRATEGY_OUTCOME','CROSS_STRATEGY_FINDING','HYPOTHESIS','IDEA_BACKLOG','ANTI_PATTERN','RUN_SUMMARY')),
+    CONSTRAINT chk_research_journal_status
+        CHECK (status IN ('ACTIVE', 'STALE', 'FALSIFIED', 'PARKED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_journal_status_type    ON research_journal (status, entry_type);
+CREATE INDEX IF NOT EXISTS idx_research_journal_strategy_code  ON research_journal (strategy_code) WHERE strategy_code IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_research_journal_created_time   ON research_journal (created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_research_journal_fulltext        ON research_journal USING GIN (to_tsvector('english', title || ' ' || content));
+CREATE INDEX IF NOT EXISTS idx_research_journal_structured_data ON research_journal USING GIN (structured_data);
+
+CREATE OR REPLACE FUNCTION update_research_journal_updated_time() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_time = NOW(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_research_journal_updated_time ON research_journal;
+CREATE TRIGGER trg_research_journal_updated_time
+    BEFORE UPDATE ON research_journal FOR EACH ROW EXECUTE FUNCTION update_research_journal_updated_time();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 30. walk_forward_run  (V12)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS walk_forward_run (
+    walk_forward_id           UUID          PRIMARY KEY,
+    strategy_code             VARCHAR(60)   NOT NULL,
+    interval_name             VARCHAR(20)   NOT NULL,
+    instrument                VARCHAR(30)   NOT NULL,
+    full_window_start         TIMESTAMP     NOT NULL,
+    full_window_end           TIMESTAMP     NOT NULL,
+    train_months              INTEGER       NOT NULL,
+    test_months               INTEGER       NOT NULL,
+    n_folds                   INTEGER       NOT NULL,
+    fold_pf_mean              NUMERIC(12,6),
+    fold_pf_std               NUMERIC(12,6),
+    fold_pf_min               NUMERIC(12,6),
+    fold_pf_max               NUMERIC(12,6),
+    fold_pf_positive_pct      NUMERIC(5,2),
+    fold_return_mean          NUMERIC(12,6),
+    fold_return_std           NUMERIC(12,6),
+    fold_sharpe_mean          NUMERIC(12,6),
+    fold_sharpe_std           NUMERIC(12,6),
+    total_trades_across_folds INTEGER,
+    stability_verdict         VARCHAR(40)   NOT NULL,
+    motivating_iteration_id   UUID,
+    fold_results              JSONB         NOT NULL DEFAULT '[]',
+    git_commit_hash           VARCHAR(64),
+    notes                     TEXT,
+    created_time              TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by                VARCHAR(150),
+    CONSTRAINT chk_walk_forward_stability_verdict
+        CHECK (stability_verdict IN ('ROBUST','INCONSISTENT','INSUFFICIENT_EVIDENCE','OVERFIT','NO_EDGE'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_walk_forward_strategy  ON walk_forward_run (strategy_code, created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_walk_forward_verdict   ON walk_forward_run (stability_verdict);
+CREATE INDEX IF NOT EXISTS idx_walk_forward_iteration ON walk_forward_run (motivating_iteration_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 31. research_queue  (V13)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS research_queue (
+    queue_id              UUID        NOT NULL,
+    priority              INTEGER     NOT NULL DEFAULT 100,
+    strategy_code         VARCHAR(60) NOT NULL,
+    interval_name         VARCHAR(20) NOT NULL,
+    instrument            VARCHAR(30) NOT NULL DEFAULT 'BTCUSDT',
+    sweep_config          JSONB       NOT NULL,
+    hypothesis            TEXT,
+    status                VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    iteration_number      INTEGER     NOT NULL DEFAULT 0,
+    iter_budget           INTEGER     NOT NULL DEFAULT 5,
+    early_stop_on_no_edge BOOLEAN     NOT NULL DEFAULT TRUE,
+    require_walk_forward  BOOLEAN     NOT NULL DEFAULT TRUE,
+    last_iteration_id     UUID,
+    last_run_id           UUID,
+    final_verdict         VARCHAR(40),
+    walk_forward_id       UUID,
+    created_time          TIMESTAMP   NOT NULL DEFAULT NOW(),
+    created_by            VARCHAR(150),
+    started_at            TIMESTAMP,
+    completed_at          TIMESTAMP,
+    notes                 TEXT,
+    CONSTRAINT pk_research_queue PRIMARY KEY (queue_id),
+    CONSTRAINT chk_research_queue_status CHECK (status IN ('PENDING','RUNNING','PARKED','COMPLETED','FAILED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_queue_pending  ON research_queue (priority, created_time) WHERE status IN ('PENDING','RUNNING');
+CREATE INDEX IF NOT EXISTS idx_research_queue_strategy ON research_queue (strategy_code);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 32. password_reset_token  (V4)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS password_reset_token (
+    token      VARCHAR(128) PRIMARY KEY,
+    user_id    UUID         NOT NULL,
+    created_at TIMESTAMP    NOT NULL,
+    expires_at TIMESTAMP    NOT NULL,
+    used_at    TIMESTAMP,
+    CONSTRAINT fk_password_reset_token_user
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_active_by_user
+    ON password_reset_token (user_id) WHERE used_at IS NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 33. email_verification_token  (V5)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS email_verification_token (
+    token      VARCHAR(128) PRIMARY KEY,
+    user_id    UUID         NOT NULL,
+    created_at TIMESTAMP    NOT NULL,
+    expires_at TIMESTAMP    NOT NULL,
+    used_at    TIMESTAMP,
+    CONSTRAINT fk_email_verification_token_user
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_verification_active_by_user
+    ON email_verification_token (user_id) WHERE used_at IS NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 34. support_message  (V6)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS support_message (
+    support_message_id UUID          PRIMARY KEY,
+    from_user_id       UUID          NOT NULL,
+    from_email         VARCHAR(320)  NOT NULL,
+    subject            VARCHAR(200)  NOT NULL,
+    body               VARCHAR(5000) NOT NULL,
+    diagnostic         VARCHAR(2000),
+    status             VARCHAR(20)   NOT NULL,
+    created_at         TIMESTAMP     NOT NULL,
+    read_at            TIMESTAMP,
+    CONSTRAINT fk_support_message_user FOREIGN KEY (from_user_id) REFERENCES users(user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_message_created        ON support_message (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_support_message_status_created ON support_message (status, created_at DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 35. audit_event  (V3)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS audit_event (
+    audit_event_id UUID         PRIMARY KEY,
+    actor_user_id  UUID,
+    action         VARCHAR(100) NOT NULL,
+    entity_type    VARCHAR(100),
+    entity_id      UUID,
+    before_data    JSONB,
+    after_data     JSONB,
+    reason         VARCHAR(500),
+    created_at     TIMESTAMP    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_event_actor_created  ON audit_event (actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_event_entity_created ON audit_event (entity_type, entity_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_event_created        ON audit_event (created_at DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 36. paper_trade_run  (V15)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS paper_trade_run (
+    paper_trade_id         UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_strategy_id    UUID          NOT NULL,
+    strategy_code          VARCHAR(20)   NOT NULL,
+    symbol                 VARCHAR(30)   NOT NULL,
+    interval_name          VARCHAR(20)   NOT NULL,
+    decision_type          VARCHAR(40)   NOT NULL,
+    side                   VARCHAR(10),
+    intended_price         NUMERIC(20,8),
+    intended_quantity      NUMERIC(20,8),
+    intended_notional_usdt NUMERIC(20,8),
+    stop_loss_price        NUMERIC(20,8),
+    take_profit_price      NUMERIC(20,8),
+    decision_snapshot      JSONB,
+    context_snapshot       JSONB,
+    skip_reason            VARCHAR(40)   NOT NULL DEFAULT 'SIMULATED',
+    created_time           TIMESTAMP     NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_paper_trade_run_account_strategy
+        FOREIGN KEY (account_strategy_id) REFERENCES account_strategy(account_strategy_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_paper_trade_run_account_strategy ON paper_trade_run (account_strategy_id, created_time DESC);
+CREATE INDEX IF NOT EXISTS ix_paper_trade_run_strategy_code    ON paper_trade_run (strategy_code, created_time DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 37. strategy_promotion_log  (V15 + V40: strategy_definition_id, nullable account_strategy_id)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS strategy_promotion_log (
+    promotion_id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_strategy_id     UUID,
+    strategy_definition_id  UUID,
+    strategy_code           VARCHAR(20) NOT NULL,
+    from_state              VARCHAR(20) NOT NULL,
+    to_state                VARCHAR(20) NOT NULL,
+    reviewer_user_id        UUID,
+    reason                  TEXT        NOT NULL,
+    evidence                JSONB,
+    created_time            TIMESTAMP   NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_strategy_promotion_log_account_strategy
+        FOREIGN KEY (account_strategy_id) REFERENCES account_strategy(account_strategy_id),
+    CONSTRAINT fk_strategy_promotion_log_definition
+        FOREIGN KEY (strategy_definition_id) REFERENCES strategy_definition(strategy_definition_id),
+    CONSTRAINT chk_promotion_states CHECK (
+        (from_state, to_state) IN (
+            ('RESEARCH','PAPER_TRADE'),('PAPER_TRADE','PROMOTED'),('PAPER_TRADE','REJECTED'),
+            ('PROMOTED','DEMOTED'),('DEMOTED','PAPER_TRADE'),('REJECTED','PAPER_TRADE'),('PROMOTED','PAPER_TRADE')
+        )
+    ),
+    CONSTRAINT chk_promotion_log_scope CHECK (
+        (account_strategy_id IS NOT NULL AND strategy_definition_id IS NULL)
+     OR (account_strategy_id IS NULL     AND strategy_definition_id IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS ix_promotion_log_account_strategy    ON strategy_promotion_log (account_strategy_id, created_time DESC) WHERE account_strategy_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_promotion_log_reviewer            ON strategy_promotion_log (reviewer_user_id, created_time DESC);
+CREATE INDEX IF NOT EXISTS ix_promotion_log_strategy_definition ON strategy_promotion_log (strategy_definition_id, created_time DESC) WHERE strategy_definition_id IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 38. strategy_definition_history  (V18)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS strategy_definition_history (
+    history_id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    strategy_code          VARCHAR(100) NOT NULL,
+    strategy_definition_id UUID         NOT NULL,
+    archetype              VARCHAR(64)  NOT NULL,
+    archetype_version      INTEGER      NOT NULL,
+    spec_jsonb             JSONB,
+    spec_schema_version    INTEGER      NOT NULL DEFAULT 1,
+    operation              VARCHAR(16)  NOT NULL,
+    changed_by_user_id     UUID,
+    changed_at             TIMESTAMP    NOT NULL DEFAULT NOW(),
+    change_reason          TEXT,
+    CONSTRAINT fk_strategy_definition_history_definition
+        FOREIGN KEY (strategy_definition_id) REFERENCES strategy_definition(strategy_definition_id),
+    CONSTRAINT chk_strategy_definition_history_operation
+        CHECK (operation IN ('INSERT','UPDATE','DELETE','UPGRADE'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_definition_history_code_time ON strategy_definition_history (strategy_code, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_strategy_definition_history_id_time   ON strategy_definition_history (strategy_definition_id, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_strategy_definition_history_user_time ON strategy_definition_history (changed_by_user_id, changed_at DESC) WHERE changed_by_user_id IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 39. spec_trace  (V19)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS spec_trace (
+    trace_id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    backtest_run_id     UUID,
+    account_strategy_id UUID,
+    strategy_code       VARCHAR(100) NOT NULL,
+    bar_time            TIMESTAMP    NOT NULL,
+    phase               VARCHAR(32)  NOT NULL,
+    spec_snapshot       JSONB        NOT NULL,
+    rules               JSONB        NOT NULL,
+    decision            VARCHAR(64)  NOT NULL,
+    decision_reason     TEXT,
+    eval_latency_us     INTEGER,
+    error_class         VARCHAR(200),
+    error_message       TEXT,
+    created_time        TIMESTAMP    NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_spec_trace_backtest_run
+        FOREIGN KEY (backtest_run_id) REFERENCES backtest_run(backtest_run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_spec_trace_backtest_run          ON spec_trace (backtest_run_id, bar_time) WHERE backtest_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_spec_trace_account_strategy_time ON spec_trace (account_strategy_id, bar_time DESC) WHERE account_strategy_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_spec_trace_errors                ON spec_trace (strategy_code, created_time DESC) WHERE error_class IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 40. research_control  (V23)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS research_control (
+    control_id         INTEGER     PRIMARY KEY DEFAULT 1,
+    paused             BOOLEAN     NOT NULL DEFAULT FALSE,
+    reason             TEXT,
+    updated_at         TIMESTAMP   NOT NULL DEFAULT NOW(),
+    updated_by_user_id UUID,
+    CONSTRAINT chk_research_control_singleton CHECK (control_id = 1)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 41. code_review_finding  (V26) — must follow error_log
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS code_review_finding (
+    finding_id       UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    error_log_id     UUID         NOT NULL,
+    severity         VARCHAR(20)  NOT NULL,
+    status           VARCHAR(20)  NOT NULL,
+    summary          TEXT         NOT NULL,
+    root_cause       TEXT,
+    fix_summary      TEXT,
+    files_changed    TEXT[],
+    branch_name      VARCHAR(200),
+    commit_sha       VARCHAR(64),
+    backtest_run_id  UUID,
+    baseline_iter_id UUID,
+    created_by       VARCHAR(150) NOT NULL DEFAULT 'quant-developer',
+    created_at       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_finding_severity CHECK (severity IN ('CRITICAL','HIGH','MEDIUM','LOW')),
+    CONSTRAINT chk_finding_status   CHECK (status   IN ('FIXED','INVESTIGATING','ESCALATED','WONT_FIX','NO_OP')),
+    CONSTRAINT fk_finding_error_log FOREIGN KEY (error_log_id) REFERENCES error_log(error_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_finding_created_at   ON code_review_finding (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_finding_error_log_id ON code_review_finding (error_log_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_finding_status_open  ON code_review_finding (status, created_at DESC) WHERE status IN ('FIXED','ESCALATED');
+
+ALTER TABLE error_log
+    ADD CONSTRAINT fk_error_log_developer_finding
+        FOREIGN KEY (developer_finding_id) REFERENCES code_review_finding(finding_id) ON DELETE SET NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 42. idempotency_record  (V28)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS idempotency_record (
+    agent_name     VARCHAR(120) NOT NULL,
+    key            VARCHAR(200) NOT NULL,
+    response_jsonb JSONB        NOT NULL,
+    created_time   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    expires_at     TIMESTAMPTZ  NOT NULL,
+    PRIMARY KEY (agent_name, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_record_expires_at ON idempotency_record (expires_at);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 43. strategy_param  (V29 shape + V33 adds source_backtest_run_id)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS strategy_param (
+    param_id               UUID         NOT NULL,
+    account_strategy_id    UUID         NOT NULL,
+    name                   VARCHAR(120) NOT NULL,
+    param_overrides        JSONB        NOT NULL DEFAULT '{}',
+    is_active              BOOLEAN      NOT NULL DEFAULT FALSE,
+    is_deleted             BOOLEAN      NOT NULL DEFAULT FALSE,
+    deleted_at             TIMESTAMP,
+    source_backtest_run_id UUID,
+    version                BIGINT       NOT NULL DEFAULT 0,
+    created_time           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_by             VARCHAR(150),
+    updated_time           TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_by             VARCHAR(150),
+    CONSTRAINT pk_strategy_param PRIMARY KEY (param_id),
+    CONSTRAINT fk_strategy_param_account_strategy
+        FOREIGN KEY (account_strategy_id) REFERENCES account_strategy(account_strategy_id) ON DELETE CASCADE,
+    CONSTRAINT fk_strategy_param_source_backtest_run
+        FOREIGN KEY (source_backtest_run_id) REFERENCES backtest_run(backtest_run_id) ON DELETE SET NULL,
+    CONSTRAINT chk_strategy_param_name_nonblank CHECK (length(btrim(name)) > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_param_one_active
+    ON strategy_param (account_strategy_id) WHERE is_active = TRUE AND is_deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_strategy_param_by_account_strategy
+    ON strategy_param (account_strategy_id) WHERE is_deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_strategy_param_active_lookup
+    ON strategy_param (account_strategy_id, is_active) WHERE is_deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_strategy_param_overrides_gin ON strategy_param USING GIN (param_overrides);
+CREATE INDEX IF NOT EXISTS idx_strategy_param_source_backtest_run_id
+    ON strategy_param (source_backtest_run_id) WHERE source_backtest_run_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION update_strategy_param_updated_time() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_time = NOW(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_strategy_param_updated_time ON strategy_param;
+CREATE TRIGGER trg_strategy_param_updated_time
+    BEFORE UPDATE ON strategy_param FOR EACH ROW EXECUTE FUNCTION update_strategy_param_updated_time();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 44. funding_rate_history  (V34)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS funding_rate_history (
+    symbol       VARCHAR(20)    NOT NULL,
+    funding_time TIMESTAMP      NOT NULL,
+    funding_rate NUMERIC(18,10) NOT NULL,
+    mark_price   NUMERIC(38,8),
+    created_time TIMESTAMP      NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_funding_rate_history PRIMARY KEY (symbol, funding_time)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 45. cross_window_run  (V38)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS cross_window_run (
+    cross_window_id             UUID          PRIMARY KEY,
+    strategy_code               VARCHAR(60)   NOT NULL,
+    interval_name               VARCHAR(20)   NOT NULL,
+    instrument                  VARCHAR(30)   NOT NULL,
+    windows_catalog_version     VARCHAR(40)   NOT NULL,
+    n_windows                   INTEGER       NOT NULL,
+    n_windows_completed         INTEGER       NOT NULL,
+    window_pf_mean              NUMERIC(12,6),
+    window_pf_std               NUMERIC(12,6),
+    window_pf_min               NUMERIC(12,6),
+    window_pf_max               NUMERIC(12,6),
+    pct_windows_net_positive    NUMERIC(5,2),
+    window_return_mean          NUMERIC(12,6),
+    window_return_std           NUMERIC(12,6),
+    total_trades_across_windows INTEGER,
+    cross_window_verdict        VARCHAR(40)   NOT NULL,
+    motivating_iteration_id     UUID,
+    motivating_walk_forward_id  UUID,
+    window_results              JSONB         NOT NULL DEFAULT '[]',
+    git_commit_hash             VARCHAR(64),
+    notes                       TEXT,
+    created_time                TIMESTAMP     NOT NULL DEFAULT NOW(),
+    created_by                  VARCHAR(150),
+    CONSTRAINT pk_cross_window_run PRIMARY KEY (cross_window_id),
+    CONSTRAINT chk_cross_window_verdict CHECK (cross_window_verdict IN (
+        'ROBUST_CROSS_WINDOW','INCONSISTENT_CROSS_WINDOW','NO_EDGE_CROSS_WINDOW','INSUFFICIENT_DATA_IN_WINDOW'
+    ))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cross_window_strategy     ON cross_window_run (strategy_code, created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_cross_window_verdict      ON cross_window_run (cross_window_verdict);
+CREATE INDEX IF NOT EXISTS idx_cross_window_iteration    ON cross_window_run (motivating_iteration_id);
+CREATE INDEX IF NOT EXISTS idx_cross_window_walk_forward ON cross_window_run (motivating_walk_forward_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 46. alert_event  (V39)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS alert_event (
+    alert_event_id UUID         PRIMARY KEY,
+    severity       VARCHAR(20)  NOT NULL,
+    kind           VARCHAR(60)  NOT NULL,
+    message        TEXT         NOT NULL,
+    context        JSONB,
+    dedupe_key     VARCHAR(200),
+    suppressed     BOOLEAN      NOT NULL DEFAULT FALSE,
+    sent_telegram  BOOLEAN,
+    sent_email     BOOLEAN,
+    created_at     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_alert_event PRIMARY KEY (alert_event_id),
+    CONSTRAINT chk_alert_event_severity CHECK (severity IN ('INFO','WARN','CRITICAL'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_event_created      ON alert_event (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_event_kind_created ON alert_event (kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_event_dedupe       ON alert_event (dedupe_key, created_at DESC) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_alert_event_severity     ON alert_event (severity, created_at DESC) WHERE severity IN ('WARN','CRITICAL');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 47. hypothesis_audit  (V41)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS hypothesis_audit (
+    audit_id            UUID        NOT NULL,
+    strategy_code       VARCHAR(60) NOT NULL,
+    axis_set_hash       CHAR(64)    NOT NULL,
+    param_combo_hash    CHAR(64)    NOT NULL,
+    params_snapshot     JSONB       NOT NULL,
+    queue_id            UUID,
+    iteration_id        UUID,
+    statistical_verdict VARCHAR(40),
+    decision_verdict    VARCHAR(40),
+    created_by          VARCHAR(80) NOT NULL,
+    created_time        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_time        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_hypothesis_audit PRIMARY KEY (audit_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hypothesis_audit_strategy  ON hypothesis_audit (strategy_code, created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_hypothesis_audit_axis      ON hypothesis_audit (strategy_code, axis_set_hash, created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_hypothesis_audit_combo     ON hypothesis_audit (strategy_code, param_combo_hash);
+CREATE INDEX IF NOT EXISTS idx_hypothesis_audit_discarded ON hypothesis_audit (strategy_code, axis_set_hash) WHERE decision_verdict IN ('DISCARD');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Spec change notify trigger on strategy_definition  (V20/V21)
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION fn_notify_spec_change() RETURNS TRIGGER AS $$
+DECLARE payload TEXT;
+BEGIN
+    IF (TG_OP = 'DELETE') THEN payload := OLD.strategy_code;
+    ELSE payload := NEW.strategy_code; END IF;
+    PERFORM pg_notify('spec_change', COALESCE(LEFT(payload, 4000), ''));
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_notify_spec_change         ON strategy_definition;
+DROP TRIGGER IF EXISTS trg_notify_spec_change_ins_del ON strategy_definition;
+DROP TRIGGER IF EXISTS trg_notify_spec_change_upd     ON strategy_definition;
+
+CREATE TRIGGER trg_notify_spec_change_ins_del
+    AFTER INSERT OR DELETE ON strategy_definition
+    FOR EACH ROW EXECUTE FUNCTION fn_notify_spec_change();
+
+CREATE TRIGGER trg_notify_spec_change_upd
+    AFTER UPDATE ON strategy_definition
+    FOR EACH ROW
+    WHEN (
+           OLD.spec_jsonb         IS DISTINCT FROM NEW.spec_jsonb
+        OR OLD.archetype           IS DISTINCT FROM NEW.archetype
+        OR OLD.archetype_version   IS DISTINCT FROM NEW.archetype_version
+        OR OLD.spec_schema_version IS DISTINCT FROM NEW.spec_schema_version
+        OR OLD.is_deleted          IS DISTINCT FROM NEW.is_deleted
+        OR OLD.strategy_code       IS DISTINCT FROM NEW.strategy_code
+    )
+    EXECUTE FUNCTION fn_notify_spec_change();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Role separation  (V14) — create roles if they don't exist
+-- ─────────────────────────────────────────────────────────────────────────────
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'blackheart_trading') THEN
+        CREATE ROLE blackheart_trading LOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'blackheart_research') THEN
+        CREATE ROLE blackheart_research LOGIN;
+    END IF;
+END $$;
+
+GRANT CONNECT ON DATABASE trading_db TO blackheart_trading, blackheart_research;
+GRANT USAGE ON SCHEMA public TO blackheart_trading, blackheart_research;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO blackheart_trading;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO blackheart_trading;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO blackheart_research;
+GRANT SELECT, INSERT, UPDATE ON
+    research_iteration_log, research_journal, walk_forward_run, research_queue,
+    research_control, error_log, idempotency_record, alert_event,
+    hypothesis_audit, cross_window_run
+    TO blackheart_research;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Seed data
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Admin user (password = "admin123!" BCrypt rounds=12 — CHANGE BEFORE USE)
+INSERT INTO users (user_id, email, password_hash, full_name, role, status, email_verified, created_by, updated_by)
+VALUES (gen_random_uuid(), 'admin@blackheart.internal',
+        '$2a$12$K8GpCqX7rVpL3VaUTuH9.uY8ZCixHLbnJV6E5kqt4FQ0.5Rfn/eim',
+        'System Administrator', 'ADMIN', 'ACTIVE', TRUE, 'system', 'system')
+ON CONFLICT (email) DO NOTHING;
+
+-- FCARRY strategy definition  (V36)
+INSERT INTO strategy_definition (strategy_definition_id, strategy_code, strategy_name, strategy_type, description, status, archetype, archetype_version, spec_schema_version, is_deleted, enabled, simulated, created_by, updated_by)
+VALUES (gen_random_uuid(), 'FCARRY', 'Funding Carry', 'LEGACY_JAVA',
+        'Funding rate carry strategy — long when funding negative, short when funding positive.',
+        'ACTIVE', 'LEGACY_JAVA', 1, 1, FALSE, FALSE, TRUE, 'system', 'system')
+ON CONFLICT (strategy_code) DO NOTHING;
+
+-- Funding ingest scheduler job  (V37)
+INSERT INTO scheduler_jobs (job_name, job_type, cron_expression, status, created_by, updated_by)
+VALUES ('FUNDING_INGEST', 'FUNDING_INGEST', '0 5 0/8 * * *', 'ACTIVE', 'system', 'system')
+ON CONFLICT (job_name) DO NOTHING;
+
+COMMIT;
