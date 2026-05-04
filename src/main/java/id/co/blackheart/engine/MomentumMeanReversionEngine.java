@@ -2,11 +2,8 @@ package id.co.blackheart.engine;
 
 import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
-import id.co.blackheart.dto.strategy.RegimeSnapshot;
-import id.co.blackheart.dto.strategy.RiskSnapshot;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.strategy.StrategyRequirements;
-import id.co.blackheart.dto.strategy.VolatilitySnapshot;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.service.strategy.StrategyHelper;
@@ -112,7 +109,7 @@ public class MomentumMeanReversionEngine implements StrategyEngine {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(ZERO) <= 0) return hold(spec, context, "Invalid close price");
 
-        if (isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
+        if (EngineContextHelpers.isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
 
         if (context.hasTradablePosition() && snap != null) {
             return managePosition(spec, context, md, snap, t);
@@ -136,7 +133,7 @@ public class MomentumMeanReversionEngine implements StrategyEngine {
         BigDecimal target = readEma(f, t.targetEma);
         if (anchor == null || target == null) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal extremeDistance = atr.multiply(t.extremeAtrMult);
 
@@ -169,8 +166,8 @@ public class MomentumMeanReversionEngine implements StrategyEngine {
                 .signalType(signalEntry(spec)).setupType(setupLongEntry(spec)).side(SIDE_LONG)
                 .reason("MMR long: close below anchor by " + t.extremeAtrMult + "·ATR + RSI oversold")
                 .signalScore(ONE).confidenceScore(ONE)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .notionalSize(notional).stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_SINGLE).targetPositionRole(TARGET_ALL)
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr()).entryRsi(f.getRsi())
@@ -190,7 +187,7 @@ public class MomentumMeanReversionEngine implements StrategyEngine {
         BigDecimal target = readEma(f, t.targetEma);
         if (anchor == null || target == null) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal extremeDistance = atr.multiply(t.extremeAtrMult);
 
@@ -223,8 +220,8 @@ public class MomentumMeanReversionEngine implements StrategyEngine {
                 .signalType(signalEntry(spec)).setupType(setupShortEntry(spec)).side(SIDE_SHORT)
                 .reason("MMR short: close above anchor by " + t.extremeAtrMult + "·ATR + RSI overbought")
                 .signalScore(ONE).confidenceScore(ONE)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .positionSize(positionSize).stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_SINGLE).targetPositionRole(TARGET_ALL)
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr()).entryRsi(f.getRsi())
@@ -324,28 +321,6 @@ public class MomentumMeanReversionEngine implements StrategyEngine {
             case "ema200" -> f.getEma200();
             default -> null;
         };
-    }
-
-    private boolean isMarketVetoed(EnrichedStrategyContext ctx) {
-        return ctx.getMarketQualitySnapshot() != null
-                && Boolean.FALSE.equals(ctx.getMarketQualitySnapshot().getTradable());
-    }
-
-    private BigDecimal resolveAtr(FeatureStore f) {
-        if (f == null || f.getAtr() == null) return null;
-        return f.getAtr().compareTo(ZERO) > 0 ? f.getAtr() : null;
-    }
-    private BigDecimal resolveRegimeScore(EnrichedStrategyContext ctx) {
-        RegimeSnapshot r = ctx.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
-    }
-    private BigDecimal resolveJumpRisk(EnrichedStrategyContext ctx) {
-        VolatilitySnapshot v = ctx.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
-    }
-    private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext ctx) {
-        RiskSnapshot r = ctx.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
     }
 
     private StrategyDecision.StrategyDecisionBuilder baseBuilder(StrategySpec spec, EnrichedStrategyContext ctx) {

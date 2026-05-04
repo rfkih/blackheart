@@ -50,6 +50,37 @@ Tick returns `verdict=PASS` only when **all**: n_trades≥100, PF 95% CI lower>1
 - **Migrations are immutable once applied.** New schema = new V<N>.
 - **If uncertain:** ask whether the user wants minimal patch or refactor.
 
+## DRY consolidation standard
+Apply DRY only when it genuinely simplifies. Code that *looks* similar but encodes different intent must stay separate.
+
+**Consolidate when:**
+- Bodies are bit-identical and have **no engine/strategy-specific state** (constants, ARCHETYPE, Tuning fields). Pure functions of their arguments.
+- Duplication appears in **3+ places** AND the helper has an obvious home (existing util class, or a new one in the same package).
+- The extracted helper preserves **exact null/zero/exception semantics** of the originals — no defensive guards added "while we're here."
+- Existing utilities (e.g. `DateTimeUtil`) already cover the case — adopt them instead of inlining.
+
+**Do NOT consolidate:**
+- Strategy execution logic — even visually identical `managePosition`, `baseBuilder`, `hold`, `veto` blocks differ by per-engine constants/log prefixes/signal types. Hidden behavior change risk violates the "Don't introduce hidden behavior changes in strategy execution" hard rule.
+- Protected strategies LSR/VCB/VBO — never refactor across them, even if they share shapes.
+- `BigDecimal` scale/round calls — the explicit scale and `RoundingMode` *is* the meaning at each callsite.
+- `orElseThrow` / `EntityNotFoundException` chains — idiomatic; each error message is contextual.
+- Wrapper methods that just delegate to a helper without adding behavior — collapse the wrapper instead of "DRYing" the delegation.
+- DTO↔Entity mappings unless the field set, null handling, *and* downstream consumers are identical.
+
+**Process when consolidating:**
+1. Read **all** candidate copies in full and confirm bit-identity (constants, exception types, comparison semantics).
+2. Place the helper in the package that owns the concept (e.g. engine helpers in `engine/`, time conversions in `util/`).
+3. Match originals exactly — do not "improve" while extracting.
+4. Remove now-unused imports.
+5. Recompile (`./gradlew compileJava --rerun-tasks` if a JVM holds the JAR and `clean` fails).
+
+**Existing canonical helpers — prefer over inlining:**
+- `DateTimeUtil.toEpochMillisUtc(LocalDateTime)` — UTC `LocalDateTime` → epoch millis.
+- `DateTimeUtil.toEpochSecondsUtc(LocalDateTime)` — same, seconds.
+- `EngineContextHelpers` (in `id.co.blackheart.engine`) — `isMarketVetoed`, `resolveAtr`, `resolveRegimeScore`, `resolveJumpRisk`, `resolveRiskMultiplier` for spec-driven engines (DCB/MMR/MRO/TPB). New engines must reuse these, not re-inline them.
+- `GateVerdict` (in `id.co.blackheart.service.risk`) — shared `record(boolean allowed, String reason)` with `allow()` / `deny(String)` factories. All risk sub-guards (`RegimeGuardService`, `CorrelationGuardService`, and any future guard) must return this type — never re-define an inner verdict record with the same shape.
+- `StrategyDecision` (in `id.co.blackheart.dto.strategy`) — canonical decision DTO for all strategy outputs (live + backtest). `TradeDecision` was deleted as dead code; do not resurrect it.
+
 ## Do Not — hard list
 - Don't rewrite architecture unless requested.
 - Don't replace TA4j-based logic without justification.

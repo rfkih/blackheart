@@ -161,14 +161,13 @@ public class RiskGuardService {
                 : featureStoreRepository.findLatestCompletedBySymbolAndInterval(
                         strategy.getSymbol(), strategy.getIntervalName(), LocalDateTime.now())
                         .orElse(null);
-        RegimeGuardService.RegimeVerdict regimeVerdict = regimeGuardService.check(strategy, effectiveFs);
+        GateVerdict regimeVerdict = regimeGuardService.check(strategy, effectiveFs);
         if (!regimeVerdict.allowed()) {
             return GuardVerdict.deny(regimeVerdict.reason(), ddPct, concurrent);
         }
 
         // (5) Correlation / concentration — guard against correlated same-side stacking.
-        CorrelationGuardService.ConcentrationVerdict concVerdict =
-                correlationGuardService.check(strategy, account, side);
+        GateVerdict concVerdict = correlationGuardService.check(strategy, account, side);
         if (!concVerdict.allowed()) {
             return GuardVerdict.deny(concVerdict.reason(), ddPct, concurrent);
         }

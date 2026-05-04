@@ -52,4 +52,12 @@ public final class DateTimeUtil {
 
         return dateTime.toInstant(ZoneOffset.UTC).getEpochSecond();
     }
+
+    public static long toEpochMillisUtc(LocalDateTime dateTime) {
+        if (dateTime == null) {
+            throw new IllegalArgumentException("dateTime must not be null");
+        }
+
+        return dateTime.toInstant(ZoneOffset.UTC).toEpochMilli();
+    }
 }

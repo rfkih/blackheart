@@ -74,9 +74,9 @@ class RiskGuardServiceTest {
         lenient().when(featureStoreRepository.findLatestCompletedBySymbolAndInterval(any(), any(), any()))
                 .thenReturn(Optional.empty());
         lenient().when(regimeGuardService.check(any(), any()))
-                .thenReturn(RegimeGuardService.RegimeVerdict.allow());
+                .thenReturn(GateVerdict.allow());
         lenient().when(correlationGuardService.check(any(), any(), any()))
-                .thenReturn(CorrelationGuardService.ConcentrationVerdict.allow());
+                .thenReturn(GateVerdict.allow());
     }
 
     @Test

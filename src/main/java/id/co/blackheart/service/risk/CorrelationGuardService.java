@@ -52,12 +52,7 @@ public class CorrelationGuardService {
     private final StrategyDailyRealizedCurveRepository curveRepository;
     private final AlertService alertService;
 
-    public record ConcentrationVerdict(boolean allowed, String reason) {
-        static ConcentrationVerdict allow() { return new ConcentrationVerdict(true, null); }
-        static ConcentrationVerdict deny(String reason) { return new ConcentrationVerdict(false, reason); }
-    }
-
-    public ConcentrationVerdict check(AccountStrategy requestingStrategy, Account account, String side) {
+    public GateVerdict check(AccountStrategy requestingStrategy, Account account, String side) {
         // Collect accountStrategyIds of OTHER strategies with open same-side trades.
         List<Trades> openTrades = tradesRepository.findOpenByAccountIds(List.of(account.getAccountId()));
         List<UUID> sameSideStrategyIds = openTrades.stream()
@@ -69,7 +64,7 @@ public class CorrelationGuardService {
                 .collect(Collectors.toList());
 
         if (sameSideStrategyIds.isEmpty()) {
-            return ConcentrationVerdict.allow();
+            return GateVerdict.allow();
         }
 
         // --- Concentration check ---
@@ -94,7 +89,7 @@ public class CorrelationGuardService {
                 log.warn("[CorrelationGuard] {}", reason);
                 alertService.raise(AlertSeverity.WARN, "CONCENTRATION_BLOCKED", reason,
                         "concentration_" + account.getAccountId() + "_" + side.toUpperCase());
-                return ConcentrationVerdict.deny(reason);
+                return GateVerdict.deny(reason);
             }
         }
 
@@ -108,7 +103,7 @@ public class CorrelationGuardService {
                             requestingStrategy.getAccountStrategyId(), startDate, endDate);
 
             if (thisCurve.size() < MIN_CORR_DAYS) {
-                return ConcentrationVerdict.allow();
+                return GateVerdict.allow();
             }
 
             // (a, b) -> a: guard against duplicate curve_date rows caused by data anomalies;
@@ -148,12 +143,12 @@ public class CorrelationGuardService {
                     log.warn("[CorrelationGuard] {}", reason);
                     alertService.raise(AlertSeverity.WARN, "CORRELATION_BLOCKED", reason,
                             "corr_" + requestingStrategy.getAccountStrategyId() + "_" + otherId);
-                    return ConcentrationVerdict.deny(reason);
+                    return GateVerdict.deny(reason);
                 }
             }
         }
 
-        return ConcentrationVerdict.allow();
+        return GateVerdict.allow();
     }
 
     /** Pearson product-moment correlation. Returns 0 when variance is zero or n < 3. */

@@ -9,6 +9,7 @@ import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.cache.CacheService;
+import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -211,7 +212,7 @@ public class PnlService {
             if (equity.compareTo(peak) > 0) peak = equity;
 
             points.add(EquityPointResponse.builder()
-                    .time(exit.toInstant(ZoneOffset.UTC).toEpochMilli())
+                    .time(DateTimeUtil.toEpochMillisUtc(exit))
                     .equity(equity.setScale(8, RoundingMode.HALF_UP))
                     .drawdown(percentDrop(equity, peak))
                     .build());

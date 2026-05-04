@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.response.*;
 import id.co.blackheart.model.*;
 import id.co.blackheart.repository.*;
+import id.co.blackheart.util.DateTimeUtil;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +14,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.ZoneOffset;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -228,7 +228,7 @@ public class BacktestQueryService {
     }
 
     private BacktestEquityPointResponse toEquityPoint(BacktestEquityPoint ep) {
-        long ts = ep.getEquityDate().atTime(LocalTime.MIDNIGHT).toInstant(ZoneOffset.UTC).toEpochMilli();
+        long ts = DateTimeUtil.toEpochMillisUtc(ep.getEquityDate().atTime(LocalTime.MIDNIGHT));
         BigDecimal drawdown = ep.getTotalEquity() != null && ep.getDrawdownPercent() != null
                 ? ep.getTotalEquity().multiply(ep.getDrawdownPercent()).divide(BigDecimal.valueOf(100))
                 : BigDecimal.ZERO;
@@ -304,6 +304,6 @@ public class BacktestQueryService {
 
     private Long toEpochMs(LocalDateTime ldt) {
         if (ldt == null) return null;
-        return ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
+        return DateTimeUtil.toEpochMillisUtc(ldt);
     }
 }

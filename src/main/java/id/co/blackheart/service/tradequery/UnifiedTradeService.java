@@ -11,6 +11,7 @@ import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.cache.CacheService;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.trade.TradeAttributionService;
+import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,7 +19,6 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -200,6 +200,6 @@ public class UnifiedTradeService {
 
     private Long toEpochMs(LocalDateTime ldt) {
         if (ldt == null) return null;
-        return ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
+        return DateTimeUtil.toEpochMillisUtc(ldt);
     }
 }

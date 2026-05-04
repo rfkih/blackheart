@@ -32,28 +32,23 @@ public class RegimeGuardService {
 
     private final AlertService alertService;
 
-    public record RegimeVerdict(boolean allowed, String reason) {
-        static RegimeVerdict allow() { return new RegimeVerdict(true, null); }
-        static RegimeVerdict deny(String reason) { return new RegimeVerdict(false, reason); }
-    }
-
     /**
      * Returns {@code allow()} when the regime gate is disabled, featureStore is null,
      * or both regime dimensions pass. Returns {@code deny(reason)} otherwise and
      * raises an INFO alert so suppressed entries are visible in the admin inbox.
      */
-    public RegimeVerdict check(AccountStrategy strategy, FeatureStore featureStore) {
+    public GateVerdict check(AccountStrategy strategy, FeatureStore featureStore) {
         if (!Boolean.TRUE.equals(strategy.getRegimeGateEnabled())) {
-            return RegimeVerdict.allow();
+            return GateVerdict.allow();
         }
         if (featureStore == null) {
             log.warn("[RegimeGuard] Gate enabled but no FeatureStore data for symbol={} interval={} — failing open. " +
                     "Run feature-store backfill to activate regime filtering (accountStrategyId={})",
                     strategy.getSymbol(), strategy.getIntervalName(), strategy.getAccountStrategyId());
-            return RegimeVerdict.allow();
+            return GateVerdict.allow();
         }
 
-        RegimeVerdict trendVerdict = checkDimension(
+        GateVerdict trendVerdict = checkDimension(
                 "trend_regime", featureStore.getTrendRegime(),
                 strategy.getAllowedTrendRegimes(), strategy);
         if (!trendVerdict.allowed()) return trendVerdict;
@@ -63,14 +58,14 @@ public class RegimeGuardService {
                 strategy.getAllowedVolatilityRegimes(), strategy);
     }
 
-    private RegimeVerdict checkDimension(
+    private GateVerdict checkDimension(
             String dimensionName,
             String currentValue,
             String allowedCsv,
             AccountStrategy strategy) {
 
-        if (allowedCsv == null || allowedCsv.isBlank()) return RegimeVerdict.allow();
-        if (currentValue == null || currentValue.isBlank()) return RegimeVerdict.allow();
+        if (allowedCsv == null || allowedCsv.isBlank()) return GateVerdict.allow();
+        if (currentValue == null || currentValue.isBlank()) return GateVerdict.allow();
 
         Set<String> allowed = Arrays.stream(allowedCsv.split(","))
                 .map(String::trim)
@@ -78,7 +73,7 @@ public class RegimeGuardService {
                 .map(String::toUpperCase)
                 .collect(Collectors.toSet());
 
-        if (allowed.contains(currentValue.toUpperCase())) return RegimeVerdict.allow();
+        if (allowed.contains(currentValue.toUpperCase())) return GateVerdict.allow();
 
         String reason = String.format(
                 "Regime gate blocked: %s='%s' not in allowed set %s (accountStrategyId=%s)",
@@ -89,6 +84,6 @@ public class RegimeGuardService {
                 "REGIME_GATE_BLOCKED",
                 reason,
                 "regime_gate_" + strategy.getAccountStrategyId());
-        return RegimeVerdict.deny(reason);
+        return GateVerdict.deny(reason);
     }
 }

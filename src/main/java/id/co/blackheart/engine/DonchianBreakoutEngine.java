@@ -2,11 +2,8 @@ package id.co.blackheart.engine;
 
 import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
-import id.co.blackheart.dto.strategy.RegimeSnapshot;
-import id.co.blackheart.dto.strategy.RiskSnapshot;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.strategy.StrategyRequirements;
-import id.co.blackheart.dto.strategy.VolatilitySnapshot;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.service.strategy.StrategyHelper;
@@ -113,7 +110,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(ZERO) <= 0) return hold(spec, context, "Invalid close price");
 
-        if (isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
+        if (EngineContextHelpers.isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
 
         if (context.hasTradablePosition() && snap != null) {
             return managePosition(spec, context, md, snap, t);
@@ -146,7 +143,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                 || f.getRelativeVolume20().compareTo(t.rvolMin) < 0) return null;
         if (f.getAdx() == null || f.getAdx().compareTo(t.adxEntryMin) < 0) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal entry = close;
         BigDecimal stop = entry.subtract(atr.multiply(t.stopAtrMult));
@@ -169,8 +166,8 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                 .signalType(signalEntry(spec)).setupType(setupLongEntry(spec)).side(SIDE_LONG)
                 .reason("DCB long: donchian breakout + continuation + volume + adx")
                 .signalScore(ONE).confidenceScore(ONE)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .notionalSize(notional).stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_SINGLE).targetPositionRole(TARGET_ALL)
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr())
@@ -197,7 +194,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                 || f.getRelativeVolume20().compareTo(t.rvolMin) < 0) return null;
         if (f.getAdx() == null || f.getAdx().compareTo(t.adxEntryMin) < 0) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal entry = close;
         BigDecimal stop = entry.add(atr.multiply(t.stopAtrMult));
@@ -220,8 +217,8 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                 .signalType(signalEntry(spec)).setupType(setupShortEntry(spec)).side(SIDE_SHORT)
                 .reason("DCB short: donchian breakdown + continuation + volume + adx")
                 .signalScore(ONE).confidenceScore(ONE)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .positionSize(positionSize).stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_SINGLE).targetPositionRole(TARGET_ALL)
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr())
@@ -306,28 +303,6 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                                       : qty.setScale(8, RoundingMode.HALF_UP);
         if (allocation.compareTo(ZERO) > 0 && candidate.compareTo(allocation) > 0) return allocation;
         return candidate;
-    }
-
-    private boolean isMarketVetoed(EnrichedStrategyContext ctx) {
-        return ctx.getMarketQualitySnapshot() != null
-                && Boolean.FALSE.equals(ctx.getMarketQualitySnapshot().getTradable());
-    }
-
-    private BigDecimal resolveAtr(FeatureStore f) {
-        if (f == null || f.getAtr() == null) return null;
-        return f.getAtr().compareTo(ZERO) > 0 ? f.getAtr() : null;
-    }
-    private BigDecimal resolveRegimeScore(EnrichedStrategyContext ctx) {
-        RegimeSnapshot r = ctx.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
-    }
-    private BigDecimal resolveJumpRisk(EnrichedStrategyContext ctx) {
-        VolatilitySnapshot v = ctx.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
-    }
-    private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext ctx) {
-        RiskSnapshot r = ctx.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
     }
 
     private StrategyDecision.StrategyDecisionBuilder baseBuilder(StrategySpec spec, EnrichedStrategyContext ctx) {

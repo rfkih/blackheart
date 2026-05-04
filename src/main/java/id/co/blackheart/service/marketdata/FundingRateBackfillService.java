@@ -2,13 +2,13 @@ package id.co.blackheart.service.marketdata;
 
 import id.co.blackheart.client.FapiClient;
 import id.co.blackheart.model.FundingRate;
+import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -45,7 +45,7 @@ public class FundingRateBackfillService {
         if (startInclusive == null) {
             throw new IllegalArgumentException("startInclusive cannot be null");
         }
-        long startMs = startInclusive.toInstant(ZoneOffset.UTC).toEpochMilli();
+        long startMs = DateTimeUtil.toEpochMillisUtc(startInclusive);
         return paginateForward(symbol, startMs, "historical");
     }
 
@@ -59,7 +59,7 @@ public class FundingRateBackfillService {
     public BackfillResult ingestIncremental(String symbol) {
         return fundingRateService.latestFundingTime(symbol)
                 .map(latest -> {
-                    long startMs = latest.toInstant(ZoneOffset.UTC).toEpochMilli() + 1L;
+                    long startMs = DateTimeUtil.toEpochMillisUtc(latest) + 1L;
                     return paginateForward(symbol, startMs, "incremental");
                 })
                 .orElseGet(() -> {
@@ -92,7 +92,7 @@ public class FundingRateBackfillService {
             // the next page strictly forward and avoids infinite loops if a
             // page boundary lands on a duplicate fundingTime.
             LocalDateTime lastFundingTime = page.get(page.size() - 1).getFundingTime();
-            cursor = lastFundingTime.toInstant(ZoneOffset.UTC).toEpochMilli() + 1L;
+            cursor = DateTimeUtil.toEpochMillisUtc(lastFundingTime) + 1L;
 
             if (pages == HARD_PAGE_CAP) {
                 truncated = true;

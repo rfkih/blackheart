@@ -2,11 +2,8 @@ package id.co.blackheart.engine;
 
 import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
-import id.co.blackheart.dto.strategy.RegimeSnapshot;
-import id.co.blackheart.dto.strategy.RiskSnapshot;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.strategy.StrategyRequirements;
-import id.co.blackheart.dto.strategy.VolatilitySnapshot;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.service.strategy.StrategyHelper;
@@ -125,7 +122,7 @@ public class TrendPullbackEngine implements StrategyEngine {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(ZERO) <= 0) return hold(spec, context, "Invalid close price");
 
-        if (isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
+        if (EngineContextHelpers.isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
 
         if (context.hasTradablePosition() && snap != null) {
             return managePosition(spec, context, md, f, snap, t);
@@ -151,7 +148,7 @@ public class TrendPullbackEngine implements StrategyEngine {
         if (!isAdxBandOk(f, t)) return null;
         if (!isLongDiSpreadOk(f, t)) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal ema20 = f.getEma20();
         if (ema20 == null) return null;
@@ -196,8 +193,8 @@ public class TrendPullbackEngine implements StrategyEngine {
                 .signalType(signalReclaim(spec)).setupType(setupLongReclaim(spec)).side(SIDE_LONG)
                 .reason("TPR long: pullback to EMA20 reclaimed in confirmed uptrend")
                 .signalScore(score).confidenceScore(score)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .notionalSize(notional)
                 .stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_TP1_RUNNER).targetPositionRole(TARGET_ALL)
@@ -217,7 +214,7 @@ public class TrendPullbackEngine implements StrategyEngine {
         if (!isAdxBandOk(f, t)) return null;
         if (!isShortDiSpreadOk(f, t)) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal ema20 = f.getEma20();
         if (ema20 == null) return null;
@@ -265,8 +262,8 @@ public class TrendPullbackEngine implements StrategyEngine {
                 .signalType(signalReclaim(spec)).setupType(setupShortReclaim(spec)).side(SIDE_SHORT)
                 .reason("TPR short: rally to EMA20 rejected in confirmed downtrend")
                 .signalScore(score).confidenceScore(score)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .positionSize(positionSize)
                 .stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_TP1_RUNNER).targetPositionRole(TARGET_ALL)
@@ -323,7 +320,7 @@ public class TrendPullbackEngine implements StrategyEngine {
         }
 
         // Runner phase trail
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return hold(spec, ctx, "TPR runner: no ATR");
         BigDecimal candidate = null;
 
@@ -471,30 +468,6 @@ public class TrendPullbackEngine implements StrategyEngine {
     private boolean isWithinBiasAdx(BigDecimal adx, Tuning t) {
         if (adx == null) return false;
         return adx.compareTo(t.biasAdxMin) >= 0 && adx.compareTo(t.biasAdxMax) <= 0;
-    }
-
-    private boolean isMarketVetoed(EnrichedStrategyContext ctx) {
-        return ctx.getMarketQualitySnapshot() != null
-                && Boolean.FALSE.equals(ctx.getMarketQualitySnapshot().getTradable());
-    }
-
-    // ── Resolvers ────────────────────────────────────────────────────────────
-
-    private BigDecimal resolveAtr(FeatureStore f) {
-        if (f == null || f.getAtr() == null) return null;
-        return f.getAtr().compareTo(ZERO) > 0 ? f.getAtr() : null;
-    }
-    private BigDecimal resolveRegimeScore(EnrichedStrategyContext ctx) {
-        RegimeSnapshot r = ctx.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
-    }
-    private BigDecimal resolveJumpRisk(EnrichedStrategyContext ctx) {
-        VolatilitySnapshot v = ctx.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
-    }
-    private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext ctx) {
-        RiskSnapshot r = ctx.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
     }
 
     // ── Builders ─────────────────────────────────────────────────────────────

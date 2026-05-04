@@ -2,11 +2,8 @@ package id.co.blackheart.engine;
 
 import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.dto.strategy.PositionSnapshot;
-import id.co.blackheart.dto.strategy.RegimeSnapshot;
-import id.co.blackheart.dto.strategy.RiskSnapshot;
 import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.strategy.StrategyRequirements;
-import id.co.blackheart.dto.strategy.VolatilitySnapshot;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.service.strategy.StrategyHelper;
@@ -110,7 +107,7 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(ZERO) <= 0) return hold(spec, context, "Invalid close price");
 
-        if (isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
+        if (EngineContextHelpers.isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
 
         if (context.hasTradablePosition() && snap != null) {
             return managePosition(spec, context, md, snap, t);
@@ -141,7 +138,7 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
         if (close.compareTo(prevClose) <= 0) return null;
         if (f.getRsi() == null || f.getRsi().compareTo(t.rsiOversoldMax) > 0) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal entry = close;
         BigDecimal stop = lowerBand.subtract(atr.multiply(t.stopAtrBuffer));
@@ -167,8 +164,8 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
                 .signalType(signalReversal(spec)).setupType(setupLongFade(spec)).side(SIDE_LONG)
                 .reason("MRO long: lower BB touch + reversal candle + RSI oversold")
                 .signalScore(ONE).confidenceScore(ONE)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .notionalSize(notional).stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_SINGLE).targetPositionRole(TARGET_ALL)
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr()).entryRsi(f.getRsi())
@@ -193,7 +190,7 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
         if (close.compareTo(prevClose) >= 0) return null;
         if (f.getRsi() == null || f.getRsi().compareTo(t.rsiOverboughtMin) < 0) return null;
 
-        BigDecimal atr = resolveAtr(f);
+        BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         if (atr == null) return null;
         BigDecimal entry = close;
         BigDecimal stop = upperBand.add(atr.multiply(t.stopAtrBuffer));
@@ -219,8 +216,8 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
                 .signalType(signalReversal(spec)).setupType(setupShortFade(spec)).side(SIDE_SHORT)
                 .reason("MRO short: upper BB touch + reversal candle + RSI overbought")
                 .signalScore(ONE).confidenceScore(ONE)
-                .regimeScore(resolveRegimeScore(ctx)).riskMultiplier(resolveRiskMultiplier(ctx))
-                .jumpRiskScore(resolveJumpRisk(ctx))
+                .regimeScore(EngineContextHelpers.resolveRegimeScore(ctx)).riskMultiplier(EngineContextHelpers.resolveRiskMultiplier(ctx))
+                .jumpRiskScore(EngineContextHelpers.resolveJumpRisk(ctx))
                 .positionSize(positionSize).stopLossPrice(stop).takeProfitPrice1(tp1)
                 .exitStructure(EXIT_STRUCTURE_SINGLE).targetPositionRole(TARGET_ALL)
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr()).entryRsi(f.getRsi())
@@ -303,33 +300,6 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
                                       : qty.setScale(8, RoundingMode.HALF_UP);
         if (allocation.compareTo(ZERO) > 0 && candidate.compareTo(allocation) > 0) return allocation;
         return candidate;
-    }
-
-    private boolean isMarketVetoed(EnrichedStrategyContext ctx) {
-        return ctx.getMarketQualitySnapshot() != null
-                && Boolean.FALSE.equals(ctx.getMarketQualitySnapshot().getTradable());
-    }
-    /**
-     * Returns ATR if present and positive; null otherwise. Callers refuse the
-     * entry on null — falling back to a fixed constant (the BBR ancestor used
-     * {@code BigDecimal.ONE}) silently produces nonsense stop distances on
-     * high-priced instruments and unbounded sizing.
-     */
-    private BigDecimal resolveAtr(FeatureStore f) {
-        if (f == null || f.getAtr() == null) return null;
-        return f.getAtr().compareTo(ZERO) > 0 ? f.getAtr() : null;
-    }
-    private BigDecimal resolveRegimeScore(EnrichedStrategyContext ctx) {
-        RegimeSnapshot r = ctx.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
-    }
-    private BigDecimal resolveJumpRisk(EnrichedStrategyContext ctx) {
-        VolatilitySnapshot v = ctx.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
-    }
-    private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext ctx) {
-        RiskSnapshot r = ctx.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
     }
 
     private StrategyDecision.StrategyDecisionBuilder baseBuilder(StrategySpec spec, EnrichedStrategyContext ctx) {
