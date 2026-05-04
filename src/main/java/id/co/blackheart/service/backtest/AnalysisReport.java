@@ -1,4 +1,4 @@
-package id.co.blackheart.service.research;
+package id.co.blackheart.service.backtest;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;

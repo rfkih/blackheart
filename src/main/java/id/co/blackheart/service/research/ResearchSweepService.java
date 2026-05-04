@@ -7,13 +7,13 @@ import id.co.blackheart.dto.request.BacktestRunRequest;
 import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
+import id.co.blackheart.service.backtest.BacktestAnalysisService;
 import id.co.blackheart.service.backtest.BacktestService;
 import id.co.blackheart.service.statistics.SharpeStatistics;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -69,13 +69,10 @@ import org.springframework.data.domain.Pageable;
 @Service
 public class ResearchSweepService {
 
-    /** Constructor with explicit @Lazy on the analyzer to break a potential
-     *  circular dependency (analyzer is part of the same package, but only
-     *  invoked from the sweep thread, well after context startup). */
     public ResearchSweepService(
             BacktestService backtestService,
             BacktestRunRepository runRepository,
-            @Lazy BacktestAnalysisService analysisService,
+            BacktestAnalysisService analysisService,
             ObjectMapper objectMapper
     ) {
         this.backtestService = backtestService;

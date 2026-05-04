@@ -1,7 +1,7 @@
 package id.co.blackheart.service.marketdata;
 
 import id.co.blackheart.model.FundingRate;
-import id.co.blackheart.service.marketdata.FundingRateService.FundingFeatureSnapshot;
+import id.co.blackheart.service.funding.FundingRateService.FundingFeatureSnapshot;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;

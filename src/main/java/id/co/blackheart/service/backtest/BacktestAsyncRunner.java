@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.backtest.BacktestExecutionSummary;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
-import id.co.blackheart.service.research.BacktestAnalysisService;
 import id.co.blackheart.service.strategy.BacktestParamOverrideContext;
 import id.co.blackheart.service.strategy.BacktestParamPresetContext;
 import jakarta.persistence.EntityNotFoundException;
@@ -125,7 +124,10 @@ public class BacktestAsyncRunner {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markCompleted(UUID runId, BacktestExecutionSummary summary) {
         BacktestRun run = runRepository.findById(runId).orElse(null);
-        if (run == null) return;
+        if (run == null) {
+            log.warn("markCompleted: backtest run not found | runId={}", runId);
+            return;
+        }
         run.setStatus(STATUS_COMPLETED);
         run.setProgressPercent(100);
         if (summary != null) {
@@ -145,7 +147,10 @@ public class BacktestAsyncRunner {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(UUID runId, Throwable cause) {
         BacktestRun run = runRepository.findById(runId).orElse(null);
-        if (run == null) return;
+        if (run == null) {
+            log.warn("markFailed: backtest run not found | runId={}", runId);
+            return;
+        }
         run.setStatus(STATUS_FAILED);
         // Keep the last reported percent — useful to see where it died.
         String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();

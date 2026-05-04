@@ -35,8 +35,7 @@ public class JsonMapConverter implements AttributeConverter<Map<String, Object>,
         try {
             return MAPPER.writeValueAsString(attribute);
         } catch (Exception e) {
-            log.error("Failed to serialize param map to JSON: {}", e.getMessage());
-            return "{}";
+            throw new IllegalStateException("Failed to serialize param map to JSON — refusing to silently drop data", e);
         }
     }
 
@@ -48,7 +47,7 @@ public class JsonMapConverter implements AttributeConverter<Map<String, Object>,
         try {
             return MAPPER.readValue(dbData, MAP_TYPE);
         } catch (Exception e) {
-            log.warn("Failed to deserialize JSON param map from DB, returning empty: {}", e.getMessage());
+            log.error("Failed to deserialize JSON param map from DB | data='{}' — returning empty map", dbData, e);
             return new HashMap<>();
         }
     }

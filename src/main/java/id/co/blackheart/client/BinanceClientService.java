@@ -139,7 +139,7 @@ public class BinanceClientService {
                 // Symbol genuinely doesn't exist on Binance — caller will
                 // negative-cache it.
             } catch (Exception e) {
-                log.debug("Per-symbol price fetch failed for {}", symbol);
+                log.warn("Per-symbol price fetch failed | symbol={}", symbol, e);
             }
         }
         return result;

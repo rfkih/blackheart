@@ -1,4 +1,4 @@
-package id.co.blackheart.service.marketdata;
+package id.co.blackheart.service.funding;
 
 import id.co.blackheart.model.FundingRate;
 import id.co.blackheart.repository.FundingRateRepository;

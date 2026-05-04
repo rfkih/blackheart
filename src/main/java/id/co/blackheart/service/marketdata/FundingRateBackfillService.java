@@ -1,6 +1,7 @@
 package id.co.blackheart.service.marketdata;
 
 import id.co.blackheart.client.FapiClient;
+import id.co.blackheart.service.funding.FundingRateService;
 import id.co.blackheart.model.FundingRate;
 import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
