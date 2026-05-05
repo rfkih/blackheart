@@ -35,10 +35,10 @@ public class BacktestState {
      * {@link #countActiveTrades()}, {@link #addActiveTrade},
      * {@link #removeActiveTrade}.
      *
-     * <p>Phase B1 invariant: when {@link #activeTradesByStrategy} has
-     * entries, {@code activeTrade} mirrors the most recently opened
-     * trade so legacy code paths see <i>some</i> active trade rather
-     * than null. Both APIs stay consistent across all mutations.
+     * <p>Invariant: when {@link #activeTradesByStrategy} has entries,
+     * {@code activeTrade} mirrors the most recently opened trade so
+     * legacy code paths see <i>some</i> active trade rather than null.
+     * Both APIs stay consistent across all mutations.
      */
     private BacktestTrade activeTrade;
 
@@ -49,22 +49,19 @@ public class BacktestState {
     private List<BacktestTradePosition> activeTradePositions;
 
     /**
-     * Phase B1 — multi-trade state. Map of strategy code → that
-     * strategy's open parent trade. Empty when no strategies have
-     * positions; size is the value compared against
+     * Multi-trade state. Map of strategy code → that strategy's open parent
+     * trade. Empty when no strategies have positions; size is compared against
      * {@code BacktestRun.maxConcurrentStrategies} at entry-gate time.
      *
-     * <p>One slot per strategy code is the right granularity for our
-     * current orchestrator: when a strategy already owns an open trade,
-     * the orchestrator routes follow-up signals only to that strategy's
-     * executor. So multi-trade means "different strategies hold different
-     * trades concurrently", not "one strategy holds N trades".
+     * <p>One slot per strategy code: when a strategy already owns an open
+     * trade, the orchestrator routes follow-up signals only to that executor.
+     * Multi-trade means different strategies hold different trades
+     * concurrently — not one strategy holding N trades.
      *
-     * <p>Backed by {@link java.util.LinkedHashMap} so iteration order is
-     * insertion order — the orchestrator's cap-aware fan-out and the
-     * legacy-mirror refresh in {@link #removeActiveTrade} both iterate
-     * this map, and a backtest with the same inputs must produce
-     * bit-identical outputs across runs (HashMap order is undefined).
+     * <p>Backed by {@link java.util.LinkedHashMap} (insertion order) so the
+     * cap-aware fan-out and legacy-mirror refresh both iterate consistently.
+     * HashMap order is undefined; bit-identical outputs across runs require
+     * stable iteration.
      */
     @Builder.Default
     private java.util.Map<String, BacktestTrade> activeTradesByStrategy = new java.util.LinkedHashMap<>();
@@ -104,20 +101,18 @@ public class BacktestState {
     private PendingEntry pendingEntry;
 
     /**
-     * Phase B1 — per-strategy pending entries. With multiple strategies in
-     * one run, two strategies can both signal entries on the same monitor
-     * bar; each gets its own queued slot so the second isn't silently
-     * dropped by the legacy single-slot guard. Filled on the next bar's open
-     * price (look-ahead-free) by {@code BacktestTradeExecutorService.fillPendingEntry}.
+     * Per-strategy pending entries. With multiple strategies in one run, two
+     * can signal entries on the same monitor bar; each gets its own slot so
+     * neither is silently dropped. Filled on the next bar's open price
+     * (look-ahead-free) by {@code BacktestTradeExecutorService.fillPendingEntry}.
      */
     @Builder.Default
     private java.util.Map<String, PendingEntry> pendingEntriesByStrategy = new java.util.LinkedHashMap<>();
 
     /**
-     * Deferred entry order. {@code interval} carries the strategy's
-     * resolved interval (per Phase B2 multi-interval routing) so the trade
-     * row gets stamped with the strategy's actual timeframe, not the run's
-     * primary interval. Null/blank falls back to the run-level interval.
+     * Deferred entry order. {@code interval} carries the strategy's resolved
+     * timeframe so the trade row gets stamped correctly — null/blank falls
+     * back to the run-level interval.
      */
     public record PendingEntry(
             StrategyDecision decision,
@@ -143,7 +138,7 @@ public class BacktestState {
                 .build();
     }
 
-    // ── Multi-trade API (Phase B1) ──────────────────────────────────────
+    // ── Multi-trade API ──────────────────────────────────────────────────
 
     /**
      * Canonical key form for the multi-trade maps. Strategy codes flow in

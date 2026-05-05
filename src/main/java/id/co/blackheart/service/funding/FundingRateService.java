@@ -19,17 +19,13 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Phase 4 step 1 — service skeleton for funding-rate ingestion + read.
- *
- * <p>This skeleton owns persistence and lookup; the historical backfill
- * (Phase 4.2) and the 8-hourly live scheduler (Phase 4.8) call
- * {@link #upsertAll(List)} after fetching from Binance fapi. The
- * BacktestFundingCostService per-bar refactor (Phase 4.6) calls
+ * Owns funding-rate persistence and lookup. Historical backfill and the
+ * 8-hourly live scheduler call {@link #upsertAll(List)} after fetching from
+ * Binance fapi. Per-bar backtest cost calculation calls
  * {@link #findRateAt(String, LocalDateTime)}.
  *
- * <p>Live HTTP fetching against {@code fapi.binance.com/fapi/v1/fundingRate}
- * lives in a separate {@code FapiClient} (Phase 4.2) so this service stays
- * cleanly persistence-only and unit-testable.
+ * <p>Live HTTP fetching lives in {@code FapiClient} so this service stays
+ * persistence-only and unit-testable.
  */
 @Service
 @RequiredArgsConstructor
@@ -105,7 +101,7 @@ public class FundingRateService {
      * Latest funding rate for {@code symbol} whose {@code fundingTime} is at
      * or before {@code boundary}. Returns {@link Optional#empty()} when no
      * funding history exists yet for the symbol — the per-bar caller treats
-     * empty as "no funding cost", same as the V22 stub when rate=0.
+     * empty as "no funding cost".
      */
     public Optional<FundingRate> findRateAt(String symbol, LocalDateTime boundary) {
         if (symbol == null || boundary == null) return Optional.empty();

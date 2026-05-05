@@ -116,10 +116,9 @@ public class BacktestTradeExecutorService {
         if (state.hasActiveTradeFor(strategyCode) || state.hasPendingEntryFor(strategyCode)) {
             return;
         }
-        // Capture the strategy's resolved interval (Phase B2) so the trade
-        // row gets stamped with THIS strategy's timeframe, not the run's
-        // primary. context.getInterval() is set by buildAndEnrichContext
-        // to ic.interval(), which is the per-strategy resolved value.
+        // Capture the strategy's resolved interval so the trade row gets
+        // stamped with its actual timeframe. context.getInterval() is set by
+        // buildAndEnrichContext to ic.interval(), the per-strategy value.
         String resolvedInterval = context != null ? context.getInterval() : null;
         state.setPendingEntryFor(strategyCode,
                 new BacktestState.PendingEntry(decision, side,
@@ -201,10 +200,8 @@ public class BacktestTradeExecutorService {
             BigDecimal rawEntryPrice,
             LocalDateTime entryTime
     ) {
-        // Phase B2 — strategy may have fired on a different timeframe than
-        // the run's primary interval. Prefer the resolved per-strategy
-        // value; fall back to the run's primary so legacy / single-interval
-        // runs keep their existing behaviour.
+        // Prefer the strategy's resolved interval over the run's primary so
+        // multi-timeframe trades are stamped with the correct timeframe.
         String tradeInterval = (resolvedInterval != null && !resolvedInterval.isBlank())
                 ? resolvedInterval
                 : backtestRun.getInterval();
@@ -395,10 +392,10 @@ public class BacktestTradeExecutorService {
         }
 
         state.setCashBalance(safe(state.getCashBalance()).subtract(totalCashRequired));
-        // Phase B1 — register on the multi-trade map keyed by strategy code
-        // so the orchestrator's concurrent-strategy cap can enforce. Method
-        // also updates the legacy single-trade slot for back-compat with
-        // the 30+ call sites that read state.activeTrade directly.
+        // Register on the multi-trade map keyed by strategy code so the
+        // orchestrator's concurrent-strategy cap can enforce. Also updates
+        // the legacy single-trade slot for the call sites that read
+        // state.activeTrade directly.
         String ownerCode = trade.getStrategyName() != null ? trade.getStrategyName() : "UNKNOWN";
         state.addActiveTrade(ownerCode, trade, new ArrayList<>(positions));
 
@@ -845,9 +842,9 @@ public class BacktestTradeExecutorService {
             state.getCompletedTrades().add(trade);
             state.getCompletedTradePositions().addAll(new ArrayList<>(allPositions));
 
-            // Phase B1 — clear the multi-trade slot (also refreshes the
-            // legacy single-trade fields). When other strategies still
-            // have open trades, the legacy mirror points at one of them.
+            // Clear the multi-trade slot (also refreshes legacy single-trade
+            // fields). When other strategies still have open trades, the
+            // legacy mirror points at one of them.
             String ownerCode = trade.getStrategyName() != null ? trade.getStrategyName() : "UNKNOWN";
             state.removeActiveTrade(ownerCode);
         } else if (openCount < allPositions.size()) {

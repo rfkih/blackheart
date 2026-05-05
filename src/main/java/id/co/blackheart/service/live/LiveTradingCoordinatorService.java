@@ -61,10 +61,10 @@ public class LiveTradingCoordinatorService {
         String strategyCode = accountStrategy.getStrategyCode();
 
         try {
-            // V40 — definition-scope kill-switch is enforced at the EXECUTOR level
+            // Definition-scope kill-switch is enforced at the EXECUTOR level
             // (LiveTradingDecisionExecutorService), not here. The executor gates
             // OPEN_LONG/OPEN_SHORT when enabled=false; CLOSE_*/UPDATE still fall
-            // through so open positions are not stranded. See Bug 1 audit note.
+            // through so open positions are not stranded.
             StrategyExecutor executor = strategyExecutorFactory.get(strategyCode);
             StrategyRequirements requirements = executor.getRequirements();
 

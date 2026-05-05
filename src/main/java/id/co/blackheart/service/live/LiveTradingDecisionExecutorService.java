@@ -95,59 +95,41 @@ public class LiveTradingDecisionExecutorService {
                     return;
                 }
 
-                // Phase 2c — capture decision intent BEFORE vol-targeting
-                // mutates. The trade row will store these so realized P&L
-                // can be decomposed into signal-alpha / exec-drift /
+                // Capture intent BEFORE vol-targeting mutates, so realized P&L
+                // can later be decomposed into signal-alpha / exec-drift /
                 // sizing-residual at close.
                 captureIntent(side, decision, context);
 
-                // Phase 2d — Kelly/bankroll sizing. Applies a PSR-discounted
-                // half-Kelly multiplier derived from recent qualifying backtest
-                // runs. Off by default (kellySizingEnabled=false); when off
-                // the service returns 1.0 and the size is unchanged.
-                // Pass the UUID alongside the entity so the service can fall
-                // back to a DB lookup when context.getAccountStrategy() is null
-                // (decision.accountStrategyId can be set without context loading
-                // the entity in some legacy code paths).
+                // PSR-discounted half-Kelly multiplier from recent qualifying
+                // backtest runs. Off by default; when off returns 1.0.
+                // UUID passed alongside entity so the service can fall back to
+                // a DB lookup when context.getAccountStrategy() is null.
                 applyKellySizing(context.getAccountStrategy(), accountStrategyId, side, decision);
 
-                // Phase 2b — book vol-targeting. Scales the strategy's
-                // computed size so realized vol hits target and correlated
-                // bets shrink. Off by default per Account; when off the
-                // service returns the size unchanged.
+                // Scales computed size so realized vol hits target and
+                // correlated bets shrink. Off by default per Account.
                 applyVolTargeting(accountStrategyId, side, decision);
             }
         }
 
-        // Promotion-pipeline guardrail (V15+, V40 widened). If EITHER scope
-        // says paper (definition.simulated OR account_strategy.simulated),
-        // the strategy is in PAPER_TRADE state — record OPEN intents into
-        // paper_trade_run and short-circuit BEFORE any real-order code path
-        // runs. Fail-safe: if either says paper, paper wins.
+        // Paper/simulated gate — if EITHER scope says simulated
+        // (definition.simulated OR account_strategy.simulated), record the
+        // intent into paper_trade_run and short-circuit before real-order code.
+        // Fail-safe: either scope says paper → paper wins.
         //
-        // CRITICAL: only OPEN_LONG / OPEN_SHORT are diverted. CLOSE_*
-        // and UPDATE_POSITION_MANAGEMENT MUST always fall through to real
-        // execution. Otherwise an emergency demote (PROMOTED → PAPER_TRADE)
-        // on a strategy with open positions would strand them — the close
-        // signal would be recorded as paper trade and the live position
-        // would never actually close. This is the V15 audit fix
-        // (Bug 1, identified 2026-04-28). V40 widens the predicate ONLY,
-        // not the scope — CLOSE_* still fall through.
-        //
-        // The implication for promotion workflow: an operator demoting a
-        // PROMOTED strategy that has open positions blocks NEW entries
-        // immediately, but real positions wind down via the strategy's
-        // own exit logic (TP/SL/trailing). Force-close via TradeController
-        // if you need to flatten faster.
+        // CRITICAL: only OPEN_LONG / OPEN_SHORT are diverted. CLOSE_* and
+        // UPDATE_POSITION_MANAGEMENT MUST always fall through to real execution.
+        // If an emergency demote stranded a live position, its close signal
+        // would be recorded as a paper trade and the real position would never
+        // close. An operator demoting a promoted strategy with open positions
+        // blocks new entries immediately; existing legs wind down via the
+        // strategy's own exit logic. Use TradeController to force-flatten faster.
         boolean isOpenAction =
                 decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
                         || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
         if (isOpenAction && context.getAccountStrategy() != null) {
             boolean accountSimulated =
                     Boolean.TRUE.equals(context.getAccountStrategy().getSimulated());
-            // Single definition lookup covers both the enabled kill-switch and
-            // the simulated gate — avoids the double findByStrategyCode that the
-            // prior coordinator call (getIfDefinitionEnabled) used to issue.
             var defOpt = strategyDefinitionRepository.findByStrategyCode(decision.getStrategyCode());
             boolean definitionDisabled = defOpt
                     .map(d -> Boolean.FALSE.equals(d.getEnabled()))
@@ -157,8 +139,7 @@ public class LiveTradingDecisionExecutorService {
                     .orElse(false);
 
             // Kill-switch: definition disabled → drop entry silently (no paper
-            // trade either). CLOSE_*/UPDATE bypass this block entirely and always
-            // fall through to real execution — preserving the V15 Bug 1 invariant.
+            // trade either). CLOSE_*/UPDATE bypass this block entirely.
             if (definitionDisabled) {
                 log.info("[KillSwitch] {} {} — definition disabled, dropping entry signal",
                         decision.getStrategyCode(), decision.getDecisionType());
@@ -417,11 +398,10 @@ public class LiveTradingDecisionExecutorService {
     }
 
     /**
-     * Phase 2c — stash decision intent on the decision so TradeOpenService
-     * can persist it. Called BEFORE {@link #applyVolTargeting} so the size
-     * captured here is the strategy's pre-targeting intent, not the scaled
-     * result. Idempotent — strategies that already set intended* are left
-     * alone (which lets future strategy implementations override the proxy).
+     * Stash decision intent on the decision so TradeOpenService can persist it.
+     * Called BEFORE {@link #applyVolTargeting} so the size captured here is the
+     * strategy's pre-targeting intent, not the scaled result. Idempotent —
+     * strategies that already set intended* are left alone.
      */
     private void captureIntent(String side, StrategyDecision decision, EnrichedStrategyContext context) {
         if (decision.getIntendedSize() == null) {

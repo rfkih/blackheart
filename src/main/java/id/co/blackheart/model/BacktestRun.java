@@ -286,11 +286,10 @@ public class BacktestRun extends BaseEntity {
     private Map<String, BigDecimal> strategyAllocations;
 
     /**
-     * Phase B2 — per-strategy interval map for multi-timeframe runs.
-     * Key = uppercase strategy code, value = interval string (e.g. "15m").
-     * When non-null, the coordinator routes each strategy's executor only
-     * to its own interval's bar closes. When null, all strategies share
-     * the run's primary {@link #interval}.
+     * Per-strategy interval map for multi-timeframe runs. Key = uppercase
+     * strategy code, value = interval string (e.g. "15m"). When non-null,
+     * the coordinator routes each strategy only to its own interval's bar
+     * closes. Null = all strategies share the run's primary {@link #interval}.
      */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "strategy_intervals", columnDefinition = "jsonb")

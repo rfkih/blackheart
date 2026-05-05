@@ -84,7 +84,7 @@ public class StrategyExecutorFactory {
     }
 
     /**
-     * V40 — definition-scope kill-switch. Returns empty when a
+     * Definition-scope kill-switch. Returns empty when a
      * {@code strategy_definition} row exists for {@code strategyCode} with
      * {@code enabled=false}; otherwise returns the resolved executor.
      *

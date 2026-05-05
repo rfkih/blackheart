@@ -13,15 +13,14 @@ import java.time.ZoneId;
 import java.util.List;
 
 /**
- * Phase 4 step 2 — historical + incremental funding-rate ingestion.
+ * Historical and incremental funding-rate ingestion.
  *
  * <p>One-shot historical backfill: {@link #backfillHistorical(String,
  * LocalDateTime)} loops forward from the supplied start instant in 1000-row
- * pages. Incremental ingest (Phase 4.8 scheduler): {@link
- * #ingestIncremental(String)} starts from {@code latestFundingTime + 1ms} and
- * pulls anything new. Both call paths reuse the same idempotent
- * {@link FundingRateService#upsertAll(List)} sink, so re-running the backfill
- * after the scheduler has run (or vice versa) is safe.
+ * pages. Incremental ingest: {@link #ingestIncremental(String)} starts from
+ * {@code latestFundingTime + 1ms} and pulls anything new. Both call paths
+ * reuse the same idempotent {@link FundingRateService#upsertAll(List)} sink,
+ * so re-running the backfill after the scheduler has run (or vice versa) is safe.
  */
 @Service
 @RequiredArgsConstructor

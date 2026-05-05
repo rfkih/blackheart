@@ -148,10 +148,10 @@ public class BacktestCoordinatorService {
         // one whose biasInterval was picked first by mergeRequirements.
         Map<String, BiasData> biasByStrategy = preloadBiasDataPerStrategy(backtestRun, executors);
 
-        // Phase B2 — per-strategy interval contexts. When the run was
-        // submitted with a strategyIntervals map, each strategy fires only
-        // on its own timeframe's bar closes. Otherwise every strategy
-        // shares the primary interval context (legacy behaviour).
+        // Per-strategy interval contexts. When the run was submitted with a
+        // strategyIntervals map, each strategy fires only on its own
+        // timeframe's bar closes. Otherwise every strategy shares the primary
+        // interval context.
         Map<String, IntervalContext> perStrategyContext = buildPerStrategyContexts(
                 backtestRun, executors, strategyInterval,
                 strategyCandleByEndTime, strategyFeatureByStartTime, sortedStrategyFeatures);
@@ -232,10 +232,10 @@ public class BacktestCoordinatorService {
             BacktestState state,
             MarketData monitorCandle
     ) {
-        // Phase B2 — flatten positions across ALL active trades so every
-        // open leg gets stop-loss / TP checks regardless of which strategy
-        // owns it. Falls back to the legacy single-slot iteration when no
-        // multi-trade state has been registered.
+        // Flatten positions across ALL active trades so every open leg gets
+        // stop-loss / TP checks regardless of which strategy owns it. Falls
+        // back to the legacy single-slot iteration when no multi-trade state
+        // has been registered.
         java.util.List<BacktestTradePosition> allActivePositions = new java.util.ArrayList<>();
         if (state.getActiveTradePositionsByStrategy() != null
                 && !state.getActiveTradePositionsByStrategy().isEmpty()) {
@@ -288,13 +288,6 @@ public class BacktestCoordinatorService {
     }
 
     /**
-     * Phase B2 — multi-interval routing. Each strategy is dispatched only
-     * when its own timeframe's bar closes at the current monitor tick.
-     * Single-interval runs degenerate to the legacy "all strategies share
-     * one bar" behaviour because every strategy's IntervalContext points
-     * at the same shared maps.
-     */
-    /**
      * Multi-strategy orchestration on every monitor tick. The two phases
      * (existing-owners management, then per-interval entry fan-out) need to
      * share the same per-strategy state (snapshot, count, executionMetadata,
@@ -319,11 +312,11 @@ public class BacktestCoordinatorService {
             Map<String, IntervalContext> perStrategyContext,
             Map<String, BigDecimal> allocationByStrategy
     ) {
-        // Phase B1/B2 — snapshot/count/hasOpenTrade are PER-STRATEGY now
-        // (each strategy sees only its own positions). Each loop iteration
-        // builds a FRESH executionMetadata map (Fix H) — sharing one across
-        // strategies leaks the previous strategy's hasOpenTrade flag if any
-        // downstream code stashes the map for later use.
+        // Each strategy sees only its own positions, so snapshot/count/
+        // hasOpenTrade are per-strategy. Each loop iteration builds a FRESH
+        // executionMetadata map — sharing one across strategies leaks the
+        // previous strategy's hasOpenTrade flag if any downstream code
+        // stashes the map for later use.
 
         if (executors.size() == 1) {
             handleSingleStrategyStep(backtestRun, state, monitorCandle,
@@ -332,7 +325,7 @@ public class BacktestCoordinatorService {
             return;
         }
 
-        // ── Multi-strategy orchestrator (Phase B1 + B2 multi-interval) ──
+        // ── Multi-strategy orchestrator ─────────────────────────────────
         //
         // Cap semantics match LiveOrchestratorCoordinatorService: at most one
         // active trade (or queued pending entry) per (account, interval)
@@ -554,12 +547,10 @@ public class BacktestCoordinatorService {
                 backtestRun.getAsset(), interval,
                 backtestRun.getStartTime(), backtestRun.getEndTime());
 
-        // Phase B2 — fail loud, not silent. The single-strategy path throws
-        // when its primary interval has no data; the multi-interval path
-        // must do the same so a strategy configured on (e.g.) 30m with no
-        // 30m candles in the window doesn't silently produce zero trades.
-        // Also catches the "interval coarser than the run window" case
-        // (1d strategy on a 6h backtest) — same symptom, same diagnosis.
+        // Fail loud when an interval has no candles. A strategy configured on
+        // (e.g.) 30m with no 30m data in the window must throw, not silently
+        // produce zero trades. Same applies to intervals coarser than the run
+        // window (e.g. 1d strategy on a 6h backtest).
         if (candles == null || candles.isEmpty()) {
             throw new IllegalArgumentException(
                     "No strategy market data found for symbol=" + backtestRun.getAsset()
@@ -828,11 +819,10 @@ public class BacktestCoordinatorService {
     }
 
     /**
-     * Phase B1/B2 — multi-trade-aware snapshot. Each strategy sees ONLY its
-     * own positions, so {@code context.hasOpenPosition} reflects the calling
-     * strategy's state, not whichever trade was most recently opened across
-     * the cap. Falls back to the legacy mirror when the per-strategy map is
-     * empty (backwards compatibility for single-strategy runs).
+     * Multi-trade-aware snapshot. Each strategy sees ONLY its own positions,
+     * so {@code context.hasOpenPosition} reflects the calling strategy's
+     * state, not whichever trade was most recently opened across the cap.
+     * Falls back to the single-trade mirror when the per-strategy map is empty.
      */
     private PositionSnapshot buildPositionSnapshotFor(BacktestState state, String strategyCode) {
         BacktestTrade trade = strategyTrade(state, strategyCode);
@@ -1086,18 +1076,17 @@ public class BacktestCoordinatorService {
                 ? backtestRun.getStrategyAccountStrategyIds().get(strategyCode)
                 : backtestRun.getAccountStrategyId();
 
-        // Phase B2 — strategies on a per-strategy interval need the synthetic
-        // AccountStrategy to advertise THAT interval, not the run's primary.
-        // Anything reading context.accountStrategy.intervalName for downstream
-        // queries (FeatureStore lookups, regime maths, log labels) would
-        // otherwise see the wrong timeframe. Falls back to the primary when
-        // no per-strategy override was resolved.
+        // The synthetic AccountStrategy must advertise the strategy's own
+        // interval, not the run's primary. Downstream queries (FeatureStore
+        // lookups, regime maths, log labels) read intervalName from
+        // context.accountStrategy — wrong timeframe here means wrong data.
+        // Falls back to the primary when no per-strategy override is set.
         String interval = (resolvedInterval != null && !resolvedInterval.isBlank())
                 ? resolvedInterval
                 : backtestRun.getInterval();
 
-        // Phase A — capital allocation pre-resolved at run start (see
-        // resolveAllocationsForRun). Map-only lookup on the hot path.
+        // Capital allocation pre-resolved at run start (see
+        // resolveAllocationsForRun) — map-only lookup on the hot path.
         BigDecimal allocation = (allocationByStrategy != null && strategyCode != null
                 && allocationByStrategy.containsKey(strategyCode))
                 ? allocationByStrategy.get(strategyCode)
@@ -1182,10 +1171,9 @@ public class BacktestCoordinatorService {
             return;
         }
 
-        // Phase B1/B2 — flatten positions across ALL active trades so every
-        // strategy's still-open legs get force-closed at end-of-backtest.
-        // Falls back to the legacy single-slot iteration when no multi-trade
-        // state has been registered (single-strategy runs).
+        // Flatten positions across ALL active trades so every strategy's
+        // still-open legs get force-closed at end-of-backtest. Falls back to
+        // the single-slot iteration when no multi-trade state is registered.
         List<BacktestTradePosition> allPositions = new ArrayList<>();
         if (state.getActiveTradePositionsByStrategy() != null
                 && !state.getActiveTradePositionsByStrategy().isEmpty()) {

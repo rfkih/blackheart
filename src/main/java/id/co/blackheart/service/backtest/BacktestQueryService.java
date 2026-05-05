@@ -52,7 +52,8 @@ public class BacktestQueryService {
             LocalDateTime fromDate,
             LocalDateTime toDate,
             String sortBy,
-            String sortDir
+            String sortDir,
+            String triggeredBy
     ) {
         int effectiveSize = size > 0 ? size : 20;
         int offset = Math.max(0, page) * effectiveSize;
@@ -70,9 +71,11 @@ public class BacktestQueryService {
         String strategyFilter = blankToNull(strategyCode);
         String symbolFilter = blankToNull(symbol);
         String intervalFilter = blankToNull(intervalName);
+        String triggeredByFilter = blankToNull(triggeredBy);
 
         List<BacktestRun> runs = backtestRunRepository.findFiltered(
                 userId,
+                triggeredByFilter,
                 statusFilter,
                 strategyFilter,
                 symbolFilter,
@@ -86,6 +89,7 @@ public class BacktestQueryService {
         );
         long total = backtestRunRepository.countFiltered(
                 userId,
+                triggeredByFilter,
                 statusFilter,
                 strategyFilter,
                 symbolFilter,

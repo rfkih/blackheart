@@ -147,33 +147,30 @@ public class BacktestRunRequest {
     private Map<String, Map<String, Object>> strategyParamOverrides;
 
     /**
-     * Phase 2A — max number of concurrent open trades across all strategies
-     * in this backtest. When at the cap, new entry signals are skipped (the
-     * combo doesn't get to over-allocate the book by all firing on the same
-     * candle). Null / non-positive = no cap (legacy behaviour).
+     * Max concurrent open trades across all strategies in this backtest. When
+     * at the cap, new entry signals are skipped so the book isn't over-allocated
+     * by all strategies firing on the same candle. Null/non-positive = no cap.
      */
     @DecimalMin(value = "0", inclusive = true)
     @DecimalMax(value = "20", inclusive = true)
     private Integer maxConcurrentStrategies;
 
     /**
-     * Phase 2A — per-strategy capital allocation override for this run only,
-     * as a percentage on the 0–100 scale. Key = strategy code, value =
-     * allocation %. Strategies not in this map fall back to
-     * {@code account_strategy.capital_allocation_pct}. Sum across the map is
-     * NOT auto-validated against 100 — the user is free to over- or
-     * under-allocate; the executor's balance check enforces the ceiling.
+     * Per-strategy capital allocation override for this run only, as a
+     * percentage on the 0–100 scale. Key = strategy code, value = allocation %.
+     * Strategies not in this map fall back to
+     * {@code account_strategy.capital_allocation_pct}. Sum is NOT validated
+     * against 100 — the executor's balance check enforces the ceiling.
      */
     @Size(max = 10)
     private Map<String, BigDecimal> strategyAllocations;
 
     /**
-     * Phase B2 — per-strategy interval for multi-timeframe runs.
-     * Key = strategy code, value = interval string (e.g. "15m"). When
-     * non-null, the coordinator loads N candle streams (one per unique
-     * interval) and each strategy fires only on its own timeframe's bar
-     * closes. When null/empty, all strategies share the run's primary
-     * {@link #interval} field.
+     * Per-strategy interval for multi-timeframe runs. Key = strategy code,
+     * value = interval string (e.g. "15m"). When non-null, the coordinator
+     * loads one candle stream per unique interval and each strategy fires
+     * only on its own bar closes. Null/empty = all strategies share the
+     * run's primary {@link #interval}.
      */
     @Size(max = 10)
     private Map<String,

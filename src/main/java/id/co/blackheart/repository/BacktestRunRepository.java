@@ -36,17 +36,24 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
     long countAll();
 
     /**
-     * Filtered + sorted + paginated list, <b>scoped to the authenticated user</b>.
+     * Filtered + sorted + paginated list.
+     *
+     * <p>Visibility rules:
+     * <ul>
+     *   <li>RESEARCHER runs ({@code triggered_by = 'RESEARCHER'}) are visible to every
+     *       authenticated user regardless of who submitted them.</li>
+     *   <li>USER runs ({@code triggered_by = 'USER'}) are scoped to their owner via
+     *       {@code user_id = :userId}.</li>
+     * </ul>
      *
      * <p>Every filter param is nullable — passing {@code null} disables that
      * clause via the {@code CAST(:param AS TEXT) IS NULL} idiom. String
      * filters do case-insensitive exact match (status, interval) or prefix
      * match (symbol, strategyCode) — Postgres ILIKE.
      *
-     * <p>{@code userId} is never nullable here — the {@code user_id = :userId}
-     * predicate is applied unconditionally. Rows with {@code user_id IS NULL}
-     * (legacy rows from before tenant scoping) are therefore invisible to
-     * every caller; that is intentional.
+     * <p>{@code triggeredBy} narrows to a specific origin: pass {@code "USER"} to
+     * show only the caller's own runs, {@code "RESEARCHER"} to show only
+     * researcher-submitted runs, or {@code null} for all visible runs.
      *
      * <p>{@code sortColumn} is validated by the service layer against a
      * whitelist before it reaches this query — never pass a user-supplied
@@ -61,7 +68,8 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
      */
     @Query(value = """
             SELECT * FROM backtest_run
-            WHERE user_id = :userId
+            WHERE (user_id = :userId OR triggered_by = 'RESEARCHER')
+              AND (CAST(:triggeredBy AS TEXT) IS NULL OR UPPER(triggered_by) = UPPER(CAST(:triggeredBy AS TEXT)))
               AND (CAST(:status AS TEXT) IS NULL OR UPPER(status) = UPPER(CAST(:status AS TEXT)))
               AND (CAST(:strategyCode AS TEXT) IS NULL OR strategy_code ILIKE CONCAT(CAST(:strategyCode AS TEXT), '%'))
               AND (CAST(:symbol AS TEXT) IS NULL OR asset ILIKE CONCAT(CAST(:symbol AS TEXT), '%'))
@@ -92,6 +100,7 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             """, nativeQuery = true)
     List<BacktestRun> findFiltered(
             @Param("userId") UUID userId,
+            @Param("triggeredBy") String triggeredBy,
             @Param("status") String status,
             @Param("strategyCode") String strategyCode,
             @Param("symbol") String symbol,
@@ -106,7 +115,8 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
 
     @Query(value = """
             SELECT COUNT(*) FROM backtest_run
-            WHERE user_id = :userId
+            WHERE (user_id = :userId OR triggered_by = 'RESEARCHER')
+              AND (CAST(:triggeredBy AS TEXT) IS NULL OR UPPER(triggered_by) = UPPER(CAST(:triggeredBy AS TEXT)))
               AND (CAST(:status AS TEXT) IS NULL OR UPPER(status) = UPPER(CAST(:status AS TEXT)))
               AND (CAST(:strategyCode AS TEXT) IS NULL OR strategy_code ILIKE CONCAT(CAST(:strategyCode AS TEXT), '%'))
               AND (CAST(:symbol AS TEXT) IS NULL OR asset ILIKE CONCAT(CAST(:symbol AS TEXT), '%'))
@@ -116,6 +126,7 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             """, nativeQuery = true)
     long countFiltered(
             @Param("userId") UUID userId,
+            @Param("triggeredBy") String triggeredBy,
             @Param("status") String status,
             @Param("strategyCode") String strategyCode,
             @Param("symbol") String symbol,
@@ -201,14 +212,15 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             Pageable pageable);
 
     /**
-     * Fetch a single run by id, scoped to its owner. Returns empty if the run
-     * exists but belongs to a different user — callers must collapse "not found"
-     * and "not yours" into the same response.
+     * Fetch a single run by id visible to the caller. RESEARCHER runs are
+     * accessible to every authenticated user; USER runs are scoped to their
+     * owner. Returns empty for runs that don't match either condition so
+     * callers collapse "not found" and "not yours" into the same 404.
      */
     @Query(value = """
             SELECT * FROM backtest_run
             WHERE backtest_run_id = :id
-              AND user_id = :userId
+              AND (user_id = :userId OR triggered_by = 'RESEARCHER')
             """, nativeQuery = true)
     java.util.Optional<BacktestRun> findByIdAndUserId(
             @Param("id") UUID id,

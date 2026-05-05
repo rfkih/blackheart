@@ -82,7 +82,8 @@ public class BacktestV1Controller {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
             @RequestParam(required = false, defaultValue = "createdAt") String sortBy,
-            @RequestParam(required = false, defaultValue = "DESC") String sortDir) {
+            @RequestParam(required = false, defaultValue = "DESC") String sortDir,
+            @RequestParam(required = false) String triggeredBy) {
         UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -91,7 +92,8 @@ public class BacktestV1Controller {
                         page, size,
                         status, strategyCode, symbol, intervalName,
                         from, to,
-                        sortBy, sortDir))
+                        sortBy, sortDir,
+                        triggeredBy))
                 .build());
     }
 
