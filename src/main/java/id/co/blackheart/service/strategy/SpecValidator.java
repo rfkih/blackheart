@@ -11,6 +11,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -86,10 +88,10 @@ public class SpecValidator {
      * @throws UnknownArchetypeException if archetype has no registered schema
      */
     public void validate(String archetype, Map<String, Object> overrides) {
-        if (archetype == null || archetype.isBlank()) {
+        if (!StringUtils.hasText(archetype)) {
             throw new UnknownArchetypeException("archetype is required for spec validation");
         }
-        if (overrides == null || overrides.isEmpty()) {
+        if (CollectionUtils.isEmpty(overrides)) {
             return;
         }
 

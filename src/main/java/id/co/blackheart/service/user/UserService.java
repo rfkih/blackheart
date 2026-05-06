@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -148,7 +149,7 @@ public class UserService {
         User user = userRepository.findByUserId(userId)
                 .orElseThrow(() -> new UserNotFoundException("User not found: " + userId));
 
-        if (request.getFullName() != null && !request.getFullName().isBlank()) {
+        if (StringUtils.hasText(request.getFullName())) {
             user.setFullName(request.getFullName());
         }
         if (request.getPhoneNumber() != null) {

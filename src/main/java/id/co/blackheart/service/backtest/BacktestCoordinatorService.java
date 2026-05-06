@@ -24,6 +24,8 @@ import id.co.blackheart.service.tradelistener.TradeListenerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -95,15 +97,15 @@ public class BacktestCoordinatorService {
                 backtestRun.getEndTime()
         );
 
-        if (monitorCandles == null || monitorCandles.isEmpty()) {
+        if (CollectionUtils.isEmpty(monitorCandles)) {
             throw new IllegalArgumentException("No monitor market data found for interval: " + MONITOR_INTERVAL);
         }
 
-        if (strategyCandles == null || strategyCandles.isEmpty()) {
+        if (CollectionUtils.isEmpty(strategyCandles)) {
             throw new IllegalArgumentException("No strategy market data found for interval: " + strategyInterval);
         }
 
-        if (strategyFeatures == null || strategyFeatures.isEmpty()) {
+        if (CollectionUtils.isEmpty(strategyFeatures)) {
             throw new IllegalArgumentException("No feature store found for interval: " + strategyInterval);
         }
 
@@ -238,7 +240,7 @@ public class BacktestCoordinatorService {
         // has been registered.
         java.util.List<BacktestTradePosition> allActivePositions = new java.util.ArrayList<>();
         if (state.getActiveTradePositionsByStrategy() != null
-                && !state.getActiveTradePositionsByStrategy().isEmpty()) {
+                && !CollectionUtils.isEmpty(state.getActiveTradePositionsByStrategy())) {
             for (java.util.List<BacktestTradePosition> perStrategy
                     : state.getActiveTradePositionsByStrategy().values()) {
                 if (perStrategy != null) allActivePositions.addAll(perStrategy);
@@ -420,7 +422,7 @@ public class BacktestCoordinatorService {
 
             StrategyDecision decision = entry.executor().execute(enrichedContext);
             if (isEntryDecision(decision)) {
-                if (decision.getStrategyCode() == null || decision.getStrategyCode().isBlank()) {
+                if (!StringUtils.hasText(decision.getStrategyCode())) {
                     decision.setStrategyCode(entry.code());
                 }
                 log.debug("Orchestrator entry | strategy={} interval={} side={}",
@@ -527,7 +529,7 @@ public class BacktestCoordinatorService {
                 if (override == null && code != null) {
                     override = intervalsByCode.get(code.toUpperCase());
                 }
-                if (override != null && !override.isBlank()) resolved = override;
+                if (StringUtils.hasText(override)) resolved = override;
             }
             // computeIfAbsent's lambda needs an effectively-final reference
             // — capture the resolved interval into a final local first.
@@ -551,7 +553,7 @@ public class BacktestCoordinatorService {
         // (e.g.) 30m with no 30m data in the window must throw, not silently
         // produce zero trades. Same applies to intervals coarser than the run
         // window (e.g. 1d strategy on a 6h backtest).
-        if (candles == null || candles.isEmpty()) {
+        if (CollectionUtils.isEmpty(candles)) {
             throw new IllegalArgumentException(
                     "No strategy market data found for symbol=" + backtestRun.getAsset()
                             + " interval=" + interval
@@ -559,7 +561,7 @@ public class BacktestCoordinatorService {
                             + " and " + backtestRun.getEndTime()
                             + " — pick a different interval or extend the date range.");
         }
-        if (features == null || features.isEmpty()) {
+        if (CollectionUtils.isEmpty(features)) {
             throw new IllegalArgumentException(
                     "No feature store data found for symbol=" + backtestRun.getAsset()
                             + " interval=" + interval
@@ -680,8 +682,7 @@ public class BacktestCoordinatorService {
             StrategyRequirements req = entry.executor().getRequirements();
             if (req == null
                     || !req.isRequireBiasTimeframe()
-                    || req.getBiasInterval() == null
-                    || req.getBiasInterval().isBlank()) {
+                    || !StringUtils.hasText(req.getBiasInterval())) {
                 byStrategy.put(entry.code(), empty);
                 continue;
             }
@@ -734,8 +735,7 @@ public class BacktestCoordinatorService {
     private BiasData preloadBiasData(BacktestRun backtestRun, StrategyRequirements requirements) {
         if (requirements == null
                 || !requirements.isRequireBiasTimeframe()
-                || requirements.getBiasInterval() == null
-                || requirements.getBiasInterval().isBlank()) {
+                || !StringUtils.hasText(requirements.getBiasInterval())) {
             return new BiasData(List.of(), Map.of());
         }
 
@@ -777,7 +777,7 @@ public class BacktestCoordinatorService {
             List<FeatureStore> sortedFeatures,
             LocalDateTime currentStartTime
     ) {
-        if (sortedFeatures == null || sortedFeatures.isEmpty() || currentStartTime == null) {
+        if (CollectionUtils.isEmpty(sortedFeatures) || currentStartTime == null) {
             return null;
         }
         FeatureStore prev = null;
@@ -795,7 +795,7 @@ public class BacktestCoordinatorService {
             List<MarketData> biasCandles,
             LocalDateTime currentTime
     ) {
-        if (biasCandles == null || biasCandles.isEmpty() || currentTime == null) {
+        if (CollectionUtils.isEmpty(biasCandles) || currentTime == null) {
             return null;
         }
 
@@ -827,7 +827,7 @@ public class BacktestCoordinatorService {
     private PositionSnapshot buildPositionSnapshotFor(BacktestState state, String strategyCode) {
         BacktestTrade trade = strategyTrade(state, strategyCode);
         List<BacktestTradePosition> positions = strategyPositions(state, strategyCode);
-        if (trade == null || positions == null || positions.isEmpty()) {
+        if (trade == null || CollectionUtils.isEmpty(positions)) {
             return PositionSnapshot.builder()
                     .hasOpenPosition(false)
                     .build();
@@ -849,7 +849,7 @@ public class BacktestCoordinatorService {
     private int countOpenPositionsFor(BacktestState state, String strategyCode) {
         if (state == null) return 0;
         List<BacktestTradePosition> positions = strategyPositions(state, strategyCode);
-        if (positions == null || positions.isEmpty()) return 0;
+        if (CollectionUtils.isEmpty(positions)) return 0;
         return (int) positions.stream()
                 .filter(p -> "OPEN".equalsIgnoreCase(p.getStatus()))
                 .count();
@@ -865,7 +865,7 @@ public class BacktestCoordinatorService {
     private BacktestTrade strategyTrade(BacktestState state, String strategyCode) {
         if (state == null) return null;
         Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
-        if (byStrategy != null && !byStrategy.isEmpty()) {
+        if (!CollectionUtils.isEmpty(byStrategy)) {
             // Multi-trade mode is active: per-strategy entries are
             // authoritative. Absence means "this strategy has no trade",
             // NOT "fall through to the legacy mirror" — the mirror points
@@ -884,7 +884,7 @@ public class BacktestCoordinatorService {
     private List<BacktestTradePosition> strategyPositions(BacktestState state, String strategyCode) {
         if (state == null) return null;
         Map<String, List<BacktestTradePosition>> byStrategy = state.getActiveTradePositionsByStrategy();
-        if (byStrategy != null && !byStrategy.isEmpty()) {
+        if (!CollectionUtils.isEmpty(byStrategy)) {
             // See strategyTrade — same rule applies to positions.
             if (strategyCode == null) return null;
             List<BacktestTradePosition> p = state.getActivePositionsFor(strategyCode);
@@ -894,7 +894,7 @@ public class BacktestCoordinatorService {
     }
 
     private String resolveStrategyLookupCode(BacktestRun backtestRun) {
-        if (backtestRun.getStrategyCode() != null && !backtestRun.getStrategyCode().isBlank()) {
+        if (StringUtils.hasText(backtestRun.getStrategyCode())) {
             return backtestRun.getStrategyCode();
         }
         return backtestRun.getStrategyName();
@@ -907,12 +907,12 @@ public class BacktestCoordinatorService {
      */
     private List<String> resolveStrategyCodeList(BacktestRun backtestRun) {
         String raw = resolveStrategyLookupCode(backtestRun);
-        if (raw == null || raw.isBlank()) {
+        if (!StringUtils.hasText(raw)) {
             throw new IllegalArgumentException("No strategy code could be resolved from BacktestRun");
         }
         return Arrays.stream(raw.split(","))
                 .map(String::trim)
-                .filter(s -> !s.isBlank())
+                .filter(StringUtils::hasText)
                 .toList();
     }
 
@@ -983,7 +983,7 @@ public class BacktestCoordinatorService {
      * The first non-null bias interval is used.
      */
     private StrategyRequirements mergeRequirements(List<StrategyRequirements> list) {
-        if (list == null || list.isEmpty()) {
+        if (CollectionUtils.isEmpty(list)) {
             return StrategyRequirements.builder().build();
         }
         if (list.size() == 1) {
@@ -998,7 +998,7 @@ public class BacktestCoordinatorService {
         boolean previousFeatureStore   = list.stream().anyMatch(r -> r != null && r.isRequirePreviousFeatureStore());
 
         String biasInterval = list.stream()
-                .filter(r -> r != null && r.getBiasInterval() != null && !r.getBiasInterval().isBlank())
+                .filter(r -> r != null && StringUtils.hasText(r.getBiasInterval()))
                 .map(StrategyRequirements::getBiasInterval)
                 .findFirst()
                 .orElse(null);
@@ -1081,7 +1081,7 @@ public class BacktestCoordinatorService {
         // lookups, regime maths, log labels) read intervalName from
         // context.accountStrategy — wrong timeframe here means wrong data.
         // Falls back to the primary when no per-strategy override is set.
-        String interval = (resolvedInterval != null && !resolvedInterval.isBlank())
+        String interval = StringUtils.hasText(resolvedInterval)
                 ? resolvedInterval
                 : backtestRun.getInterval();
 
@@ -1176,7 +1176,7 @@ public class BacktestCoordinatorService {
         // the single-slot iteration when no multi-trade state is registered.
         List<BacktestTradePosition> allPositions = new ArrayList<>();
         if (state.getActiveTradePositionsByStrategy() != null
-                && !state.getActiveTradePositionsByStrategy().isEmpty()) {
+                && !CollectionUtils.isEmpty(state.getActiveTradePositionsByStrategy())) {
             for (List<BacktestTradePosition> perStrategy
                     : state.getActiveTradePositionsByStrategy().values()) {
                 if (perStrategy != null) allPositions.addAll(perStrategy);
@@ -1232,11 +1232,11 @@ public class BacktestCoordinatorService {
             throw new IllegalArgumentException("Backtest run must not be null");
         }
 
-        if (backtestRun.getAsset() == null || backtestRun.getAsset().isBlank()) {
+        if (!StringUtils.hasText(backtestRun.getAsset())) {
             throw new IllegalArgumentException("Backtest asset must not be blank");
         }
 
-        if (backtestRun.getInterval() == null || backtestRun.getInterval().isBlank()) {
+        if (!StringUtils.hasText(backtestRun.getInterval())) {
             throw new IllegalArgumentException("Backtest interval must not be blank");
         }
 

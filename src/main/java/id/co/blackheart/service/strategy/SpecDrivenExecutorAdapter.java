@@ -9,6 +9,7 @@ import id.co.blackheart.engine.StrategyEngine;
 import id.co.blackheart.engine.StrategySpec;
 import id.co.blackheart.model.AccountStrategy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.CollectionUtils;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -67,9 +68,9 @@ public class SpecDrivenExecutorAdapter implements StrategyExecutor {
         // Layer order (most specific wins): archetype defaults → DB → backtest sweep.
         // Mirrors how legacy LSR/VCB resolve params at execute time.
         Map<String, Object> layered;
-        if (sweepOverrides == null || sweepOverrides.isEmpty()) {
+        if (CollectionUtils.isEmpty(sweepOverrides)) {
             layered = dbOverrides;
-        } else if (dbOverrides == null || dbOverrides.isEmpty()) {
+        } else if (CollectionUtils.isEmpty(dbOverrides)) {
             layered = sweepOverrides;
         } else {
             layered = new HashMap<>(dbOverrides);

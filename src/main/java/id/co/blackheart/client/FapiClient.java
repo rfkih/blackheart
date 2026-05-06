@@ -7,6 +7,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.netty.http.client.HttpClient;
@@ -69,7 +70,7 @@ public class FapiClient {
                                                Long startTimeMs,
                                                Long endTimeMs,
                                                int limit) {
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException("symbol cannot be blank");
         }
         int boundedLimit = Math.min(Math.max(limit, 1), FUNDING_RATE_MAX_LIMIT);
@@ -94,7 +95,7 @@ public class FapiClient {
                                 symbol, rs.totalRetries() + 1, rs.failure().toString())))
                 .block();
 
-        if (response == null || response.isBlank()) {
+        if (!StringUtils.hasText(response)) {
             return List.of();
         }
         JSONArray arr = new JSONArray(response);
@@ -129,7 +130,7 @@ public class FapiClient {
     }
 
     private static BigDecimal safeBigDecimal(String s) {
-        if (s == null || s.isBlank()) return null;
+        if (!StringUtils.hasText(s)) return null;
         try {
             return new BigDecimal(s);
         } catch (NumberFormatException ex) {

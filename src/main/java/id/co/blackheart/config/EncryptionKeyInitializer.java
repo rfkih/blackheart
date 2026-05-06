@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.Arrays;
 import java.util.Base64;
@@ -54,7 +55,7 @@ public class EncryptionKeyInitializer {
 
     @PostConstruct
     void init() {
-        if (encryptionKeyBase64 == null || encryptionKeyBase64.isBlank()) {
+        if (!StringUtils.hasText(encryptionKeyBase64)) {
             throw new IllegalStateException(
                     "app.encryption.key is not configured — set DB_ENCRYPTION_KEY to a base64-encoded 32-byte key "
                             + "(generate with: openssl rand -base64 32)");

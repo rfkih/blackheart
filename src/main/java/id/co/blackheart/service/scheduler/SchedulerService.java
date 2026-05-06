@@ -18,6 +18,7 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.scheduling.support.SimpleTriggerContext;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -306,7 +307,7 @@ public class SchedulerService {
             return;
         }
         try {
-            if (fundingSymbols == null || fundingSymbols.isEmpty()) {
+            if (CollectionUtils.isEmpty(fundingSymbols)) {
                 log.warn("[{}][FUNDING_INGEST] No symbols configured (app.funding.symbols)", jobName);
                 return;
             }

@@ -7,6 +7,7 @@ import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.service.statistics.SharpeStatistics;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -248,7 +249,7 @@ public class BacktestMetricsService {
      * we don't need a parallel field on {@code BacktestState}.
      */
     private BigDecimal calculateMaxDrawdownAmount(BacktestState state) {
-        if (state.getEquityPoints() == null || state.getEquityPoints().isEmpty()) {
+        if (CollectionUtils.isEmpty(state.getEquityPoints())) {
             return BigDecimal.ZERO;
         }
         BigDecimal peak = BigDecimal.ZERO;

@@ -11,6 +11,8 @@ import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -83,7 +85,7 @@ public class BacktestTradeExecutorService {
     }
 
     private String resolveDecisionStrategyCode(EnrichedStrategyContext context, StrategyDecision decision) {
-        if (decision != null && decision.getStrategyCode() != null && !decision.getStrategyCode().isBlank()) {
+        if (decision != null && StringUtils.hasText(decision.getStrategyCode())) {
             return decision.getStrategyCode();
         }
         if (context != null && context.getAccountStrategy() != null
@@ -143,7 +145,7 @@ public class BacktestTradeExecutorService {
         // the no-args constructor would leave it null.
         java.util.Map<String, BacktestState.PendingEntry> pendingMap =
                 state.getPendingEntriesByStrategy();
-        if (pendingMap == null || pendingMap.isEmpty()) {
+        if (CollectionUtils.isEmpty(pendingMap)) {
             return;
         }
         java.util.List<String> strategyCodes = new java.util.ArrayList<>(pendingMap.keySet());
@@ -202,7 +204,7 @@ public class BacktestTradeExecutorService {
     ) {
         // Prefer the strategy's resolved interval over the run's primary so
         // multi-timeframe trades are stamped with the correct timeframe.
-        String tradeInterval = (resolvedInterval != null && !resolvedInterval.isBlank())
+        String tradeInterval = StringUtils.hasText(resolvedInterval)
                 ? resolvedInterval
                 : backtestRun.getInterval();
         // Resolve the USDT-denominated trade amount BEFORE applying slippage:
@@ -549,7 +551,7 @@ public class BacktestTradeExecutorService {
             return;
         }
 
-        String targetRole = decision.getTargetPositionRole() == null || decision.getTargetPositionRole().isBlank()
+        String targetRole = !StringUtils.hasText(decision.getTargetPositionRole())
                 ? TARGET_ALL
                 : decision.getTargetPositionRole().trim().toUpperCase();
 
@@ -604,7 +606,7 @@ public class BacktestTradeExecutorService {
         if (state == null) return java.util.Collections.emptyList();
         java.util.Map<String, List<BacktestTradePosition>> byStrategy =
                 state.getActiveTradePositionsByStrategy();
-        if (byStrategy != null && !byStrategy.isEmpty() && strategyCode != null) {
+        if (!CollectionUtils.isEmpty(byStrategy) && strategyCode != null) {
             List<BacktestTradePosition> p = state.getActivePositionsFor(strategyCode);
             return p == null ? java.util.Collections.emptyList() : p;
         }
@@ -615,7 +617,7 @@ public class BacktestTradeExecutorService {
     private BacktestTrade scopedActiveTrade(BacktestState state, String strategyCode) {
         if (state == null) return null;
         java.util.Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
-        if (byStrategy != null && !byStrategy.isEmpty() && strategyCode != null) {
+        if (!CollectionUtils.isEmpty(byStrategy) && strategyCode != null) {
             return state.getActiveTradeFor(strategyCode);
         }
         return state.getActiveTrade();
@@ -678,7 +680,7 @@ public class BacktestTradeExecutorService {
      * substring-tolerant so future synonyms (e.g. {@code TP_HIT}) are caught.
      */
     private String aggregateExitReason(List<BacktestTradePosition> positions) {
-        if (positions == null || positions.isEmpty()) return null;
+        if (CollectionUtils.isEmpty(positions)) return null;
 
         boolean anyTp = false;
         boolean anyTrail = false;
@@ -901,11 +903,11 @@ public class BacktestTradeExecutorService {
     }
 
     private String resolveStrategyName(BacktestRun backtestRun, StrategyDecision decision) {
-        if (decision != null && decision.getStrategyCode() != null && !decision.getStrategyCode().isBlank()) {
+        if (decision != null && StringUtils.hasText(decision.getStrategyCode())) {
             return decision.getStrategyCode();
         }
 
-        if (backtestRun.getStrategyCode() != null && !backtestRun.getStrategyCode().isBlank()) {
+        if (StringUtils.hasText(backtestRun.getStrategyCode())) {
             return backtestRun.getStrategyCode();
         }
 
@@ -983,7 +985,7 @@ public class BacktestTradeExecutorService {
     }
 
     private String resolveTradeMode(StrategyDecision decision) {
-        if (decision == null || decision.getExitStructure() == null || decision.getExitStructure().isBlank()) {
+        if (decision == null || !StringUtils.hasText(decision.getExitStructure())) {
             return EXIT_STRUCTURE_SINGLE;
         }
         return decision.getExitStructure().trim().toUpperCase();

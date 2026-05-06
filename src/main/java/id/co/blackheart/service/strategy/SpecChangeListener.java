@@ -8,6 +8,7 @@ import org.postgresql.PGNotification;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -143,7 +144,7 @@ public class SpecChangeListener {
             for (PGNotification n : notifications) {
                 if (!CHANNEL.equals(n.getName())) continue;
                 String payload = n.getParameter();
-                if (payload == null || payload.isBlank()) {
+                if (!StringUtils.hasText(payload)) {
                     fullFlush = true;
                 } else {
                     codes.add(payload);

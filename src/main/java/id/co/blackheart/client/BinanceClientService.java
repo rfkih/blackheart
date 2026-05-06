@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
@@ -74,15 +76,15 @@ public class BinanceClientService {
      * an empty map — callers fall back to negative-cache + ZERO usdtValue.
      */
     public Map<String, BigDecimal> getLatestPrices(Collection<String> symbols) {
-        if (symbols == null || symbols.isEmpty()) {
+        if (CollectionUtils.isEmpty(symbols)) {
             return Collections.emptyMap();
         }
         Set<String> distinct = symbols.stream()
                 .filter(Objects::nonNull)
                 .map(String::trim)
-                .filter(s -> !s.isEmpty())
+                .filter(StringUtils::hasText)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (distinct.isEmpty()) {
+        if (CollectionUtils.isEmpty(distinct)) {
             return Collections.emptyMap();
         }
 

@@ -11,6 +11,7 @@ import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -325,7 +326,7 @@ public class MomentumMeanReversionEngine implements StrategyEngine {
 
     private StrategyDecision.StrategyDecisionBuilder baseBuilder(StrategySpec spec, EnrichedStrategyContext ctx) {
         String name = spec.getStrategyName();
-        if (name == null || name.isBlank()) name = spec.getStrategyCode();
+        if (!StringUtils.hasText(name)) name = spec.getStrategyCode();
         Integer ver = spec.getArchetypeVersion();
         String version = ARCHETYPE + ".v" + (ver == null ? VERSION : ver);
         return StrategyDecision.builder()

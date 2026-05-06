@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -358,7 +359,7 @@ public class AccountStrategyService {
         boolean dirty = false;
 
         // ── Interval change (optional) ──────────────────────────────────
-        if (req.getIntervalName() != null && !req.getIntervalName().isBlank()) {
+        if (StringUtils.hasText(req.getIntervalName())) {
             String newInterval = req.getIntervalName().trim();
             if (!newInterval.equalsIgnoreCase(strategy.getIntervalName())) {
                 long openTrades = tradesRepository.countOpenByAccountStrategyId(accountStrategyId);
@@ -539,7 +540,7 @@ public class AccountStrategyService {
      * collide with siblings. "Preset 1", "Preset 2", … — easy to rename later.
      */
     private String resolvePresetName(String requested, List<AccountStrategy> siblings) {
-        if (requested != null && !requested.isBlank()) {
+        if (StringUtils.hasText(requested)) {
             return requested.trim();
         }
         int next = siblings.size() + 1;

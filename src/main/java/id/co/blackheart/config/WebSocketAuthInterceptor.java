@@ -13,6 +13,7 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.util.StringUtils;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -77,30 +78,30 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         if (token == null) {
             throw new IllegalArgumentException("STOMP CONNECT rejected — missing Authorization header");
         }
-        String email;
         try {
-            email = jwtService.extractEmail(token);
+            String email = jwtService.extractEmail(token);
             if (email == null || !jwtService.isTokenValid(token, email)) {
                 throw new IllegalArgumentException("STOMP CONNECT rejected — invalid token");
             }
+            UUID userId = jwtService.extractUserId(token);
+            String role = jwtService.extractRole(token);
+            StompPrincipal principal = new StompPrincipal(email, userId, role);
+            Authentication auth = new UsernamePasswordAuthenticationToken(
+                    principal,
+                    null,
+                    List.of(new SimpleGrantedAuthority("ROLE_" + role))
+            );
+            accessor.setUser(principal);
+            accessor.setLeaveMutable(true);
+            // Stash the Authentication for any downstream @MessageMapping that
+            // prefers a Spring Authentication over the raw Principal.
+            accessor.setHeader("authentication", auth);
+        } catch (IllegalArgumentException e) {
+            throw e;
         } catch (Exception e) {
-//            log.warn("STOMP CONNECT token validation failed: {}", e.getMessage());
+            log.warn("STOMP CONNECT token validation failed: {}", e.getMessage());
             throw new IllegalArgumentException("STOMP CONNECT rejected — invalid token");
         }
-
-        UUID userId = jwtService.extractUserId(token);
-        String role = jwtService.extractRole(token);
-        StompPrincipal principal = new StompPrincipal(email, userId, role);
-        Authentication auth = new UsernamePasswordAuthenticationToken(
-                principal,
-                null,
-                List.of(new SimpleGrantedAuthority("ROLE_" + role))
-        );
-        accessor.setUser(principal);
-        accessor.setLeaveMutable(true);
-        // Stash the Authentication for any downstream @MessageMapping that
-        // prefers a Spring Authentication over the raw Principal.
-        accessor.setHeader("authentication", auth);
     }
 
     private void handleSubscribe(StompHeaderAccessor accessor) {
@@ -117,7 +118,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
         if (destination.startsWith(PNL_TOPIC_PREFIX)) {
             String tail = destination.substring(PNL_TOPIC_PREFIX.length());
-            if (tail.isEmpty()) {
+            if (!StringUtils.hasText(tail)) {
                 throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing accountId");
             }
             UUID accountId;
@@ -143,7 +144,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
         if (destination.startsWith(BACKTEST_TOPIC_PREFIX)) {
             String tail = destination.substring(BACKTEST_TOPIC_PREFIX.length());
-            if (tail.isEmpty()) {
+            if (!StringUtils.hasText(tail)) {
                 throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing backtestRunId");
             }
             UUID runId;

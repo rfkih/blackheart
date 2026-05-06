@@ -3,6 +3,7 @@ package id.co.blackheart.service.strategy;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.util.CollectionUtils;
 
 /**
  * Thread-scoped holder for per-strategy preset pinning during a backtest run.
@@ -29,7 +30,7 @@ public final class BacktestParamPresetContext {
     }
 
     public static void enter(Map<String, UUID> paramIdsByStrategy) {
-        if (paramIdsByStrategy == null || paramIdsByStrategy.isEmpty()) {
+        if (CollectionUtils.isEmpty(paramIdsByStrategy)) {
             HOLDER.remove();
             return;
         }

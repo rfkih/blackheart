@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.CollectionUtils;
 
 import org.ta4j.core.*;
 import org.ta4j.core.indicators.*;
@@ -828,7 +829,7 @@ public class TechnicalIndicatorService {
         LocalDateTime warmupStart = windowStart.minusMinutes((long) LIVE_WARMUP_BARS * intervalMinutes);
         List<MarketData> data = marketDataRepository.findBySymbolIntervalAndStartTimeRange(
                 symbol, interval, warmupStart, windowEnd);
-        if (data == null || data.isEmpty()) {
+        if (CollectionUtils.isEmpty(data)) {
             return new WindowResult(0, 0, 0, 0, false);
         }
         data.sort(Comparator.comparing(MarketData::getStartTime));

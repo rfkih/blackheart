@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -43,7 +44,7 @@ public class TokocryptoClientService {
         HttpEntity<String> entity = new HttpEntity<>(null, headers);
         ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
 
-        if (response.getBody() == null || response.getBody().isEmpty()) {
+        if (!StringUtils.hasText(response.getBody())) {
             throw new IllegalArgumentException("Response body is null or empty");
         }
 
@@ -68,7 +69,7 @@ public class TokocryptoClientService {
 
         ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, request, String.class);
 
-        if (response.getBody() == null || response.getBody().isEmpty()) {
+        if (!StringUtils.hasText(response.getBody())) {
             throw new IllegalArgumentException("Response body is null or empty");
         }
 

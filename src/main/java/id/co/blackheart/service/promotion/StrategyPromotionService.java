@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -218,10 +219,10 @@ public class StrategyPromotionService {
             JsonNode evidence,
             UUID reviewerUserId
     ) {
-        if (toState == null || toState.isBlank()) {
+        if (!StringUtils.hasText(toState)) {
             throw new IllegalArgumentException("toState is required");
         }
-        if (reason == null || reason.isBlank()) {
+        if (!StringUtils.hasText(reason)) {
             throw new IllegalArgumentException("reason is required for every promotion");
         }
 
@@ -340,8 +341,8 @@ public class StrategyPromotionService {
     ) {
         int safePage = Math.max(page, 0);
         int safeSize = Math.min(Math.max(size, 1), 100);
-        String codeFilter = (strategyCode == null || strategyCode.isBlank()) ? null : strategyCode.trim();
-        String stateFilter = (toState == null || toState.isBlank()) ? null : toState.trim();
+        String codeFilter = !StringUtils.hasText(strategyCode) ? null : strategyCode.trim();
+        String stateFilter = !StringUtils.hasText(toState) ? null : toState.trim();
         return promotionLogRepository.findRecentFiltered(
                 codeFilter,
                 stateFilter,
@@ -370,13 +371,13 @@ public class StrategyPromotionService {
             JsonNode evidence,
             UUID reviewerUserId
     ) {
-        if (strategyCode == null || strategyCode.isBlank()) {
+        if (!StringUtils.hasText(strategyCode)) {
             throw new IllegalArgumentException("strategyCode is required");
         }
-        if (toState == null || toState.isBlank()) {
+        if (!StringUtils.hasText(toState)) {
             throw new IllegalArgumentException("toState is required");
         }
-        if (reason == null || reason.isBlank()) {
+        if (!StringUtils.hasText(reason)) {
             throw new IllegalArgumentException("reason is required for every promotion");
         }
 

@@ -7,6 +7,7 @@ import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -39,7 +40,7 @@ public class FundingRateBackfillService {
      * existing rows are skipped by PK.
      */
     public BackfillResult backfillHistorical(String symbol, LocalDateTime startInclusive) {
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException("symbol cannot be blank");
         }
         if (startInclusive == null) {

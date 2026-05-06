@@ -23,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.util.StringUtils;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
@@ -187,7 +188,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String authHeader = request.getHeader("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String candidate = authHeader.substring(7).trim();
-            if (!candidate.isEmpty()) {
+            if (StringUtils.hasText(candidate)) {
                 return candidate;
             }
         }
@@ -196,7 +197,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             for (Cookie c : cookies) {
                 if (JwtCookieService.COOKIE_NAME.equals(c.getName())) {
                     String val = c.getValue();
-                    if (val != null && !val.isBlank()) {
+                    if (StringUtils.hasText(val)) {
                         return val;
                     }
                 }

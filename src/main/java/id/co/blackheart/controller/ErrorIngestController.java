@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -109,11 +110,11 @@ public class ErrorIngestController {
     }
 
     private static String blankOr(String s, String fallback) {
-        return (s == null || s.isBlank()) ? fallback : s;
+        return StringUtils.hasText(s) ? s : fallback;
     }
 
     private static String blankOrNull(String s) {
-        return (s == null || s.isBlank()) ? null : s;
+        return StringUtils.hasText(s) ? s : null;
     }
 
     /**

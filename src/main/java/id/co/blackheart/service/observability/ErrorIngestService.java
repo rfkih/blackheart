@@ -11,6 +11,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -106,7 +107,7 @@ public class ErrorIngestService {
         // Frontend/middleware reports stamp their own jvm ("frontend",
         // "middleware") via the REST controller. Logback-sourced events leave
         // it null so we fall back to this JVM's configured name.
-        String stamp = (event.jvm() == null || event.jvm().isBlank()) ? jvm : event.jvm();
+        String stamp = !StringUtils.hasText(event.jvm()) ? jvm : event.jvm();
         return ErrorLog.builder()
                 .occurredAt(event.occurredAt())
                 .lastSeenAt(event.occurredAt())

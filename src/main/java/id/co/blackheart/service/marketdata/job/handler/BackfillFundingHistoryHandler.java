@@ -12,6 +12,7 @@ import id.co.blackheart.service.marketdata.job.JobParamUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 
@@ -58,7 +59,7 @@ public class BackfillFundingHistoryHandler implements HistoricalJobHandler {
     @Override
     public void execute(HistoricalBackfillJob job, JobContext ctx) {
         String symbol = job.getSymbol();
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException(
                     "BACKFILL_FUNDING_HISTORY requires a symbol");
         }

@@ -15,6 +15,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -68,9 +69,9 @@ public class AlertEventController {
         int safePage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(safePage, safeSize);
 
-        String sevFilter    = (severity == null || severity.isBlank()) ? null : severity.trim().toUpperCase();
-        String kindFilter   = (kind == null || kind.isBlank()) ? null : kind.trim();
-        String searchFilter = (search == null || search.isBlank()) ? null : search.trim();
+        String sevFilter    = StringUtils.hasText(severity) ? severity.trim().toUpperCase() : null;
+        String kindFilter   = StringUtils.hasText(kind) ? kind.trim() : null;
+        String searchFilter = StringUtils.hasText(search) ? search.trim() : null;
 
         String[] parts = sort.split(",", 2);
         String sortColumn = ALLOWED_SORT_FIELDS.contains(parts[0].trim()) ? parts[0].trim() : "createdAt";
@@ -120,7 +121,7 @@ public class AlertEventController {
     }
 
     private static Integer severityRank(String s) {
-        if (s == null || s.isBlank()) return null;
+        if (!StringUtils.hasText(s)) return null;
         return switch (s.trim().toUpperCase()) {
             case "INFO" -> 1;
             case "WARN" -> 2;

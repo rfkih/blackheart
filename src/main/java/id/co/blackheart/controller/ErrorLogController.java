@@ -22,6 +22,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -106,8 +107,8 @@ public class ErrorLogController {
 
         String sevFilter    = normaliseUpper(severity, ALLOWED_SEVERITY);
         String statusFilter = normaliseUpper(status, ALLOWED_STATUS);
-        String jvmFilter    = (jvm == null || jvm.isBlank()) ? null : jvm.trim();
-        String searchLike   = (search == null || search.isBlank())
+        String jvmFilter    = StringUtils.hasText(jvm) ? jvm.trim() : null;
+        String searchLike   = (!StringUtils.hasText(search))
                 ? null : "%" + search.trim().toLowerCase() + "%";
 
         Specification<ErrorLog> spec = (root, query, cb) -> {
@@ -182,7 +183,7 @@ public class ErrorLogController {
             @RequestBody StatusUpdateRequest body,
             HttpServletRequest httpRequest
     ) {
-        if (body == null || body.status() == null || body.status().isBlank()) {
+        if (body == null || !StringUtils.hasText(body.status())) {
             throw new IllegalArgumentException("status is required");
         }
         String next = body.status().trim().toUpperCase();
@@ -235,7 +236,7 @@ public class ErrorLogController {
     }
 
     private static Sort parseSort(String sort) {
-        if (sort == null || sort.isBlank())
+        if (!StringUtils.hasText(sort))
             return Sort.by(Sort.Direction.DESC, "lastSeenAt");
         String[] parts = sort.split(",", 2);
         String field = parts[0].trim();
@@ -264,13 +265,13 @@ public class ErrorLogController {
     }
 
     private static String normaliseUpper(String raw, Set<String> allowed) {
-        if (raw == null || raw.isBlank()) return null;
+        if (!StringUtils.hasText(raw)) return null;
         String upper = raw.trim().toUpperCase();
         return allowed.contains(upper) ? upper : null;
     }
 
     private static Integer severityRank(String s) {
-        if (s == null || s.isBlank()) return null;
+        if (!StringUtils.hasText(s)) return null;
         return switch (s.trim().toUpperCase()) {
             case "LOW" -> 1;
             case "MEDIUM" -> 2;

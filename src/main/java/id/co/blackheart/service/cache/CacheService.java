@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -47,7 +49,7 @@ public class CacheService {
     }
 
     public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
-        if (symbol == null || symbol.isBlank() || price == null) {
+        if (!StringUtils.hasText(symbol) || price == null) {
             return;
         }
 
@@ -99,7 +101,7 @@ public class CacheService {
      * newly-listed pair recovers quickly.
      */
     public void markPriceUnavailable(String symbol) {
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             return;
         }
         String key = MISSING_PRICE_KEY_PREFIX + symbol;
@@ -300,7 +302,7 @@ public class CacheService {
         String key = TRADE_POSITIONS_KEY_PREFIX + tradeId;
         List<Object> raw = redisTemplate.opsForList().range(key, 0, -1);
 
-        if (raw == null || raw.isEmpty()) {
+        if (CollectionUtils.isEmpty(raw)) {
             return List.of();
         }
 
@@ -338,7 +340,7 @@ public class CacheService {
         String key = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
         Set<Object> members = redisTemplate.opsForSet().members(key);
 
-        if (members == null || members.isEmpty()) {
+        if (CollectionUtils.isEmpty(members)) {
             return Set.of();
         }
 
@@ -417,7 +419,7 @@ public class CacheService {
     }
 
     private List<String> serializePositions(List<TradePosition> positions) {
-        if (positions == null || positions.isEmpty()) {
+        if (CollectionUtils.isEmpty(positions)) {
             return List.of();
         }
         List<String> result = new ArrayList<>();

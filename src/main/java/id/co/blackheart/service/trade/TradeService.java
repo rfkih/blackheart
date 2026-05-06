@@ -8,6 +8,7 @@ import id.co.blackheart.model.Trades;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -58,7 +59,7 @@ public class TradeService {
             List<TradePosition> tradePositions,
             String asset
     ) {
-        if (account == null || tradePositions == null || tradePositions.isEmpty()) {
+        if (account == null || CollectionUtils.isEmpty(tradePositions)) {
             return;
         }
 
@@ -71,7 +72,7 @@ public class TradeService {
             List<TradePosition> tradePositions,
             String asset
     ) {
-        if (account == null || tradePositions == null || tradePositions.isEmpty()) {
+        if (account == null || CollectionUtils.isEmpty(tradePositions)) {
             return;
         }
 

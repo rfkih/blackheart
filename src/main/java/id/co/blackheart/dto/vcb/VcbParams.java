@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.util.CollectionUtils;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -72,7 +73,7 @@ public class VcbParams implements Serializable {
 
     public static VcbParams merge(Map<String, Object> overrides) {
         VcbParams p = defaults();
-        if (overrides == null || overrides.isEmpty()) return p;
+        if (CollectionUtils.isEmpty(overrides)) return p;
 
         // Compression
         bd(overrides, "squeezeKcTolerance").ifPresent(p::setSqueezeKcTolerance);

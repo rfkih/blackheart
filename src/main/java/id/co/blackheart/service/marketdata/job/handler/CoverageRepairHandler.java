@@ -12,6 +12,7 @@ import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 
@@ -55,8 +56,8 @@ public class CoverageRepairHandler implements HistoricalJobHandler {
 
     @Override
     public void execute(HistoricalBackfillJob job, JobContext ctx) {
-        if (job.getSymbol() == null || job.getSymbol().isBlank()
-                || job.getInterval() == null || job.getInterval().isBlank()) {
+        if (!StringUtils.hasText(job.getSymbol())
+                || !StringUtils.hasText(job.getInterval())) {
             throw new IllegalArgumentException("COVERAGE_REPAIR requires symbol and interval");
         }
 

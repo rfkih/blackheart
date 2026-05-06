@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.lang.reflect.Field;
 import java.sql.Timestamp;
@@ -72,7 +73,7 @@ public class MarketDataIntegrityService {
             Column column = field.getAnnotation(Column.class);
             if (column == null) continue;
             String name = column.name();
-            if (name == null || name.isBlank()) continue;
+            if (!StringUtils.hasText(name)) continue;
             if (NON_INDICATOR_COLUMNS.contains(name)) continue;
             cols.add(name);
         }
@@ -256,10 +257,10 @@ public class MarketDataIntegrityService {
     }
 
     private void validate(String symbol, String interval) {
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException("symbol cannot be blank");
         }
-        if (interval == null || interval.isBlank()) {
+        if (!StringUtils.hasText(interval)) {
             throw new IllegalArgumentException("interval cannot be blank");
         }
         // Fail fast on unsupported intervals so the operator gets a 400

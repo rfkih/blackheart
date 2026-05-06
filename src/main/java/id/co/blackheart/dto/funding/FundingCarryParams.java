@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.util.CollectionUtils;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -63,7 +64,7 @@ public class FundingCarryParams implements Serializable {
 
     public static FundingCarryParams merge(Map<String, Object> overrides) {
         FundingCarryParams p = defaults();
-        if (overrides == null || overrides.isEmpty()) return p;
+        if (CollectionUtils.isEmpty(overrides)) return p;
 
         bd(overrides, "entryZ").ifPresent(p::setEntryZ);
         bd(overrides, "exitZ").ifPresent(p::setExitZ);

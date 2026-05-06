@@ -10,5 +10,6 @@ import java.util.Optional;
 @Repository
 public interface ServerIpLogRepository extends JpaRepository<ServerIpLog, Long> {
     List<ServerIpLog> findAllByOrderByRecordedAtDesc();
+    List<ServerIpLog> findTop100ByOrderByRecordedAtDesc();
     Optional<ServerIpLog> findTopByOrderByRecordedAtDesc();
 }

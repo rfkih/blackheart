@@ -20,6 +20,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -59,7 +60,7 @@ public class HistoricalBackfillController {
         }
         Object principal = auth.getPrincipal();
         String email = (principal instanceof UserDetails ud) ? ud.getUsername() : auth.getName();
-        if (email == null || email.isBlank()) return null;
+        if (!StringUtils.hasText(email)) return null;
         return userRepository.findByEmail(email).map(u -> u.getUserId()).orElse(null);
     }
 

@@ -15,6 +15,7 @@ import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -49,7 +50,7 @@ public class UnifiedTradeService {
         int offset = page * effectiveSize;
 
         List<Trades> trades;
-        if (status != null && !status.isBlank()) {
+        if (StringUtils.hasText(status)) {
             trades = tradesRepository.findByAccountIdsAndStatus(accountIds, status.toUpperCase(), effectiveSize, offset);
         } else {
             trades = tradesRepository.findByAccountIds(accountIds, effectiveSize, offset);

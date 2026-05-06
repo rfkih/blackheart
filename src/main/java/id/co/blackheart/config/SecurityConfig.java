@@ -24,6 +24,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.util.StringUtils;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
@@ -156,7 +157,7 @@ public class SecurityConfig {
         // CORS_ALLOWED_ORIGINS=https://app.example.com,https://staging.example.com).
         List<String> origins = Arrays.stream(allowedOriginsCsv.split(","))
                 .map(String::trim)
-                .filter(s -> !s.isBlank())
+                .filter(StringUtils::hasText)
                 .toList();
         if (origins.isEmpty()) {
             origins = List.of("http://localhost:3000");

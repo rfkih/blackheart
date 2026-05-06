@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -161,7 +162,7 @@ public class LoggingServiceImpl implements LoggingService {
     }
 
     private boolean isSensitiveFieldName(String name) {
-        if (name == null || name.isEmpty()) return false;
+        if (!StringUtils.hasText(name)) return false;
         String lower = name.toLowerCase(Locale.ROOT);
         for (String needle : REDACTED_FIELD_NEEDLES) {
             if (lower.contains(needle)) return true;
@@ -205,7 +206,7 @@ public class LoggingServiceImpl implements LoggingService {
      * the visible window.
      */
     private static String redactIfSensitiveHeader(String name, String value) {
-        if (value == null || value.isEmpty()) return value;
+        if (!StringUtils.hasText(value)) return value;
         if (name == null) return value;
         if (RESTRICTED_HEADERS.contains(name.toLowerCase(Locale.ROOT))) return REDACTED;
         return value;

@@ -22,6 +22,8 @@ import id.co.blackheart.service.strategy.StrategyExecutorFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -226,7 +228,7 @@ public class LiveTradingCoordinatorService {
     }
 
     private PositionSnapshot buildPositionSnapshot(List<TradePosition> activeTradePositions) {
-        if (activeTradePositions != null && !activeTradePositions.isEmpty()) {
+        if (!CollectionUtils.isEmpty(activeTradePositions)) {
             return livePositionSnapshotMapper.toSnapshot(activeTradePositions.getFirst());
         }
 
@@ -240,7 +242,7 @@ public class LiveTradingCoordinatorService {
     );
 
     private AssetPair resolveAssetPair(String symbol) {
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException("Symbol cannot be blank");
         }
 

@@ -11,6 +11,8 @@ import id.co.blackheart.repository.TradePositionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -76,7 +78,7 @@ public class TradeCloseService {
             String asset,
             TradeType tradeType
     ) {
-        if (user == null || tradePositions == null || tradePositions.isEmpty()) {
+        if (user == null || CollectionUtils.isEmpty(tradePositions)) {
             return;
         }
 
@@ -331,7 +333,7 @@ public class TradeCloseService {
     }
 
     private BigDecimal resolveCloseReferencePrice(List<TradePosition> positions) {
-        if (positions == null || positions.isEmpty()) {
+        if (CollectionUtils.isEmpty(positions)) {
             throw new IllegalStateException("No trade positions available to resolve close reference price");
         }
 
@@ -509,7 +511,7 @@ public class TradeCloseService {
 
 
     private String normalizeTargetRole(String targetRole) {
-        if (targetRole == null || targetRole.isBlank()) {
+        if (!StringUtils.hasText(targetRole)) {
             return TARGET_ALL;
         }
         return targetRole.trim().toUpperCase();
@@ -545,7 +547,7 @@ public class TradeCloseService {
         BigDecimal totalFee = BigDecimal.ZERO;
         String feeCurrency = null;
 
-        if (response.getFills() != null && !response.getFills().isEmpty()) {
+        if (!CollectionUtils.isEmpty(response.getFills())) {
             for (BinanceOrderFill fill : response.getFills()) {
                 BigDecimal qty = new BigDecimal(fill.getQty());
                 BigDecimal price = new BigDecimal(fill.getPrice());

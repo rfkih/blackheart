@@ -12,6 +12,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -174,12 +176,12 @@ public class PortfolioBalanceService {
      * succeeds.
      */
     private void prefetchMissingPrices(Collection<String> assets) {
-        if (assets == null || assets.isEmpty()) {
+        if (CollectionUtils.isEmpty(assets)) {
             return;
         }
         Set<String> missing = new LinkedHashSet<>();
         for (String asset : assets) {
-            if (asset == null || asset.isBlank()) continue;
+            if (!StringUtils.hasText(asset)) continue;
             if ("USDT".equalsIgnoreCase(asset)) continue;
             String symbol = asset.toUpperCase() + "USDT";
             if (cacheService.getLatestPrice(symbol) != null) continue;

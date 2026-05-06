@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
@@ -55,11 +56,11 @@ public class TelegramBotPollingService {
 
     @PostConstruct
     public void init() {
-        allowedChatIds = chatIdsConfig == null
+        allowedChatIds = !StringUtils.hasText(chatIdsConfig)
                 ? Set.of()
                 : Arrays.stream(chatIdsConfig.split(","))
                         .map(String::trim)
-                        .filter(s -> !s.isBlank())
+                        .filter(StringUtils::hasText)
                         .map(Long::parseLong)
                         .collect(Collectors.toSet());
         if (isBotDisabled()) {
@@ -75,7 +76,7 @@ public class TelegramBotPollingService {
      * token) every few seconds and filled the log with 404s.
      */
     private boolean isBotDisabled() {
-        return botToken == null || botToken.isBlank();
+        return !StringUtils.hasText(botToken);
     }
 
     @Scheduled(fixedDelayString = "${telegram.bot.poll.interval-ms:5000}")

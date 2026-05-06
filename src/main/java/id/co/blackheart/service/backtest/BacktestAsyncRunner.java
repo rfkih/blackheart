@@ -14,6 +14,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -102,7 +103,7 @@ public class BacktestAsyncRunner {
      */
     private Map<String, Map<String, Object>> readOverrides(BacktestRun run) {
         String json = run.getConfigSnapshot();
-        if (json == null || json.isBlank()) return Collections.emptyMap();
+        if (!StringUtils.hasText(json)) return Collections.emptyMap();
         try {
             Map<String, Map<String, Object>> parsed = objectMapper.readValue(json, OVERRIDES_TYPE);
             return parsed == null ? Collections.emptyMap() : parsed;

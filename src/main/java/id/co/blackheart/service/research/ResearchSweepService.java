@@ -15,6 +15,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -272,7 +274,7 @@ public class ResearchSweepService {
                     "This sweep's holdout has already been evaluated (run "
                             + state.getHoldoutBacktestRunId() + "). Holdout is one-shot by design.");
         }
-        if (paramSet == null || paramSet.isEmpty()) {
+        if (CollectionUtils.isEmpty(paramSet)) {
             throw new IllegalArgumentException("paramSet required");
         }
 
@@ -382,7 +384,7 @@ public class ResearchSweepService {
         List<SweepState> filtered = new ArrayList<>();
         for (SweepState s : sweeps.values()) {
             if (userId != null && s.getUserId() != null && !userId.equals(s.getUserId())) continue;
-            if (statusFilter != null && !statusFilter.isEmpty()) {
+            if (!CollectionUtils.isEmpty(statusFilter)) {
                 String st = s.getStatus() == null ? "" : s.getStatus().toUpperCase(Locale.ROOT);
                 if (!statusFilter.contains(st)) continue;
             }
@@ -402,7 +404,7 @@ public class ResearchSweepService {
     private static Comparator<SweepState> sweepComparator(String sort) {
         String field = "createdAt";
         boolean desc = true;
-        if (sort != null && !sort.isBlank()) {
+        if (StringUtils.hasText(sort)) {
             String[] parts = sort.split(",", 2);
             field = parts[0].trim();
             if (parts.length > 1) desc = "desc".equalsIgnoreCase(parts[1].trim());
@@ -975,7 +977,7 @@ public class ResearchSweepService {
      */
     private void populateMetrics(SweepResult result, BacktestRun run) {
         String snap = run.getAnalysisSnapshot();
-        if (snap == null || snap.isBlank()) {
+        if (!StringUtils.hasText(snap)) {
             log.info("No analysis snapshot for run {} — re-invoking analyzer",
                     run.getBacktestRunId());
             try {
@@ -985,7 +987,7 @@ public class ResearchSweepService {
             } catch (Exception e) {
                 log.warn("Analyzer retry failed for run {}", run.getBacktestRunId(), e);
             }
-            if (snap == null || snap.isBlank()) return;
+            if (!StringUtils.hasText(snap)) return;
         }
         try {
             Map<String, Object> root = objectMapper.readValue(
@@ -1100,12 +1102,12 @@ public class ResearchSweepService {
 
     private String resolveRankMetric(SweepSpec spec) {
         String m = spec.getRankMetric();
-        return (m == null || m.isBlank()) ? "avgR" : m;
+        return StringUtils.hasText(m) ? m : "avgR";
     }
 
     /** Expands paramRanges into the round-1 cross-product. */
     static List<Map<String, Object>> expandFromRanges(Map<String, ParamRange> ranges) {
-        if (ranges == null || ranges.isEmpty()) return List.of();
+        if (CollectionUtils.isEmpty(ranges)) return List.of();
         Map<String, List<Object>> grid = new LinkedHashMap<>();
         for (Map.Entry<String, ParamRange> e : ranges.entrySet()) {
             List<BigDecimal> vals = e.getValue().expand();
@@ -1172,7 +1174,7 @@ public class ResearchSweepService {
      * leaderboard remains readable.
      */
     static List<Map<String, Object>> expandGrid(Map<String, List<Object>> grid) {
-        if (grid == null || grid.isEmpty()) return List.of(Map.of());
+        if (CollectionUtils.isEmpty(grid)) return List.of(Map.of());
 
         List<Map<String, Object>> out = new ArrayList<>();
         out.add(new LinkedHashMap<>());
@@ -1180,7 +1182,7 @@ public class ResearchSweepService {
         for (Map.Entry<String, List<Object>> e : grid.entrySet()) {
             String key = e.getKey();
             List<Object> values = e.getValue();
-            if (values == null || values.isEmpty()) continue;
+            if (CollectionUtils.isEmpty(values)) continue;
 
             List<Map<String, Object>> next = new ArrayList<>();
             for (Map<String, Object> existing : out) {
@@ -1220,7 +1222,7 @@ public class ResearchSweepService {
             int round1 = expandFromRanges(spec.getParamRanges()).size();
             return round1 + (rounds - 1) * MAX_COMBOS_PER_ROUND;
         }
-        if (spec.getParamGrid() != null && !spec.getParamGrid().isEmpty()) {
+        if (!CollectionUtils.isEmpty(spec.getParamGrid())) {
             int total = 1;
             for (List<Object> values : spec.getParamGrid().values()) {
                 total *= Math.max(1, values.size());
@@ -1233,7 +1235,7 @@ public class ResearchSweepService {
 
     private void validate(SweepSpec spec) {
         if (spec == null) throw new IllegalArgumentException("spec required");
-        if (isBlank(spec.getStrategyCode())) throw new IllegalArgumentException("strategyCode required");
+        if (!StringUtils.hasText(spec.getStrategyCode())) throw new IllegalArgumentException("strategyCode required");
         if (!RESEARCH_CAPABLE_CODES.contains(spec.getStrategyCode().toUpperCase())) {
             throw new IllegalArgumentException(
                     "Research sweeps are only supported for "
@@ -1241,8 +1243,8 @@ public class ResearchSweepService {
                             + ". Wire the other strategies' param service to "
                             + "BacktestParamOverrideContext before adding them here.");
         }
-        if (isBlank(spec.getAsset())) throw new IllegalArgumentException("asset required");
-        if (isBlank(spec.getInterval())) throw new IllegalArgumentException("interval required");
+        if (!StringUtils.hasText(spec.getAsset())) throw new IllegalArgumentException("asset required");
+        if (!StringUtils.hasText(spec.getInterval())) throw new IllegalArgumentException("interval required");
         if (spec.getFromDate() == null || spec.getToDate() == null) {
             throw new IllegalArgumentException("fromDate / toDate required");
         }
@@ -1364,7 +1366,7 @@ public class ResearchSweepService {
             if (rounds > MAX_ROUNDS) {
                 throw new IllegalArgumentException("rounds capped at " + MAX_ROUNDS);
             }
-            if (spec.getParamRanges() == null || spec.getParamRanges().isEmpty()) {
+            if (CollectionUtils.isEmpty(spec.getParamRanges())) {
                 throw new IllegalArgumentException(
                         "paramRanges required for multi-round research sweeps");
             }
@@ -1379,7 +1381,7 @@ public class ResearchSweepService {
                 rejectUnknownKey(e.getKey(), knownKeys, spec.getStrategyCode());
             }
         } else {
-            if (spec.getParamGrid() == null || spec.getParamGrid().isEmpty()) {
+            if (CollectionUtils.isEmpty(spec.getParamGrid())) {
                 throw new IllegalArgumentException("paramGrid must contain at least one varied key");
             }
             for (String key : spec.getParamGrid().keySet()) {
@@ -1392,7 +1394,7 @@ public class ResearchSweepService {
         // accepting the collision silently would let users submit a sweep
         // that ignores half their fixed values.
         Map<String, Object> fixed = spec.getFixedParams();
-        if (fixed != null && !fixed.isEmpty()) {
+        if (!CollectionUtils.isEmpty(fixed)) {
             Set<String> sweptKeys = new HashSet<>();
             if (spec.getParamRanges() != null) sweptKeys.addAll(spec.getParamRanges().keySet());
             if (spec.getParamGrid() != null)   sweptKeys.addAll(spec.getParamGrid().keySet());
@@ -1572,8 +1574,6 @@ public class ResearchSweepService {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
-
-    private static boolean isBlank(String s) { return s == null || s.isBlank(); }
 
     private static Integer asInt(Object v) {
         if (v == null) return null;

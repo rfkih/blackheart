@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.util.CollectionUtils;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -104,7 +105,7 @@ public class VboParams implements Serializable {
      *         logged and ignored so a typo doesn't nuke a sweep.
      */
     public int applyOverrides(Map<String, Object> overrides) {
-        if (overrides == null || overrides.isEmpty()) return 0;
+        if (CollectionUtils.isEmpty(overrides)) return 0;
         int applied = 0;
         for (Map.Entry<String, Object> e : overrides.entrySet()) {
             if (applyOverride(e.getKey(), e.getValue())) applied++;

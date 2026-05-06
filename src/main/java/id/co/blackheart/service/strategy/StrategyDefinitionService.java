@@ -15,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.Comparator;
@@ -64,7 +65,7 @@ public class StrategyDefinitionService {
      */
     @Transactional(readOnly = true)
     public Page<StrategyDefinitionResponse> listPaged(String query, String sort, int page, int size) {
-        String normalized = (query == null || query.isBlank()) ? null : query.trim();
+        String normalized = StringUtils.hasText(query) ? query.trim() : null;
         int cappedSize = Math.max(1, Math.min(size, 100));
         Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize, parseSort(sort));
         return repository.findFiltered(normalized, pageable).map(this::toResponse);
@@ -74,7 +75,7 @@ public class StrategyDefinitionService {
             Set.of("strategyCode", "strategyName", "strategyType", "archetype", "createdTime");
 
     private static Sort parseSort(String sort) {
-        if (sort == null || sort.isBlank()) {
+        if (!StringUtils.hasText(sort)) {
             return Sort.by(Sort.Order.asc("strategyCode"));
         }
         String[] parts = sort.split(",", 2);

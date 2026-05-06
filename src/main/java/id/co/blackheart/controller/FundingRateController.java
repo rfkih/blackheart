@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.CollectionUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -65,7 +66,7 @@ public class FundingRateController {
         data.put("endTime", endTime.toString());
         data.put("count", rows.size());
 
-        if (rows.isEmpty()) {
+        if (CollectionUtils.isEmpty(rows)) {
             data.put("mean", null);
             data.put("min", null);
             data.put("max", null);

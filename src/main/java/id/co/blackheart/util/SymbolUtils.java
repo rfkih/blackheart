@@ -1,6 +1,7 @@
 package id.co.blackheart.util;
 
 import java.util.List;
+import org.springframework.util.StringUtils;
 
 /**
  * Tiny helper for splitting a Binance trading pair into base/quote.
@@ -34,7 +35,7 @@ public final class SymbolUtils {
     }
 
     private static String matchQuote(String symbol) {
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException("symbol must not be blank");
         }
         String upper = symbol.toUpperCase();

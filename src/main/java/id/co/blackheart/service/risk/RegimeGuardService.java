@@ -7,6 +7,7 @@ import id.co.blackheart.service.alert.AlertSeverity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.Arrays;
 import java.util.Set;
@@ -64,12 +65,12 @@ public class RegimeGuardService {
             String allowedCsv,
             AccountStrategy strategy) {
 
-        if (allowedCsv == null || allowedCsv.isBlank()) return GateVerdict.allow();
-        if (currentValue == null || currentValue.isBlank()) return GateVerdict.allow();
+        if (!StringUtils.hasText(allowedCsv)) return GateVerdict.allow();
+        if (!StringUtils.hasText(currentValue)) return GateVerdict.allow();
 
         Set<String> allowed = Arrays.stream(allowedCsv.split(","))
                 .map(String::trim)
-                .filter(s -> !s.isEmpty())
+                .filter(StringUtils::hasText)
                 .map(String::toUpperCase)
                 .collect(Collectors.toSet());
 

@@ -11,6 +11,8 @@ import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -88,7 +90,7 @@ public class BacktestService {
         // page's "Re-run with these params" — tunings survive a page refresh.
         Map<String, Map<String, Object>> overrides = request.getStrategyParamOverrides();
         String configSnapshot = serialiseOverrides(overrides);
-        if (overrides != null && !overrides.isEmpty()) {
+        if (!CollectionUtils.isEmpty(overrides)) {
             log.info("Backtest submitted with param overrides across {} strateg(ies): {}",
                     overrides.size(), overrides.keySet());
         }
@@ -185,7 +187,7 @@ public class BacktestService {
      * to do unnecessary JSON parsing on every detail read.
      */
     private String serialiseOverrides(Map<String, Map<String, Object>> overrides) {
-        if (overrides == null || overrides.isEmpty()) return null;
+        if (CollectionUtils.isEmpty(overrides)) return null;
         try {
             return objectMapper.writeValueAsString(overrides);
         } catch (Exception e) {
@@ -202,10 +204,10 @@ public class BacktestService {
      * Returns null on null/empty input.
      */
     private Map<String, BigDecimal> canonicaliseAllocations(Map<String, BigDecimal> raw) {
-        if (raw == null || raw.isEmpty()) return null;
+        if (CollectionUtils.isEmpty(raw)) return null;
         Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, BigDecimal> e : raw.entrySet()) {
-            if (e.getKey() == null || e.getKey().isBlank()) continue;
+            if (!StringUtils.hasText(e.getKey())) continue;
             BigDecimal v = e.getValue();
             if (v == null) continue;
             if (v.signum() <= 0 || v.compareTo(new BigDecimal("100")) > 0) {
@@ -223,12 +225,12 @@ public class BacktestService {
      * a known interval; here we only canonicalize keys.
      */
     private Map<String, String> canonicaliseIntervals(Map<String, String> raw) {
-        if (raw == null || raw.isEmpty()) return null;
+        if (CollectionUtils.isEmpty(raw)) return null;
         Map<String, String> out = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, String> e : raw.entrySet()) {
-            if (e.getKey() == null || e.getKey().isBlank()) continue;
+            if (!StringUtils.hasText(e.getKey())) continue;
             String v = e.getValue();
-            if (v == null || v.isBlank()) continue;
+            if (!StringUtils.hasText(v)) continue;
             out.put(e.getKey().toUpperCase().trim(), v.trim());
         }
         return out.isEmpty() ? null : out;
@@ -241,15 +243,15 @@ public class BacktestService {
      */
     private String resolveStrategyCode(BacktestRunRequest request) {
         List<String> codes = request.getStrategyCodes();
-        if (codes != null && !codes.isEmpty()) {
+        if (!CollectionUtils.isEmpty(codes)) {
             List<String> valid = codes.stream()
-                    .filter(c -> c != null && !c.isBlank())
+                    .filter(StringUtils::hasText)
                     .toList();
-            if (!valid.isEmpty()) {
+            if (!CollectionUtils.isEmpty(valid)) {
                 return String.join(",", valid);
             }
         }
-        if (request.getStrategyCode() != null && !request.getStrategyCode().isBlank()) {
+        if (StringUtils.hasText(request.getStrategyCode())) {
             return request.getStrategyCode();
         }
         return request.getStrategyName();
@@ -260,10 +262,10 @@ public class BacktestService {
             throw new IllegalArgumentException("BacktestRunRequest cannot be null");
         }
 
-        boolean hasStrategyCodes = request.getStrategyCodes() != null
-                && request.getStrategyCodes().stream().anyMatch(c -> c != null && !c.isBlank());
-        boolean hasStrategyCode = request.getStrategyCode() != null && !request.getStrategyCode().isBlank();
-        boolean hasStrategyName = request.getStrategyName() != null && !request.getStrategyName().isBlank();
+        boolean hasStrategyCodes = !CollectionUtils.isEmpty(request.getStrategyCodes())
+                && request.getStrategyCodes().stream().anyMatch(StringUtils::hasText);
+        boolean hasStrategyCode = StringUtils.hasText(request.getStrategyCode());
+        boolean hasStrategyName = StringUtils.hasText(request.getStrategyName());
 
         if (!hasStrategyCodes && !hasStrategyCode && !hasStrategyName) {
             throw new IllegalArgumentException("At least one of strategyCodes, strategyCode, or strategyName must be provided");
@@ -271,10 +273,10 @@ public class BacktestService {
         if (request.getAccountStrategyId() == null) {
             throw new IllegalArgumentException("accountStrategyId is required (backtest_run.account_strategy_id is NOT NULL)");
         }
-        if (request.getAsset() == null || request.getAsset().isBlank()) {
+        if (!StringUtils.hasText(request.getAsset())) {
             throw new IllegalArgumentException("asset cannot be blank");
         }
-        if (request.getInterval() == null || request.getInterval().isBlank()) {
+        if (!StringUtils.hasText(request.getInterval())) {
             throw new IllegalArgumentException("interval cannot be blank");
         }
         if (request.getStartTime() == null || request.getEndTime() == null) {

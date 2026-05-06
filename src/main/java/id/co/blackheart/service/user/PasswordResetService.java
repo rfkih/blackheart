@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -58,7 +59,7 @@ public class PasswordResetService {
      */
     @Transactional
     public void requestReset(String email) {
-        if (email == null || email.isBlank()) return;
+        if (!StringUtils.hasText(email)) return;
         Optional<User> userOpt = userRepository.findByEmail(email.trim().toLowerCase());
         if (userOpt.isEmpty()) {
             // Don't log the email at INFO+ to avoid leaking enumeration via logs.
@@ -98,7 +99,7 @@ public class PasswordResetService {
      */
     @Transactional
     public void confirmReset(String tokenValue, String newPassword) {
-        if (tokenValue == null || tokenValue.isBlank()) {
+        if (!StringUtils.hasText(tokenValue)) {
             throw new EntityNotFoundException("Token not found");
         }
         if (newPassword == null || newPassword.length() < MIN_PASSWORD_LENGTH) {

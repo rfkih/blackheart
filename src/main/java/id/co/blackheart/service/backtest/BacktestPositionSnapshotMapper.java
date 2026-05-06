@@ -4,6 +4,7 @@ import id.co.blackheart.dto.strategy.PositionSnapshot;
 import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.model.BacktestTradePosition;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.util.Comparator;
@@ -32,7 +33,7 @@ public class BacktestPositionSnapshotMapper {
     }
 
     public PositionSnapshot toSnapshot(BacktestTrade trade, List<BacktestTradePosition> openPositions) {
-        if (trade == null || openPositions == null || openPositions.isEmpty()) {
+        if (trade == null || CollectionUtils.isEmpty(openPositions)) {
             return PositionSnapshot.builder()
                     .hasOpenPosition(false)
                     .build();

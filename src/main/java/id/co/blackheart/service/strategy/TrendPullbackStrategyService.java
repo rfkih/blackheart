@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -83,7 +84,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     private Params resolveParams() {
         Params base = researchParamService.getTprParams();
         Map<String, Object> overrides = BacktestParamOverrideContext.forStrategy(STRATEGY_CODE);
-        if (overrides == null || overrides.isEmpty()) {
+        if (CollectionUtils.isEmpty(overrides)) {
             return base;
         }
 

@@ -6,6 +6,7 @@ import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTradePosition;
 import id.co.blackheart.model.MarketData;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -110,7 +111,7 @@ public class BacktestEquityPointRecorder {
         java.util.Map<String, List<BacktestTradePosition>> byStrategy =
                 state.getActiveTradePositionsByStrategy();
         int count = 0;
-        if (byStrategy != null && !byStrategy.isEmpty()) {
+        if (!CollectionUtils.isEmpty(byStrategy)) {
             for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
                 if (perStrategy == null) continue;
                 for (BacktestTradePosition position : perStrategy) {

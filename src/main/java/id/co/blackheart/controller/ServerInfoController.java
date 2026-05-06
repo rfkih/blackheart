@@ -38,7 +38,7 @@ public class ServerInfoController {
     public ResponseEntity<ResponseDto> getIpHistory() {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(serverIpLogRepository.findAllByOrderByRecordedAtDesc())
+                .data(serverIpLogRepository.findTop100ByOrderByRecordedAtDesc())
                 .build());
     }
 

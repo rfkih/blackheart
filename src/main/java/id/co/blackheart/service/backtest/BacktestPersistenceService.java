@@ -10,6 +10,7 @@ import id.co.blackheart.repository.BacktestTradeRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 @Service
 @RequiredArgsConstructor
@@ -38,7 +39,7 @@ public class BacktestPersistenceService {
         applySummary(backtestRun, summary);
         backtestRunRepository.saveAndFlush(backtestRun);
 
-        if (state != null && state.getEquityPoints() != null && !state.getEquityPoints().isEmpty()) {
+        if (state != null && !CollectionUtils.isEmpty(state.getEquityPoints())) {
             backtestEquityPointRepository.saveAllAndFlush(state.getEquityPoints());
         }
 
@@ -48,12 +49,12 @@ public class BacktestPersistenceService {
 
         String actor = resolveActor(backtestRun);
 
-        if (state != null && state.getCompletedTrades() != null && !state.getCompletedTrades().isEmpty()) {
+        if (state != null && !CollectionUtils.isEmpty(state.getCompletedTrades())) {
             state.getCompletedTrades().forEach(t -> stampActor(t::getCreatedBy, t::setCreatedBy, t::setUpdatedBy, actor));
             backtestTradeRepository.saveAllAndFlush(state.getCompletedTrades());
         }
 
-        if (state != null && state.getCompletedTradePositions() != null && !state.getCompletedTradePositions().isEmpty()) {
+        if (state != null && !CollectionUtils.isEmpty(state.getCompletedTradePositions())) {
             state.getCompletedTradePositions().forEach(p -> stampActor(p::getCreatedBy, p::setCreatedBy, p::setUpdatedBy, actor));
             backtestTradePositionRepository.saveAllAndFlush(state.getCompletedTradePositions());
         }

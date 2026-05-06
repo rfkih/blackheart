@@ -12,6 +12,8 @@ import id.co.blackheart.repository.TradesRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -205,7 +207,7 @@ public class TradeOpenService {
             return PreTradeValidationResult.invalid("AccountStrategy is null");
         }
 
-        if (asset == null || asset.isBlank()) {
+        if (!StringUtils.hasText(asset)) {
             return PreTradeValidationResult.invalid("Asset is null or blank");
         }
 
@@ -278,14 +280,13 @@ public class TradeOpenService {
     }
 
     private String resolveStrategyName(EnrichedStrategyContext context, StrategyDecision decision) {
-        if (decision != null && decision.getStrategyCode() != null && !decision.getStrategyCode().isBlank()) {
+        if (decision != null && StringUtils.hasText(decision.getStrategyCode())) {
             return decision.getStrategyCode();
         }
 
         if (context != null
                 && context.getAccountStrategy() != null
-                && context.getAccountStrategy().getStrategyCode() != null
-                && !context.getAccountStrategy().getStrategyCode().isBlank()) {
+                && StringUtils.hasText(context.getAccountStrategy().getStrategyCode())) {
             return context.getAccountStrategy().getStrategyCode();
         }
 
@@ -332,7 +333,7 @@ public class TradeOpenService {
         BigDecimal totalFee = BigDecimal.ZERO;
         String feeCurrency = null;
 
-        if (response.getFills() != null && !response.getFills().isEmpty()) {
+        if (!CollectionUtils.isEmpty(response.getFills())) {
             for (BinanceOrderFill fill : response.getFills()) {
                 BigDecimal qty = new BigDecimal(fill.getQty());
                 BigDecimal price = new BigDecimal(fill.getPrice());
@@ -451,7 +452,7 @@ public class TradeOpenService {
     }
 
     private String normalizeExitStructure(String exitStructure) {
-        if (exitStructure == null || exitStructure.isBlank()) {
+        if (!StringUtils.hasText(exitStructure)) {
             return EXIT_STRUCTURE_SINGLE;
         }
         return exitStructure.trim().toUpperCase();

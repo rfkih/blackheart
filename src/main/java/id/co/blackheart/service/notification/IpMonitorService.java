@@ -6,6 +6,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
@@ -37,7 +38,7 @@ public class IpMonitorService {
     public void checkAndNotifyIfChanged() {
         try {
             String currentIp = getCurrentPublicIp();
-            if (currentIp == null || currentIp.isBlank()) {
+            if (!StringUtils.hasText(currentIp)) {
                 log.warn("[IpMonitor] Could not retrieve public IP.");
                 return;
             }

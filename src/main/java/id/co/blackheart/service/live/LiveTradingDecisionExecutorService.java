@@ -20,6 +20,7 @@ import id.co.blackheart.service.trade.TradeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import id.co.blackheart.util.SymbolUtils;
 
@@ -220,7 +221,7 @@ public class LiveTradingDecisionExecutorService {
             String asset,
             ListenerDecision listenerDecision
     ) throws JsonProcessingException {
-        if (activeTradePositions == null || activeTradePositions.isEmpty()
+        if (CollectionUtils.isEmpty(activeTradePositions)
                 || listenerDecision == null || !listenerDecision.isTriggered()) {
             return;
         }

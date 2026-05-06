@@ -275,18 +275,24 @@ Idempotency-Key: <uuid-per-logical-attempt>
 
 ### Cold-boot routine
 
+**Preferred (read-only queries):** use the generic wrapper. It resolves token, base URL, headers, and `--pretty` formatting in one allow-rule, so reformatting the curl never trips a permission prompt.
+
+```bash
+# Run from research-orchestrator/ — one allow rule covers every read.
+scripts/orch.sh GET /agent/playbook --pretty                           # contract — read first
+scripts/orch.sh GET /readyz                                            # bail if degraded
+scripts/orch.sh GET /agent/state --pretty                              # one-shot snapshot
+scripts/orch.sh GET '/journal?status=ACTIVE&entry_type=ANTI_PATTERN' --pretty
+scripts/orch.sh GET '/leaderboard?significant_only=true&limit=10' --pretty
+```
+
+`scripts/orch.sh` accepts only `GET` / `HEAD` — for state-changing POSTs (`/queue`, `/tick`, `/walk-forward`, `/reviews/*`) use the explicit recipes below.
+
+Raw equivalent (only when a recipe needs `$TOKEN`/`$ORCH_BASE` for a POST body):
+
 ```bash
 ORCH_BASE=http://127.0.0.1:8082
 TOKEN=$(grep ^ORCH_AUTH_TOKEN research-orchestrator/.env | cut -d= -f2-)
-
-curl -s "$ORCH_BASE/agent/playbook" | jq           # contract — read first
-curl -s "$ORCH_BASE/readyz"                         # bail if degraded
-curl -s -H "X-Orch-Token: $TOKEN" -H "X-Agent-Name: quant-researcher" \
-     "$ORCH_BASE/agent/state" | jq                  # one-shot snapshot
-curl -s -H "X-Orch-Token: $TOKEN" -H "X-Agent-Name: quant-researcher" \
-     "$ORCH_BASE/journal?status=ACTIVE&entry_type=ANTI_PATTERN" | jq
-curl -s -H "X-Orch-Token: $TOKEN" -H "X-Agent-Name: quant-researcher" \
-     "$ORCH_BASE/leaderboard?significant_only=true&limit=10" | jq
 ```
 
 ### Endpoints

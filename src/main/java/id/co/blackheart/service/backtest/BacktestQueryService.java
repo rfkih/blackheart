@@ -9,6 +9,7 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -116,7 +117,7 @@ public class BacktestQueryService {
     }
 
     private static String blankToNull(String v) {
-        return (v == null || v.isBlank()) ? null : v.trim();
+        return StringUtils.hasText(v) ? v.trim() : null;
     }
 
     /** Escape ILIKE metacharacters so user input can't turn a prefix filter into a wildcard scan. */

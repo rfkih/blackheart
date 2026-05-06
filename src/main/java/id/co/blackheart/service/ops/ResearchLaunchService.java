@@ -9,6 +9,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
@@ -148,7 +149,7 @@ public class ResearchLaunchService {
 
     private boolean postShutdown(String cookieHeader) {
         HttpHeaders headers = new HttpHeaders();
-        if (cookieHeader != null && !cookieHeader.isBlank()) {
+        if (StringUtils.hasText(cookieHeader)) {
             headers.add(HttpHeaders.COOKIE, cookieHeader);
         }
         try {
@@ -211,7 +212,7 @@ public class ResearchLaunchService {
     }
 
     private File resolveRepoRoot() {
-        if (repoRoot != null && !repoRoot.isBlank()) {
+        if (StringUtils.hasText(repoRoot)) {
             return new File(repoRoot);
         }
         return new File(System.getProperty("user.dir"));

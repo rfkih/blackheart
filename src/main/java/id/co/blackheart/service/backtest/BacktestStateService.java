@@ -4,6 +4,7 @@ import id.co.blackheart.dto.backtest.BacktestState;
 import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.model.BacktestTradePosition;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -50,7 +51,7 @@ public class BacktestStateService {
         // of the book from equity / drawdown calculations.
         java.util.Map<String, List<BacktestTradePosition>> byStrategy =
                 state.getActiveTradePositionsByStrategy();
-        if (byStrategy != null && !byStrategy.isEmpty()) {
+        if (!CollectionUtils.isEmpty(byStrategy)) {
             for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
                 if (perStrategy == null) continue;
                 equity = equity.add(positionsMarkToMarket(perStrategy, latestPrice));
@@ -62,7 +63,7 @@ public class BacktestStateService {
         // strategy runs with no multi-trade entries).
         BacktestTrade activeTrade = state.getActiveTrade();
         List<BacktestTradePosition> activePositions = state.getActiveTradePositions();
-        if (activeTrade == null || activePositions == null || activePositions.isEmpty()) {
+        if (activeTrade == null || CollectionUtils.isEmpty(activePositions)) {
             return equity;
         }
         return equity.add(positionsMarkToMarket(activePositions, latestPrice));

@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import javax.crypto.SecretKey;
 import java.util.Arrays;
@@ -70,7 +71,7 @@ public class JwtService {
 
     @PostConstruct
     void validateSecretOnStartup() {
-        if (jwtSecret == null || jwtSecret.isBlank()) {
+        if (!StringUtils.hasText(jwtSecret)) {
             throw new IllegalStateException(
                     "app.jwt.secret is not configured — set the JWT_SECRET env var to a Base64-encoded 256-bit key"
             );
@@ -134,7 +135,7 @@ public class JwtService {
     public boolean isTokenValid(String token, String email) {
         try {
             final String tokenEmail = extractEmail(token);
-            return tokenEmail.equals(email) && !isTokenExpired(token);
+            return tokenEmail != null && tokenEmail.equals(email) && !isTokenExpired(token);
         } catch (JwtException e) {
             log.warn("JWT validation failed: {}", e.getMessage());
             return false;
@@ -149,11 +150,18 @@ public class JwtService {
 
     public UUID extractUserId(String token) {
         String userId = extractClaim(token, claims -> claims.get("userId", String.class));
+        if (userId == null) {
+            throw new JwtException("Missing userId claim in token");
+        }
         return UUID.fromString(userId);
     }
 
     public String extractRole(String token) {
-        return extractClaim(token, claims -> claims.get("role", String.class));
+        String role = extractClaim(token, claims -> claims.get("role", String.class));
+        if (role == null) {
+            throw new JwtException("Missing role claim in token");
+        }
+        return role;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

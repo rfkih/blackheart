@@ -4,6 +4,8 @@ import id.co.blackheart.model.FundingRate;
 import id.co.blackheart.repository.FundingRateRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -108,10 +110,10 @@ public class BacktestFundingCostService {
         if (notional == null || notional.signum() <= 0) return BigDecimal.ZERO;
         if (entryTime == null || exitTime == null) return BigDecimal.ZERO;
         if (!exitTime.isAfter(entryTime)) return BigDecimal.ZERO;
-        if (side == null || symbol == null || symbol.isBlank()) return BigDecimal.ZERO;
+        if (side == null || !StringUtils.hasText(symbol)) return BigDecimal.ZERO;
 
         List<FundingRate> events = fundingRateRepository.findInWindow(symbol, entryTime, exitTime);
-        if (events.isEmpty()) return BigDecimal.ZERO;
+        if (CollectionUtils.isEmpty(events)) return BigDecimal.ZERO;
 
         BigDecimal total = BigDecimal.ZERO;
         for (FundingRate ev : events) {

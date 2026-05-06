@@ -7,6 +7,7 @@ import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.util.MonteCarloSimulationMode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -107,7 +108,7 @@ public class MonteCarloEngine {
             UUID backtestRunId,
             BigDecimal backtestInitialCapital
     ) {
-        if (samples == null || samples.isEmpty()) {
+        if (CollectionUtils.isEmpty(samples)) {
             throw new IllegalArgumentException("samples must not be null or empty");
         }
 

@@ -2,6 +2,7 @@ package id.co.blackheart.engine;
 
 import lombok.Builder;
 import lombok.Getter;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -60,7 +61,7 @@ public class StrategySpec {
      * Empty/null {@code overrides} returns this same instance.
      */
     public StrategySpec merge(Map<String, Object> overrides) {
-        if (overrides == null || overrides.isEmpty()) {
+        if (CollectionUtils.isEmpty(overrides)) {
             return this;
         }
         Map<String, Object> merged = params == null ? new HashMap<>() : new HashMap<>(params);

@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -59,7 +60,7 @@ public class FundingRateService {
      */
     @Transactional
     public int upsertAll(List<FundingRate> rows) {
-        if (rows == null || rows.isEmpty()) return 0;
+        if (CollectionUtils.isEmpty(rows)) return 0;
 
         List<FundingRate.FundingRateId> ids = new ArrayList<>(rows.size());
         for (FundingRate row : rows) {
@@ -171,7 +172,7 @@ public class FundingRateService {
      */
     public FundingFeatureSnapshot computeFundingFeaturesFromSeries(
             List<FundingRate> orderedSeries, LocalDateTime boundary) {
-        if (orderedSeries == null || orderedSeries.isEmpty() || boundary == null) {
+        if (CollectionUtils.isEmpty(orderedSeries) || boundary == null) {
             return FundingFeatureSnapshot.empty();
         }
         // Find the latest event with fundingTime <= boundary via linear scan
@@ -238,7 +239,7 @@ public class FundingRateService {
          * Requires n≥4 so the peer-set stddev has at least 3 samples.
          */
         static FundingFeatureSnapshot compute(BigDecimal rate8h, List<FundingRate> window) {
-            if (rate8h == null || window == null || window.isEmpty()) {
+            if (rate8h == null || CollectionUtils.isEmpty(window)) {
                 return new FundingFeatureSnapshot(rate8h, null, null);
             }
             int n = window.size();

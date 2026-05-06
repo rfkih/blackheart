@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+import org.springframework.util.StringUtils;
 
 /**
  * STOMP WebSocket controller for real-time combined 1h+4h market sentiment.
@@ -54,7 +55,7 @@ public class SentimentWebSocketController {
 
     @MessageMapping("/sentiment.subscribe")
     public void subscribe(SentimentSubscribeRequest request) {
-        if (request == null || request.getSymbol() == null || request.getSymbol().isBlank()) {
+        if (request == null || !StringUtils.hasText(request.getSymbol())) {
             return;
         }
 

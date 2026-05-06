@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -135,10 +136,10 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
      */
     private String clientKey(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
+        if (StringUtils.hasText(forwarded)) {
             int comma = forwarded.indexOf(',');
             String first = (comma < 0 ? forwarded : forwarded.substring(0, comma)).trim();
-            if (!first.isEmpty()) return first;
+            if (StringUtils.hasText(first)) return first;
         }
         return request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr();
     }

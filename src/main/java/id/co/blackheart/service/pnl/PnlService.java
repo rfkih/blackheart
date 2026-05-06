@@ -13,6 +13,7 @@ import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -79,7 +80,7 @@ public class PnlService {
 
         List<Trades> closed = tradesRepository.findClosedInPeriodByAccountIds(accountIds, fromDt, toDt);
 
-        if (strategyCode != null && !strategyCode.isBlank()) {
+        if (StringUtils.hasText(strategyCode)) {
             closed = closed.stream()
                     .filter(t -> strategyCode.equalsIgnoreCase(t.getStrategyName()))
                     .collect(Collectors.toList());

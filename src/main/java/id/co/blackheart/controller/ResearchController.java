@@ -28,6 +28,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
@@ -89,7 +90,7 @@ public class ResearchController {
         // has no cached snapshot yet (older runs, or completed-before-analyzer),
         // compute now. Otherwise return the cached payload verbatim.
         AnalysisReport report;
-        if (recompute || run.getAnalysisSnapshot() == null || run.getAnalysisSnapshot().isBlank()) {
+        if (recompute || !StringUtils.hasText(run.getAnalysisSnapshot())) {
             report = analysisService.analyze(runId);
         } else {
             try {
@@ -195,7 +196,7 @@ public class ResearchController {
     }
 
     private static String blankToNull(String s) {
-        return (s == null || s.isBlank()) ? null : s.trim();
+        return StringUtils.hasText(s) ? s.trim() : null;
     }
 
     // ── Sweep driver ─────────────────────────────────────────────────────────
@@ -257,11 +258,11 @@ public class ResearchController {
 
     /** "RUNNING,PENDING" → {RUNNING, PENDING}. Empty/null → empty set (= no filter). */
     private static Set<String> parseCsvUpper(String csv) {
-        if (csv == null || csv.isBlank()) return Set.of();
+        if (!StringUtils.hasText(csv)) return Set.of();
         Set<String> out = new HashSet<>();
         for (String token : csv.split(",")) {
             String t = token.trim().toUpperCase(Locale.ROOT);
-            if (!t.isEmpty()) out.add(t);
+            if (StringUtils.hasText(t)) out.add(t);
         }
         return out;
     }

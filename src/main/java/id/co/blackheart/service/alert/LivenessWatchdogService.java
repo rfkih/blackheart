@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -177,11 +178,11 @@ public class LivenessWatchdogService {
     }
 
     void checkIngestFreshness() {
-        if (liveSymbol == null || liveSymbol.isBlank()) return;
+        if (!StringUtils.hasText(liveSymbol)) return;
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(ingestStalledMinutes);
         for (String raw : ingestIntervalsCsv.split(",")) {
             String interval = raw.trim();
-            if (interval.isEmpty()) continue;
+            if (!StringUtils.hasText(interval)) continue;
 
             MarketData latest = marketDataRepository.findLatestBySymbol(liveSymbol, interval);
             if (latest == null) {

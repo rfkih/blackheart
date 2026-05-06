@@ -18,6 +18,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -140,7 +142,7 @@ public class MarketQueryController {
             // /indicators stays aligned with GET /api/v1/market on first mount.
             List<MarketData> recent = marketDataRepository.findLatestCandles(
                     symbol.toUpperCase(), interval, limit);
-            if (recent.isEmpty()) {
+            if (CollectionUtils.isEmpty(recent)) {
                 rows = List.of();
             } else {
                 // findLatestCandles returns newest-first; flip the bounds.
@@ -194,7 +196,7 @@ public class MarketQueryController {
     }
 
     private LocalDateTime parseDateTime(String s) {
-        if (s == null || s.isBlank()) {
+        if (!StringUtils.hasText(s)) {
             throw new IllegalArgumentException("Date string is empty");
         }
 

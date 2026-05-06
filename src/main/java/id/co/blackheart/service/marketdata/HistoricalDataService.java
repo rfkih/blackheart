@@ -10,6 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
@@ -128,7 +130,7 @@ public class HistoricalDataService {
 
         List<MarketData> latest4hCandles = marketDataRepository.findLatestCandles(symbol, INTERVAL_4H, totalNeeded4h);
 
-        if (latest4hCandles == null || latest4hCandles.isEmpty()) {
+        if (CollectionUtils.isEmpty(latest4hCandles)) {
             log.warn("Skip 15m warmup because no 4h market_data found | symbol={}", symbol);
             return;
         }
@@ -202,7 +204,7 @@ public class HistoricalDataService {
 
         List<MarketData> latest4hCandles = marketDataRepository.findLatestCandles(symbol, INTERVAL_4H, totalNeeded4h);
 
-        if (latest4hCandles == null || latest4hCandles.isEmpty()) {
+        if (CollectionUtils.isEmpty(latest4hCandles)) {
             log.warn("Skip 1h warmup because no 4h market_data found | symbol={}", symbol);
             return;
         }
@@ -276,7 +278,7 @@ public class HistoricalDataService {
 
         List<MarketData> latest4hCandles = marketDataRepository.findLatestCandles(symbol, INTERVAL_4H, totalNeeded4h);
 
-        if (latest4hCandles == null || latest4hCandles.isEmpty()) {
+        if (CollectionUtils.isEmpty(latest4hCandles)) {
             log.warn("Skip 5m warmup because no 4h market_data found | symbol={}", symbol);
             return;
         }
@@ -341,10 +343,10 @@ public class HistoricalDataService {
     }
 
     private void validateInputs(String symbol, String interval, int targetCandles, int warmupCandles) {
-        if (symbol == null || symbol.isBlank()) {
+        if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException("symbol cannot be blank");
         }
-        if (interval == null || interval.isBlank()) {
+        if (!StringUtils.hasText(interval)) {
             throw new IllegalArgumentException("interval cannot be blank");
         }
         if (targetCandles <= 0) {
@@ -436,7 +438,7 @@ public class HistoricalDataService {
 
         List<MarketData> latestCandles = marketDataRepository.findLatestCandles(symbol, interval, totalNeeded);
 
-        if (latestCandles == null || latestCandles.size() <= warmupCandles) {
+        if (CollectionUtils.isEmpty(latestCandles) || latestCandles.size() <= warmupCandles) {
             throw new IllegalStateException("Not enough market_data found to repair feature_store");
         }
 
@@ -586,7 +588,7 @@ public class HistoricalDataService {
                 .bodyToMono(String.class)
                 .block();
 
-        if (response == null || response.isBlank()) {
+        if (!StringUtils.hasText(response)) {
             return new JSONArray();
         }
 

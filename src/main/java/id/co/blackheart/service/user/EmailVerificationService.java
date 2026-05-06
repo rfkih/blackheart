@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -81,7 +82,7 @@ public class EmailVerificationService {
      */
     @Transactional
     public void confirm(String tokenValue) {
-        if (tokenValue == null || tokenValue.isBlank()) {
+        if (!StringUtils.hasText(tokenValue)) {
             throw new EntityNotFoundException("Token not found");
         }
         EmailVerificationToken token = tokenRepository.findById(tokenValue)

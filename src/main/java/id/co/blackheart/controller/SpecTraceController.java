@@ -15,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -119,7 +120,7 @@ public class SpecTraceController {
     }
 
     private static String blankToNull(String s) {
-        return (s == null || s.isBlank()) ? null : s;
+        return StringUtils.hasText(s) ? s : null;
     }
 
     private static Map<String, Object> toListRow(SpecTrace t) {

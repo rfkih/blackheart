@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -43,7 +45,7 @@ public class ResearchQueueService {
     private final ResearchQueueRepository repository;
 
     public List<ResearchQueueItemResponse> list(String strategyCode, List<String> statuses) {
-        List<String> normalized = (statuses == null || statuses.isEmpty()) ? null : statuses;
+        List<String> normalized = CollectionUtils.isEmpty(statuses) ? null : statuses;
         return repository.findFiltered(strategyCode, normalized).stream()
                 .map(ResearchQueueItemResponse::from)
                 .toList();
@@ -56,7 +58,7 @@ public class ResearchQueueService {
                 .priority(req.getPriority() != null ? req.getPriority() : DEFAULT_PRIORITY)
                 .strategyCode(req.getStrategyCode())
                 .intervalName(req.getIntervalName())
-                .instrument(req.getInstrument() != null && !req.getInstrument().isBlank()
+                .instrument(StringUtils.hasText(req.getInstrument())
                         ? req.getInstrument()
                         : DEFAULT_INSTRUMENT)
                 .sweepConfig(req.getSweepConfig())

@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
@@ -96,7 +97,7 @@ public class AlertService {
                       String message,
                       JsonNode context,
                       String dedupeKey) {
-        boolean hasKey = dedupeKey != null && !dedupeKey.isBlank();
+        boolean hasKey = StringUtils.hasText(dedupeKey);
         // Atomic check-and-set: two threads racing the same key — the first
         // to win compute() gets isWinner=true and fans out, the rest see
         // suppressed=true. Without this, both observe stale lastSeen=null,
@@ -155,7 +156,7 @@ public class AlertService {
 
     private boolean shouldSendEmail(AlertSeverity severity) {
         if (!emailEnabled) return false;
-        if (emailTo == null || emailTo.isBlank()) return false;
+        if (!StringUtils.hasText(emailTo)) return false;
         return severity.atLeast(AlertSeverity.WARN);
     }
 
@@ -178,7 +179,7 @@ public class AlertService {
             helper.setFrom(new InternetAddress(emailFrom, emailFromName, StandardCharsets.UTF_8.name()));
             for (String addr : emailTo.split(",")) {
                 String trimmed = addr.trim();
-                if (!trimmed.isBlank()) helper.addTo(trimmed);
+                if (StringUtils.hasText(trimmed)) helper.addTo(trimmed);
             }
             helper.setSubject("[" + severity.name() + "] BLACKHEART — " + kind);
             helper.setText(message, false);

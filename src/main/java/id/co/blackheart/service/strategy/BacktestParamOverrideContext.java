@@ -3,6 +3,7 @@ package id.co.blackheart.service.strategy;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import org.springframework.util.CollectionUtils;
 
 /**
  * Thread-scoped holder that carries per-strategy parameter overrides from the
@@ -50,7 +51,7 @@ public final class BacktestParamOverrideContext {
 
     /** Replaces the current thread-local map. Caller must pair with {@link #exit()}. */
     public static void enter(Map<String, Map<String, Object>> overridesByStrategy) {
-        if (overridesByStrategy == null || overridesByStrategy.isEmpty()) {
+        if (CollectionUtils.isEmpty(overridesByStrategy)) {
             HOLDER.remove();
             return;
         }
@@ -61,7 +62,7 @@ public final class BacktestParamOverrideContext {
         for (Map.Entry<String, Map<String, Object>> e : overridesByStrategy.entrySet()) {
             if (e.getKey() == null) continue;
             Map<String, Object> inner = e.getValue();
-            if (inner == null || inner.isEmpty()) continue;
+            if (CollectionUtils.isEmpty(inner)) continue;
             normalised.put(e.getKey().trim().toUpperCase(), new HashMap<>(inner));
         }
         if (normalised.isEmpty()) {

@@ -132,6 +132,10 @@ public class PortfolioService {
         request.setRecvWindow(RECV_WINDOW);
 
         BinanceAssetResponse response = binanceClientService.getBinanceAssetDetails(request);
+        if (response == null || response.getAssets() == null) {
+            log.warn("[Portfolio] No asset data returned from Binance for account={} asset={}", user.getUsername(), asset);
+            return null;
+        }
         saveAllBinanceAssets(user, response.getAssets());
 
         return response.getAssets().stream()
