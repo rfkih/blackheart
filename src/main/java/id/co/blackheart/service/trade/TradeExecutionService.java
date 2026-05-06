@@ -38,17 +38,16 @@ public class TradeExecutionService {
     public BinanceOrderDetailResponse getOrderDetailBinance(BinanceOrderDetailRequest orderDetailRequest) {
         try {
             BinanceOrderDetailResponse response = binanceClientService.orderDetailBinance(orderDetailRequest);
-            log.info("orderDetailBinance : {}", response);
+            log.debug("orderDetailBinance : {}", response);
 
             if (response == null) {
-                log.warn("⚠No data received for ID Detail : {}", orderDetailRequest.getOrderId());
+                log.warn("No data received for ID Detail : {}", orderDetailRequest.getOrderId());
                 throw new RuntimeException("No data received for ID Detail: " + orderDetailRequest.getOrderId());
             }
 
             return response;
-        } catch (RuntimeException e) {
-            throw e;
         } catch (Exception e) {
+            log.error("[getOrderDetailBinance] Request failed: {}", e.getMessage(), e);
             throw new RuntimeException(e);
         }
     }

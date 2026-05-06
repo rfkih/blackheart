@@ -5,6 +5,7 @@ import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.tradequery.TradePnlQueryService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -26,7 +27,7 @@ public class TradePnlQueryController {
     public ResponseEntity<ResponseDto> getCurrentActiveTradePnl(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID accountId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         ownershipGuard.assertOwnsAccount(userId, accountId);
 
         return ResponseEntity.ok().body(ResponseDto.builder()

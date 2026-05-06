@@ -13,6 +13,7 @@ import id.co.blackheart.service.research.SweepSpec;
 import id.co.blackheart.service.research.SweepState;
 import id.co.blackheart.service.strategy.TrendPullbackStrategyService.Params;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -171,7 +172,7 @@ public class ResearchController {
             @RequestParam(name = "sort", defaultValue = "createdAt,desc") String sort,
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "50") int size) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         String code          = blankToNull(strategyCode);
         String assetFilter   = blankToNull(asset);
         String intervalFilter= blankToNull(interval);
@@ -205,7 +206,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> createSweep(
             @RequestHeader("Authorization") String authHeader,
             @RequestBody SweepSpec spec) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.startSweep(userId, spec);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ResponseDto.builder()
                 .responseCode(HttpStatus.ACCEPTED.value() + ResponseCode.SUCCESS.getCode())
@@ -219,7 +220,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> getSweep(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.getSweep(sweepId);
         if (state == null
                 || (state.getUserId() != null && !state.getUserId().equals(userId))) {
@@ -241,7 +242,7 @@ public class ResearchController {
             @RequestParam(name = "sort", required = false) String sort,
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "25") int size) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         Set<String> statusFilter = parseCsvUpper(status);
         // Cap size to keep dashboards from accidentally loading thousands of rows
         // through the in-memory filter (the same cap RecentPromotions uses).
@@ -271,7 +272,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> cancelSweep(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.getSweep(sweepId);
         if (state == null
                 || (state.getUserId() != null && !state.getUserId().equals(userId))) {
@@ -291,7 +292,7 @@ public class ResearchController {
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId,
             @RequestBody Map<String, Object> body) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         @SuppressWarnings("unchecked")
         Map<String, Object> paramSet = (Map<String, Object>) body.get("paramSet");
         BacktestRun run = sweepService.evaluateHoldout(userId, sweepId, paramSet);
@@ -310,7 +311,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> deleteSweep(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.getSweep(sweepId);
         if (state == null
                 || (state.getUserId() != null && !state.getUserId().equals(userId))) {

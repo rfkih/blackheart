@@ -5,6 +5,13 @@
 > carries identity, mission, and hard constraints; this file carries
 > the procedure.
 
+> **Paired-research mode (2026-05-06):** Each iteration of the loop
+> goes through `quant-reviewer` at two gates — plan review (before
+> `/queue`) and graduation review (before `/walk-forward`). The
+> orchestrator enforces both with 409 responses; you cannot ship
+> without an APPROVED verdict. Loop only ends on goal hit
+> (≥10%/yr ROBUST), infra hard-fail, or hard-rule violation.
+
 ## Workflow
 
 ### 0. Early-exit guard (run BEFORE any other work)
@@ -123,9 +130,60 @@ Before queueing, write `research/RESEARCH_PLAN_<YYYY-MM-DD>.md` (one per session
 - **Execution order** for this session.
 - **Decision criteria for next session.**
 
-### 5–6. Queue + run via HTTP API (preferred)
+### 4.5. Request plan review (paired-research, mandatory)
 
-See "HTTP API recipes" below.
+The orchestrator's `/queue` will 409 with `review_required` if you skip
+this. Submit BEFORE you call `/queue`:
+
+```bash
+PLAN_REQUEST=$(curl -s -X POST "$ORCH_BASE/reviews/request" \
+  -H "X-Orch-Token: $TOKEN" -H "X-Agent-Name: quant-researcher" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"target_kind\": \"plan\",
+    \"plan\": {
+      \"strategy_code\": \"MMR\",
+      \"axis_names\": [\"ATR_EXT\", \"RSI_EXT\"],
+      \"hypothesis_id\": \"$HYPOTHESIS_JOURNAL_ID\",
+      \"plan_path\": \"research/RESEARCH_PLAN_$(date +%Y-%m-%d).md\"
+    }
+  }")
+TARGET_ID=$(echo "$PLAN_REQUEST" | jq -r '.target_id')
+```
+
+Then spawn `quant-reviewer` as a sub-agent (via the Agent tool):
+
+```
+Agent(
+  subagent_type="quant-reviewer",
+  description="Plan review for MMR/ATR_EXT/RSI_EXT",
+  prompt="Run plan review on target_id=<TARGET_ID>. Pull the request via
+          GET /reviews/pending, fetch the HYPOTHESIS journal entry +
+          plan file, run plan_review_checklist, post the verdict via
+          POST /reviews. Exit with the 5-line summary."
+)
+```
+
+Then poll for the verdict:
+
+```bash
+while true; do
+  RESP=$(curl -s -H "X-Orch-Token: $TOKEN" \
+    "$ORCH_BASE/reviews/by-target?target_id=$TARGET_ID")
+  VERDICT=$(echo "$RESP" | jq -r '.latest_verdict.structured_data.verdict // "PENDING"')
+  if [ "$VERDICT" != "PENDING" ]; then break; fi
+  sleep 5
+done
+```
+
+If `APPROVED` or `CONDITIONAL_APPROVAL`: continue to step 5.
+If `REJECTED`: read findings, address, re-submit (round 2). On second `REJECTED`, pivot to a different archetype.
+
+### 5–6. Queue + run via HTTP API
+
+See "HTTP API recipes" below. Note that `POST /queue` now requires
+`hypothesis_id` (so the gate can find the matching APPROVED verdict).
 
 ### 7. Read results, write journal
 
@@ -147,15 +205,59 @@ When a HYPOTHESIS is contradicted by ≥3 strategies, mark old `status='FALSIFIE
 
 **Cross-reference**: include iteration_ids in `iteration_id_refs` whenever the entry is grounded in specific runs.
 
-### 8. Decide next step
+### 7.5. Request graduation review (paired-research, mandatory)
 
-Recommend ONE of:
-- **Park & hand back to operator** — SIGNIFICANT_EDGE candidate, walk-forward queued, user decides on promotion.
-- **Continue research** — follow-up sweep on fresh dimension.
-- **Pivot** — current archetype dead, propose next archetype.
-- **Escalate** — 3+ archetypes failed same hypothesis → bottleneck is data plane (Phase 3) or methodology (Phase 9).
+When a tick produces `statistical_verdict=SIGNIFICANT_EDGE`, the
+orchestrator parks the queue. Before calling `/walk-forward`:
 
-State recommendation in 3–4 sentences. Include evidence (iteration ids, journal refs).
+```bash
+GRAD_REQUEST=$(curl -s -X POST "$ORCH_BASE/reviews/request" \
+  -H "X-Orch-Token: $TOKEN" -H "X-Agent-Name: quant-researcher" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"target_kind\": \"graduation\",
+    \"graduation\": {
+      \"iteration_id\": \"$ITERATION_ID\",
+      \"strategy_code\": \"MMR\",
+      \"motivating_hypothesis_id\": \"$HYPOTHESIS_JOURNAL_ID\"
+    }
+  }")
+GRAD_TARGET_ID=$(echo "$GRAD_REQUEST" | jq -r '.target_id')
+```
+
+Spawn the reviewer sub-agent again (fresh context — the reviewer has
+not seen the iteration yet):
+
+```
+Agent(
+  subagent_type="quant-reviewer",
+  description="Graduation review for iteration <id>",
+  prompt="Run graduation review on target_id=<GRAD_TARGET_ID>. Pull the
+          request, fetch the iteration via GET /iterations/{id}, fetch
+          the sweep history via GET /iterations?strategy_code=...,
+          run graduation_review_checklist, post the verdict, exit."
+)
+```
+
+Poll until the verdict posts. If `APPROVED`/`CONDITIONAL_APPROVAL`: call `/walk-forward` with `motivating_iteration_id=<id>`. The orchestrator gate enforces this — bypassing it requires `override_review_gate=true` which is operator-only.
+
+If `REJECTED`: journal a `STRATEGY_OUTCOME` row capturing the reviewer's findings, then loop back to step 1 with the next-most-promising archetype. **Do not exit.**
+
+### 8. Decide next loop iteration
+
+The loop only exits on:
+- **GOAL HIT**: walk-forward `ROBUST` AND backtest annualized_return >= 10%. Journal as graduation candidate, summarise, exit.
+- **Hard-rule violation** would be required to proceed.
+- **Infra hard-fail** with retry-and-wait not viable.
+- **Token / context exhaustion** (the harness handles this; you'll be auto-compacted and continue, or the user will interrupt).
+
+Otherwise, after each iteration's verdict and (if applicable) graduation review:
+- Journal the outcome (`RUN_SUMMARY` mandatory; `STRATEGY_OUTCOME` if archetype-killing; `HYPOTHESIS` if a new structural insight emerged).
+- Pick the next archetype (criteria: least-recently-tested, journal-cited as most promising, has un-exercised plumbed data — funding/cross-window/ETH).
+- Loop back to step 1.
+
+There is **no "stop and ask the operator" branch** unless a hard rule blocks you. The operator interrupts when they want to inspect; you keep working until then.
 
 ---
 
@@ -217,9 +319,12 @@ curl -s -X POST "$ORCH_BASE/queue" \
       {"name": "RSI_EXT", "values": ["20","25","30"]}
     ]},
     "hypothesis": "Tighter ATR-extreme + RSI-extreme raises MFE/MAE without n collapse",
+    "hypothesis_id": "<journal_id of the HYPOTHESIS row — required for review gate>",
     "iter_budget": 5
   }' | jq
 ```
+
+`hypothesis_id` is the journal_id of the pre-registered `HYPOTHESIS` row that the reviewer endorsed. Without it the orchestrator returns 400 `hypothesis_id_required`. Without an APPROVED plan review for `(strategy_code, axis_names, hypothesis_id)` the orchestrator returns 409 `review_required`.
 
 Numeric param values are strings (BigDecimal on JVM side).
 
@@ -254,6 +359,8 @@ curl -s -X POST "$ORCH_BASE/walk-forward" \
     "overrides": {"ATR_EXT": "2.0", "RSI_EXT": "25"}
   }' | jq
 ```
+
+`motivating_iteration_id` is required (400 `motivating_iteration_id_required` otherwise). Without an APPROVED graduation review for it, the orchestrator returns 409 `graduation_review_required`. Always run the graduation review FIRST (step 7.5).
 
 Returns within ~3 hours (6 folds × up to 30min). `stability_verdict`: `ROBUST` is the only gate for graduation. `OVERFIT`/`INCONSISTENT` → re-design with regularisation. `NO_EDGE`/`INSUFFICIENT_EVIDENCE` → abandon.
 

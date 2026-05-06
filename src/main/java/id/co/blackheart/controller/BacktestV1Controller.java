@@ -7,6 +7,7 @@ import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.backtest.BacktestQueryService;
 import id.co.blackheart.service.backtest.BacktestService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -142,6 +143,6 @@ public class BacktestV1Controller {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

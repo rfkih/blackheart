@@ -15,6 +15,7 @@ import id.co.blackheart.service.risk.SlippageCalibrationService;
 import id.co.blackheart.util.DateTimeUtil;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -26,6 +27,7 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/market")
 @RequiredArgsConstructor
@@ -210,11 +212,15 @@ public class MarketQueryController {
 
         try {
             return LocalDateTime.parse(s);
-        } catch (DateTimeParseException ignored) {}
+        } catch (DateTimeParseException e) {
+            log.warn("Invalid date-time format in request parameter: {}", e.getMessage());
+        }
 
         try {
             return LocalDate.parse(s).atStartOfDay();
-        } catch (DateTimeParseException ignored) {}
+        } catch (DateTimeParseException e) {
+            log.warn("Invalid date-time format in request parameter: {}", e.getMessage());
+        }
 
         throw new IllegalArgumentException("Unsupported date format: " + s);
     }

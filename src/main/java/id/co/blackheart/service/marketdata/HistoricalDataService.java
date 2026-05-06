@@ -420,6 +420,12 @@ public class HistoricalDataService {
         );
     }
 
+    /**
+     * Repairs missing feature_store rows for the {@code targetCandles}
+     * latest bars. Routes through {@link TechnicalIndicatorService#bulkComputeAndStoreInRange}
+     * — one DB load + one BarSeries + walk in O(N) — instead of the prior
+     * per-bar pattern that re-queried 300 candles for every target bar.
+     */
     private FeatureRepairStats repairMissingFeatureStore(
             String symbol,
             String interval,
@@ -441,92 +447,34 @@ public class HistoricalDataService {
         LocalDateTime targetStartTime = targetCandlesOnly.get(0).getStartTime();
         LocalDateTime targetEndTime = targetCandlesOnly.get(targetCandlesOnly.size() - 1).getStartTime();
 
-        Set<LocalDateTime> existingFeatureStartTimes = featureStoreRepository
-                .findExistingStartTimesInRange(symbol, interval, targetStartTime, targetEndTime)
-                .stream()
-                .map(Timestamp::toLocalDateTime)
-                .collect(Collectors.toSet());
-
-        int insertedFeatures = 0;
-        int skippedFeatures = 0;
-
-        for (MarketData targetCandle : targetCandlesOnly) {
-            LocalDateTime startTime = targetCandle.getStartTime();
-
-            if (existingFeatureStartTimes.contains(startTime)) {
-                skippedFeatures++;
-                continue;
-            }
-
-            FeatureStore featureStore = technicalIndicatorService.computeIndicatorsAndStoreByStartTime(
-                    symbol,
-                    interval,
-                    startTime
-            );
-
-            if (featureStore != null) {
-                insertedFeatures++;
-            }
-        }
+        var res = technicalIndicatorService.bulkComputeAndStoreInRange(
+                symbol, interval, targetStartTime, targetEndTime, false, null);
 
         return new FeatureRepairStats(
-                insertedFeatures,
-                skippedFeatures,
+                res.inserted(),
+                res.skipped(),
                 targetCandlesOnly.size()
         );
     }
 
+    /**
+     * Repairs missing feature_store rows in a date range. Same bulk-compute
+     * delegation as {@link #repairMissingFeatureStore} — used for the 4h →
+     * 1h/15m/5m companion fan-out.
+     */
     private FeatureRepairRangeStats repairMissingFeatureStoreByRange(
             String symbol,
             String interval,
             LocalDateTime startTime,
             LocalDateTime endTime
     ) {
-        List<MarketData> candlesInRange = marketDataRepository.findBySymbolIntervalAndRange(
-                symbol,
-                interval,
-                startTime,
-                endTime
-        );
-
-        if (candlesInRange == null || candlesInRange.isEmpty()) {
-            return new FeatureRepairRangeStats(0, 0, 0);
-        }
-
-        candlesInRange.sort(Comparator.comparing(MarketData::getStartTime));
-
-        Set<LocalDateTime> existingFeatureStartTimes = featureStoreRepository
-                .findExistingStartTimesInRange(symbol, interval, startTime, endTime)
-                .stream()
-                .map(Timestamp::toLocalDateTime)
-                .collect(Collectors.toSet());
-
-        int insertedFeatures = 0;
-        int skippedFeatures = 0;
-
-        for (MarketData candle : candlesInRange) {
-            LocalDateTime candleStartTime = candle.getStartTime();
-
-            if (existingFeatureStartTimes.contains(candleStartTime)) {
-                skippedFeatures++;
-                continue;
-            }
-
-            FeatureStore featureStore = technicalIndicatorService.computeIndicatorsAndStoreByStartTime(
-                    symbol,
-                    interval,
-                    candleStartTime
-            );
-
-            if (featureStore != null) {
-                insertedFeatures++;
-            }
-        }
+        var res = technicalIndicatorService.bulkComputeAndStoreInRange(
+                symbol, interval, startTime, endTime, false, null);
 
         return new FeatureRepairRangeStats(
-                insertedFeatures,
-                skippedFeatures,
-                candlesInRange.size()
+                res.inserted(),
+                res.skipped(),
+                res.total()
         );
     }
 

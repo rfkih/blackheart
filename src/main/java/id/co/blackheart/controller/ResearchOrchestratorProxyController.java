@@ -57,7 +57,7 @@ public class ResearchOrchestratorProxyController {
     @Value("${app.research.orchestrator.base-url:http://127.0.0.1:8082}")
     private String orchestratorBaseUrl;
 
-    @Value("${app.research.orchestrator.token:dev-sentinel-not-for-prod}")
+    @Value("${app.research.orchestrator.token}")
     private String orchestratorToken;
 
     private final HttpClient http = HttpClient.newBuilder()
@@ -108,7 +108,9 @@ public class ResearchOrchestratorProxyController {
             while (values.hasMoreElements()) {
                 try {
                     builder.header(name, values.nextElement());
-                } catch (IllegalArgumentException ignored) { /* see ResearchProxyController */ }
+                } catch (IllegalArgumentException e) {
+                    log.warn("Invalid header skipped during orchestrator proxy forwarding: {}", e.getMessage());
+                }
             }
         }
 

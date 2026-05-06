@@ -7,6 +7,7 @@ import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.strategy.LsrStrategyParamService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -134,10 +135,10 @@ public class LsrStrategyParamController {
     // ── Helper ────────────────────────────────────────────────────────────────────
 
     private String extractEmail(String authHeader) {
-        return jwtService.extractEmail(authHeader.substring(7));
+        return jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

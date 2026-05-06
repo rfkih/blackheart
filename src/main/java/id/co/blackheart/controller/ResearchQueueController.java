@@ -6,6 +6,7 @@ import id.co.blackheart.dto.response.ResearchQueueItemResponse;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.research.ResearchQueueService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -79,7 +80,7 @@ public class ResearchQueueController {
     public ResponseEntity<ResponseDto> createForSelf(
             @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody CreateResearchQueueItemRequest request) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         ResearchQueueItemResponse created = service.create(request, userId.toString());
         return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()
                 .responseCode(HttpStatus.CREATED.value() + ResponseCode.SUCCESS.getCode())
@@ -115,10 +116,7 @@ public class ResearchQueueController {
 
     private String resolveActor(String authHeader) {
         try {
-            String token = authHeader != null && authHeader.startsWith("Bearer ")
-                    ? authHeader.substring(7)
-                    : authHeader;
-            UUID userId = jwtService.extractUserId(token);
+            UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
             return userId != null ? userId.toString() : "ADMIN_UI";
         } catch (Exception e) {
             return "ADMIN_UI";

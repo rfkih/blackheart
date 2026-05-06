@@ -3,6 +3,8 @@ package id.co.blackheart.dto.request;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -128,8 +130,16 @@ public class BacktestRunRequest {
                 message = "fundingRateBpsPer8h cannot exceed 50 bps/8h")
     private BigDecimal fundingRateBpsPer8h;
 
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "100000", inclusive = true)
     private BigDecimal minNotional;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "100000", inclusive = true)
     private BigDecimal minQty;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "100000", inclusive = true)
     private BigDecimal qtyStep;
 
     private Boolean allowLong;
@@ -144,15 +154,15 @@ public class BacktestRunRequest {
      * with thousands of arbitrary strategy codes.
      */
     @Size(max = 10)
-    private Map<String, Map<String, Object>> strategyParamOverrides;
+    private Map<String, @Size(max = 60) Map<String, Object>> strategyParamOverrides;
 
     /**
      * Max concurrent open trades across all strategies in this backtest. When
      * at the cap, new entry signals are skipped so the book isn't over-allocated
      * by all strategies firing on the same candle. Null/non-positive = no cap.
      */
-    @DecimalMin(value = "0", inclusive = true)
-    @DecimalMax(value = "20", inclusive = true)
+    @Min(0)
+    @Max(20)
     private Integer maxConcurrentStrategies;
 
     /**

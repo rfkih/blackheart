@@ -68,8 +68,9 @@ public class BacktestQueryService {
         // delivers empty strings when the client sends `?status=` — those
         // should disable the filter, not match rows where status = ''.
         String statusFilter = blankToNull(status);
-        String strategyFilter = blankToNull(strategyCode);
-        String symbolFilter = blankToNull(symbol);
+        // Escape ILIKE wildcards so a user-supplied "%" doesn't match all rows.
+        String strategyFilter = escapeLike(blankToNull(strategyCode));
+        String symbolFilter = escapeLike(blankToNull(symbol));
         String intervalFilter = blankToNull(intervalName);
         String triggeredByFilter = blankToNull(triggeredBy);
 
@@ -116,6 +117,12 @@ public class BacktestQueryService {
 
     private static String blankToNull(String v) {
         return (v == null || v.isBlank()) ? null : v.trim();
+    }
+
+    /** Escape ILIKE metacharacters so user input can't turn a prefix filter into a wildcard scan. */
+    private static String escapeLike(String v) {
+        if (v == null) return null;
+        return v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     /**

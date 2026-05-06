@@ -1,0 +1,3 @@
+ALTER TABLE account_strategy
+    ADD COLUMN IF NOT EXISTS kelly_sizing_enabled BOOLEAN      NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS kelly_max_fraction   NUMERIC(5,4) NOT NULL DEFAULT 0.2500;

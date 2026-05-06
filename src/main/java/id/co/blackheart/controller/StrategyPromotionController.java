@@ -6,6 +6,7 @@ import id.co.blackheart.model.PaperTradeRun;
 import id.co.blackheart.model.StrategyPromotionLog;
 import id.co.blackheart.service.promotion.StrategyPromotionService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -63,7 +64,7 @@ public class StrategyPromotionController {
             @PathVariable UUID accountStrategyId,
             @RequestBody PromoteRequest body,
             @RequestHeader("Authorization") String authHeader) {
-        UUID reviewerUserId = jwtService.extractUserId(authHeader);
+        UUID reviewerUserId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         StrategyPromotionLog row = promotionService.promote(
                 accountStrategyId,
                 body.getToState(),
@@ -176,7 +177,7 @@ public class StrategyPromotionController {
             @PathVariable String strategyCode,
             @RequestBody PromoteRequest body,
             @RequestHeader("Authorization") String authHeader) {
-        UUID reviewerUserId = jwtService.extractUserId(authHeader);
+        UUID reviewerUserId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         StrategyPromotionLog row = promotionService.promoteDefinition(
                 strategyCode,
                 body.getToState(),

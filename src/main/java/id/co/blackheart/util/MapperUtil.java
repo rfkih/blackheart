@@ -17,6 +17,9 @@ import java.util.Map;
 @Slf4j
 public class MapperUtil {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER_IGNORE_UNKNOWN =
+            new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public long getIntervalMinutes(String interval) {
         return switch (interval) {
@@ -39,7 +42,7 @@ public class MapperUtil {
     public static Object map(Object obj, Class<?> target) {
         if (obj==null || target==null) return null;
         try {
-            return new ObjectMapper().convertValue(obj, target);
+            return MAPPER.convertValue(obj, target);
         } catch (Exception e) {
             log.error("Failed to map object to {}", target.getName(), e);
             return null;
@@ -49,9 +52,7 @@ public class MapperUtil {
     public static Object mapIgnoreUnknownProps(Object obj, Class<?> target) {
         if (obj==null || target==null) return null;
         try {
-            return new ObjectMapper().configure(DeserializationFeature
-                            .FAIL_ON_UNKNOWN_PROPERTIES, false)
-                    .convertValue(obj, target);
+            return MAPPER_IGNORE_UNKNOWN.convertValue(obj, target);
         } catch (Exception e) {
             log.error("Failed to map (ignoring unknown props) object to {}", target.getName(), e);
             return null;
@@ -62,7 +63,7 @@ public class MapperUtil {
     public static String write(Object obj) {
         if (obj==null) return null;
         try {
-            return new ObjectMapper().writeValueAsString(obj);
+            return MAPPER.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize object to JSON string | type={}", obj.getClass().getSimpleName(), e);
             return null;
@@ -72,7 +73,7 @@ public class MapperUtil {
     public static Map<String, Object> toMap(Object obj) {
         if (obj==null) return Collections.emptyMap();
         try {
-            return new ObjectMapper().convertValue(obj, new TypeReference<>() {});
+            return MAPPER.convertValue(obj, new TypeReference<>() {});
         } catch (Exception e) {
             log.error("Failed to convert object to Map | type={}", obj.getClass().getSimpleName(), e);
             return Collections.emptyMap();

@@ -5,6 +5,7 @@ import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.model.SupportMessage;
 import id.co.blackheart.service.support.SupportMessageService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -46,7 +47,7 @@ public class SupportMessageController {
             @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody SupportMessageRequest request
     ) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SupportMessage saved = supportMessageService.submit(
                 userId, request.getSubject().trim(), request.getBody().trim(), request.getDiagnostic());
         return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()

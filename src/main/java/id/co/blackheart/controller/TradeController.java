@@ -9,6 +9,7 @@ import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.trade.TradeExecutionService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -99,15 +100,15 @@ public class TradeController {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 
     private Account resolveAccount(UUID userId, UUID accountId) {
         if (accountId == null) {
-            throw new EntityNotFoundException("Not found");
+            throw new EntityNotFoundException("Account ID must not be null");
         }
         ownershipGuard.assertOwnsAccount(userId, accountId);
         return accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+                .orElseThrow(() -> new EntityNotFoundException("Account not found: accountId=" + accountId));
     }
 }

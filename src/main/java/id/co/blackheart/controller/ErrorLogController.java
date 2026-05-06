@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -50,6 +51,7 @@ import java.util.UUID;
  * are heavy and only needed when drilling in. The single-row endpoint
  * returns the full row including the stack.
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/error-log")
 @RequiredArgsConstructor
@@ -254,7 +256,8 @@ public class ErrorLogController {
                 UUID userId = jwtService.extractUserId(token);
                 if (userId != null) return userId.toString();
             }
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException e) {
+            log.warn("Failed to extract user identity from token — proceeding as anonymous: {}", e.getMessage());
             // fall through
         }
         return "admin";

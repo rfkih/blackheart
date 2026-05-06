@@ -8,6 +8,7 @@ import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.user.JwtCookieService;
 import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.service.user.UserService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -133,7 +134,7 @@ public class UserController {
     )
     public ResponseEntity<ResponseDto> resendVerification(
             @RequestHeader("Authorization") String authHeader) {
-        java.util.UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        java.util.UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         emailVerificationService.issueVerificationToken(userId);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -183,8 +184,8 @@ public class UserController {
     public ResponseEntity<ResponseDto> wsTicket(
             @RequestHeader("Authorization") String authHeader) {
         UUID userId = extractUserId(authHeader);
-        String email = jwtService.extractEmail(authHeader.substring(7));
-        String role = jwtService.extractRole(authHeader.substring(7));
+        String email = jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
+        String role = jwtService.extractRole(AuthHeaderUtil.extractToken(authHeader));
         String ticket = jwtService.generateShortLivedTicket(email, userId, role);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -222,6 +223,6 @@ public class UserController {
     // ── Helper ────────────────────────────────────────────────────────────────
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

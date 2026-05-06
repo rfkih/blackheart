@@ -5,6 +5,7 @@ import id.co.blackheart.dto.request.RotateAccountCredentialsRequest;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.user.AccountQueryService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -113,6 +114,6 @@ public class AccountController {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

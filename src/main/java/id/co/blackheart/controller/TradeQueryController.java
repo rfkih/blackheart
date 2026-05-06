@@ -5,6 +5,7 @@ import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.tradequery.TradeAnomalyService;
 import id.co.blackheart.service.tradequery.TradeQueryService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -28,7 +29,7 @@ public class TradeQueryController {
     public ResponseEntity<ResponseDto> getActiveTradesByAccountId(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID accountId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         ownershipGuard.assertOwnsAccount(userId, accountId);
 
         return ResponseEntity.ok().body(ResponseDto.builder()
@@ -49,7 +50,7 @@ public class TradeQueryController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ResponseDto> getTradeAnomalies(
             @RequestHeader("Authorization") String authHeader) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(tradeAnomalyService.getAnomaliesForUser(userId))

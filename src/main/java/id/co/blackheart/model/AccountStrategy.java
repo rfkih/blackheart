@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -22,6 +23,10 @@ public class AccountStrategy extends BaseEntity {
     @Id
     @Column(name = "account_strategy_id", nullable = false, updatable = false)
     private UUID accountStrategyId;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 
     @Column(name = "account_id", nullable = false)
     private UUID accountId;
