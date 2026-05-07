@@ -1,0 +1,57 @@
+{
+  "entry_type": "STRATEGY_OUTCOME",
+  "strategy_code": "MMR",
+  "title": "ARCHETYPE_EXHAUSTION_2026-05-07: All spec-driven engines tested; operator actions needed to unlock next direction",
+  "content": "As of 2026-05-07, all available spec-driven engine archetypes have been tested on available instruments/timeframes. None have produced a SIGNIFICANT_EDGE candidate that passes V11 gates. Summary: (1) DCB2 (Donchian breakout): ETH 1h INSUFFICIENT_EVIDENCE (2 sweeps, CI_lower max=0.863); ETH 4h DEMOTED by portfolio gate (VBO corr=0.70); BTC 1h NO_EDGE. Archetype blocked by structural VBO correlation. (2) BBR (MeanReversion Oscillator): BTC 1h NO_EDGE (PF=0.13-0.23) even after archetype fix; ETH 1h had infra issues before fix. (3) TPB (TrendPullback): BTC 1h/4h degenerate (frequency starvation from cross-timeframe bias filter + schema parameter mismatch). ETH not tested but same structural issues apply. (4) MMR (Momentum Mean Reversion): ETH 1h NO_EDGE (multiple tests including extended hold); ETH 4h NO_EDGE (worse than 1h); BTC 1h DISCARDED 2026-05-01. (5) CMR: INSUFFICIENT_EVIDENCE (4 cells), n too low. Remaining potentially testable combinations require operator action. Continuing loop with BBR ETH 1h as least-recently-tested non-broken archetype (though prognosis is poor based on BTC result).",
+  "status": "ACTIVE",
+  "structured_data": {
+    "kind": "strategy_outcome",
+    "exhaustion_type": "ARCHETYPE_EXHAUSTION",
+    "date": "2026-05-07",
+    "engine_status": {
+      "DCB2": "BLOCKED_VBO_CORRELATION",
+      "BBR": "NO_EDGE_ON_BTC_PROGNOSIS_POOR",
+      "TPB": "BLOCKED_SCHEMA_MISMATCH_AND_BIAS_FILTER",
+      "MMR": "EXHAUSTED_ALL_ETH_BTCUSD_SURFACES",
+      "CMR": "INSUFFICIENT_EVIDENCE_N_TOO_LOW"
+    },
+    "data_wishlist": [
+      {
+        "priority": 1,
+        "item": "TPB schema fix: change 'tpR' to 'tp1R' and 'pullbackAtrTolerance' to 'pullbackTouchAtr' in trend_pullback.schema.json",
+        "impact": "Enables actual parameter sweeping on TPB (currently all sweeps run at engine defaults due to schema mismatch)",
+        "effort": "minimal",
+        "blocker": "schema is in blackheart/ (operator edit authority)"
+      },
+      {
+        "priority": 2,
+        "item": "TPB requireBiasTimeframe=false option: add boolean schema parameter to disable cross-timeframe 4h bias filter",
+        "impact": "Removes frequency starvation on TPB 1h; enables testing ETH 1h pullbacks without 4h bias constraint",
+        "effort": "medium (Java engine change + schema update)",
+        "blocker": "TrendPullbackEngine.java is in blackheart/ (operator edit authority)"
+      },
+      {
+        "priority": 3,
+        "item": "DCB2 BTC 4h account_strategy creation by operator (POST /api/v1/account-strategies on research JVM)",
+        "impact": "Enables testing DCB2 on BTC 4h; BTC dynamics may show lower VBO correlation than ETH",
+        "effort": "minimal (API call)",
+        "risk": "still likely VBO-correlated but BTC-ETH correlation may be different"
+      },
+      {
+        "priority": 4,
+        "item": "MMR SHORT direction: add SELL signal when price > EMA200 + extremeAtrMult*ATR AND RSI > overboughtThreshold",
+        "impact": "MMR LONG is dead but SHORT direction (fade overbought extremes above EMA200) may show edge",
+        "effort": "medium (Java engine change + schema update)",
+        "blocker": "MomentumMeanReversionEngine.java is in blackheart/ (operator edit authority)"
+      },
+      {
+        "priority": 5,
+        "item": "Funding rate strategy: use V34-V37 funding_rate_history table for mean-reversion of funding rate extremes",
+        "impact": "Completely new archetype uncorrelated with price-action-only strategies",
+        "effort": "large (new engine + backtest integration)",
+        "data_status": "V34-V37 backfill needed (tpb_not_seeded.md notes this is blocked)"
+      }
+    ],
+    "next_action": "Try BBR ETH 1h (least-recently-tested non-broken archetype) while operator considers priority-1 and 2 fixes"
+  }
+}

@@ -165,15 +165,13 @@ Agent(
 )
 ```
 
-Then poll for the verdict:
+Then poll for the verdict. Use `run_in_background: true` on the Bash call to avoid blocking permission prompts:
 
 ```bash
-while true; do
-  RESP=$(curl -s -H "X-Orch-Token: $TOKEN" \
-    "$ORCH_BASE/reviews/by-target?target_id=$TARGET_ID")
-  VERDICT=$(echo "$RESP" | jq -r '.latest_verdict.structured_data.verdict // "PENDING"')
-  if [ "$VERDICT" != "PENDING" ]; then break; fi
-  sleep 5
+# Run with run_in_background: true in the Bash tool call
+until bash research-orchestrator/scripts/orch.sh GET "/reviews/by-target?target_id=$TARGET_ID" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('latest_verdict',{}).get('structured_data',{}).get('verdict','PENDING'); print(v); exit(0 if v!='PENDING' else 1)"; do
+  sleep 10
 done
 ```
 

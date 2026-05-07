@@ -1,0 +1,24 @@
+{
+  "entry_type": "STRATEGY_OUTCOME",
+  "strategy_code": "MMR",
+  "interval_name": "1h",
+  "instrument": "ETHUSDT",
+  "title": "MMR ETHUSDT 1h extended-maxBarsHeld CLOSED: NO_EDGE_DETECTED — signal structurally weak, not a timing issue",
+  "content": "Null-screen for hypothesis 958735fb (MMR ETHUSDT 1h, maxBarsHeld=[24-96]) returned NO_EDGE_DETECTED. All 8 draws: PF=0.517-0.656 (mean=0.605, P95=0.655). maxBarsHeld ranged 25-85 bars (25h-85h) across draws — the extension was fully tested. Even at maxBarsHeld=81-85 bars (3.4 days), PF remained 0.61-0.66. Trade frequency adequate (n=215-248). REVISED DIAGNOSIS: The prior hypothesis (maxBarsHeld=12 too short) was WRONG. The losses are not caused by premature force-exit — they persist even with 85h of holding time. The MMR signal on ETH 1h (close < EMA200 - mult*ATR + RSI < threshold) is generating entries in downtrends that continue downward rather than reverting. The core signal is structurally weak on the 1h timeframe: ETH 1h momentum displacements from EMA200 are more likely to persist (trend continuation) than to revert. PIVOT: MMR ETHUSDT 4h (hypothesis aff00b73, approved). At 4h, each entry represents a multi-day displacement — more likely to be a genuine overshoot vs 1h intraday displacement. The 4h RSI also smooths out intraday noise. The lesson: on crypto 1h, the EMA200-extreme signal captures trend acceleration, not overshoots. On 4h, extreme displacements are more likely to be mean-reverting.",
+  "status": "ACTIVE",
+  "structured_data": {
+    "kind": "strategy_outcome",
+    "hypothesis_id": "958735fb-465d-4e1e-9957-4d8ed52856fb",
+    "null_screen_verdict": "NO_EDGE_DETECTED",
+    "distribution": {
+      "mean": 0.605,
+      "p95": 0.655,
+      "max": 0.656,
+      "share_pf_ge_1_0": 0.0,
+      "share_pf_ge_1_2": 0.0
+    },
+    "max_bars_held_range_tested": "25-85 bars (25h-85h on 1h)",
+    "revised_diagnosis": "Signal structurally weak on 1h; 1h displacements from EMA200 are trend acceleration, not overshoots. Extending maxBarsHeld doesn't help.",
+    "pivot": "MMR ETHUSDT 4h (hypothesis aff00b73): 4h bars represent multi-day displacements more likely to be genuine overshoots"
+  }
+}

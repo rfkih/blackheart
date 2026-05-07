@@ -1,0 +1,36 @@
+{
+  "target_id": "plan:MMR:a246fdaf64afe8f080ac70113b86702a162683fa52ac59fb9b9846b49f993fdf:958735fb-465d-4e1e-9957-4d8ed52856fb",
+  "target_kind": "plan",
+  "verdict": "APPROVED",
+  "strategy_code": "MMR",
+  "summary_reason": "All 3 plan-review checks pass. Pre-registration confirmed: hypothesis 958735fb created at 07:12:39, plan RESEARCH_PLAN_2026-05-07k.md written after. Mechanism named: MECHANISM keyword present — positions held too short force-exit before ETH mean-reversion from EMA200-extreme to EMA50 completes; extending maxBarsHeld to 48-96 bars addresses the structural constraint. Axis combo [extremeAtrMult, stopAtrBuffer, maxBarsHeld] not previously exercised on MMR ETHUSDT — prior test used [extremeAtrMult, rsiOversoldMax, stopAtrBuffer]. Different axis set. Proceed to null-screen.",
+  "summary_n_blocker_fails": 0,
+  "summary_n_warning_fails": 0,
+  "findings": [
+    {
+      "check_name": "pre_registration",
+      "severity": "blocker",
+      "passed": true,
+      "finding": "HYPOTHESIS 958735fb-465d-4e1e-9957-4d8ed52856fb predates the plan file RESEARCH_PLAN_2026-05-07k.md. Hypothesis created at 2026-05-07T07:12:39, plan written after. Pre-registration confirmed.",
+      "details": {"hypothesis_id": "958735fb-465d-4e1e-9957-4d8ed52856fb", "hypothesis_created_time": "2026-05-07T07:12:39"}
+    },
+    {
+      "check_name": "mechanism_named",
+      "severity": "warning",
+      "passed": true,
+      "finding": "Mechanism named in hypothesis: 'MECHANISM: If we allow positions to hold 48-96 bars (2-4 days), more trades should reach the EMA50 target before being force-exited.' Structural root cause identified (default maxBarsHeld=12 force-exits at 12h; ETH EMA200-to-EMA50 reversion typically takes 24-96h). Causal chain: short hold -> force-exit before reversion completes -> systematic losses. Fix: extend maxBarsHeld. This is mechanistically OPPOSITE to VBO/DCB2 breakout strategies — expected near-zero or negative Spearman correlation with baseline book.",
+      "details": {"markers_found": ["mechanism"]}
+    },
+    {
+      "check_name": "axis_not_recently_failed",
+      "severity": "warning",
+      "passed": true,
+      "finding": "Prior MMR ETHUSDT null-screen (journal 8e88edc1, hypothesis 5557851f) used axis combo [extremeAtrMult, rsiOversoldMax, stopAtrBuffer] — DIFFERENT from proposed [extremeAtrMult, stopAtrBuffer, maxBarsHeld]. The change is not cosmetic: rsiOversoldMax is dropped (showed no material effect), maxBarsHeld is added as the structural-fix dimension. No re-discovery risk. The orchestrator's discard gate would not fire on this axis set.",
+      "details": {
+        "prior_axes": ["extremeAtrMult", "rsiOversoldMax", "stopAtrBuffer"],
+        "proposed_axes": ["extremeAtrMult", "stopAtrBuffer", "maxBarsHeld"],
+        "note": "Different axis sets — no discard history on this combo"
+      }
+    }
+  ]
+}

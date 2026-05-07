@@ -1,0 +1,20 @@
+{
+  "entry_type": "HYPOTHESIS",
+  "strategy_code": "MMR",
+  "interval_name": "1h",
+  "instrument": "BTCUSDT",
+  "title": "MMR BTCUSDT 1h: BTC mean-reversion from EMA200-extreme with extended maxBarsHeld",
+  "content": "BTC has different mean-reversion characteristics than ETH: (1) BTC is the benchmark asset — mean-reversions from EMA200-extreme may be more reliable because BTC's larger liquidity means extreme displacements are more likely to be temporary; (2) BTC 1h has different ATR-to-move ratios than ETH. Prior ETH 1h tests showed NO_EDGE with default maxBarsHeld=12 due to 12h being too short. This hypothesis applies the extended-maxBarsHeld fix to BTC 1h. MECHANISM: BTC extreme displacements from EMA200 in the 1h timeframe, when combined with RSI oversold, represent institutional-level capitulation events that statistically revert to EMA50 within 24-96 hours. Extending maxBarsHeld to 48-96 bars allows the engine to capture this reversion rather than force-exiting after 12h. AXES: extremeAtrMult[1.5-3.0] x stopAtrBuffer[0.6-1.8] x maxBarsHeld[24-96]. This hypothesis is independent of the ETH 1h and ETH 4h MMR tests — different instrument with different market microstructure.",
+  "status": "ACTIVE",
+  "structured_data": {
+    "kind": "hypothesis",
+    "archetype": "MMR_BTC_extended_hold",
+    "axes": ["extremeAtrMult", "stopAtrBuffer", "maxBarsHeld"],
+    "param_ranges": [
+      {"name": "extremeAtrMult", "type": "float", "low": "1.5", "high": "3.0"},
+      {"name": "stopAtrBuffer", "type": "float", "low": "0.6", "high": "1.8"},
+      {"name": "maxBarsHeld", "type": "float", "low": "24", "high": "96"}
+    ],
+    "motivation": "BTC mean-reversion from EMA200-extreme; extended maxBarsHeld allows 48-96h hold for reversion completion"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "entry_type": "HYPOTHESIS",
+  "strategy_code": "BBR",
+  "interval_name": "1h",
+  "instrument": "ETHUSDT",
+  "title": "BBR ETHUSDT 1h: MeanReversionOscillator on ETH 1h — post archetype-fix test",
+  "content": "Prior BBR ETH 1h null-screens (2026-05-06, 2026-05-07T05:48) all returned INSUFFICIENT_DATA due to archetype=LEGACY_JAVA in strategy_definition. That infra bug was fixed 2026-05-07T06:08 (journal c049f...). Post-fix: BBR BTC 1h was tested (journal efb615e1) and returned NO_EDGE (PF=0.13-0.23). HOWEVER: ETH 1h has different market microstructure. MECHANISM: The MeanReversionOscillatorEngine fires when price is at Bollinger Band extreme + RSI extreme + price crosses back inside the band. On ETH 1h, Bollinger Band extremes may be more likely to revert due to ETH's higher beta (overshoots are larger and more likely to snap back). ETH also has higher volatility-of-volatility, which means Bollinger Band squeeze/expansion cycles are more pronounced. This hypothesis tests whether BBR has edge on ETH 1h that it lacks on BTC 1h. AXES: rsiOversoldMax x stopAtrBuffer x bbPeriod (3D). If BBR ETH 1h also shows PF < 0.5, the archetype is confirmed dead. If P75 >= 1.0 (even if below EDGE_PRESENT threshold), there may be a conditional edge.",
+  "status": "ACTIVE",
+  "structured_data": {
+    "kind": "hypothesis",
+    "archetype": "BBR_eth_post_fix",
+    "axes": ["rsiOversoldMax", "stopAtrBuffer", "bbPeriod"],
+    "motivation": "BBR BTC 1h NO_EDGE post-fix. Testing ETH 1h for instrument-specific edge due to higher beta and stronger BB squeeze cycles.",
+    "prior_btc_result": "NO_EDGE PF=0.13-0.23",
+    "infra_status": "FIXED (archetype=mean_reversion_oscillator as of 2026-05-07T06:08)"
+  }
+}

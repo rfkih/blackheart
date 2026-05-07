@@ -24,9 +24,10 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Phase B endpoint for the cross-cutting error pipeline.
+ * Phase B/C endpoint for the cross-cutting error pipeline.
  *
  * <p>Public — no auth required. The browser fires errors before the user
  * reaches a logged-in state (login-page crash, register flow, expired token
@@ -40,20 +41,35 @@ import java.util.Map;
  *       layer.</li>
  * </ol>
  *
- * <p>Phase C will add a {@code source=middleware} branch — same DTO, same
- * controller, same downstream service.
+ * <p>Three source buckets are accepted; anything else gets normalised to
+ * {@code frontend} so a misconfigured caller can't reject the row:
+ * <ul>
+ *   <li>{@code frontend}      — Next.js browser client</li>
+ *   <li>{@code middleware}    — Node.js (blackheartjs)</li>
+ *   <li>{@code research-orch} — Python research-orchestrator (FastAPI)</li>
+ * </ul>
+ * The two JVMs ({@code trading}, {@code research}) populate {@code error_log.jvm}
+ * via {@code DbErrorAppender}, not through this endpoint.
  */
 @RestController
 @RequestMapping("/api/v1/errors")
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "ErrorIngestController",
-     description = "Frontend + middleware error capture (Phase B/C)")
+     description = "Frontend + middleware + orchestrator error capture (Phase B/C)")
 public class ErrorIngestController {
 
     private static final String DEFAULT_SOURCE = "frontend";
     private static final String DEFAULT_LOGGER = "frontend.unknown";
     private static final int FINGERPRINT_STACK_LINES = 5;
+
+    /**
+     * Allowed values for {@code source} → {@code error_log.jvm}. Constrained
+     * because {@code error_log.jvm} is {@code VARCHAR(20)} and dashboards
+     * filter on this column — open-ended values would shred grouping.
+     */
+    private static final Set<String> ALLOWED_SOURCES = Set.of(
+            "frontend", "middleware", "research-orch");
 
     private final ErrorIngestService ingestService;
 
@@ -64,8 +80,8 @@ public class ErrorIngestController {
     )
     public ResponseEntity<ResponseDto> ingest(@Valid @RequestBody ErrorReportRequest request) {
         String source = blankOr(request.getSource(), DEFAULT_SOURCE);
-        if (!"frontend".equals(source) && !"middleware".equals(source)) {
-            // Anything outside the two known buckets gets normalised to
+        if (!ALLOWED_SOURCES.contains(source)) {
+            // Anything outside the known buckets gets normalised to
             // "frontend" — better to capture the row than reject it. A bad
             // source value is itself a finding.
             source = DEFAULT_SOURCE;

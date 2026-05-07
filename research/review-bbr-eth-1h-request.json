@@ -1,0 +1,10 @@
+{
+  "target_kind": "plan",
+  "plan": {
+    "strategy_code": "BBR",
+    "axis_names": ["rsiOversoldMax", "stopAtrBuffer", "minRewardRiskRatio"],
+    "hypothesis_id": "71aabe12-70d5-45a1-98ba-338b3006a765",
+    "plan_path": "research/RESEARCH_PLAN_2026-05-07m.md",
+    "notes": "BBR ETHUSDT 1h null-screen. First true test of BBR on ETH post archetype-fix. Prior BTC 1h result: NO_EDGE (PF=0.13-0.23). Testing ETH for instrument-specific edge. 3D: rsiOversoldMax x stopAtrBuffer x minRewardRiskRatio. Continuing loop per ARCHETYPE_EXHAUSTION protocol."
+  }
+}

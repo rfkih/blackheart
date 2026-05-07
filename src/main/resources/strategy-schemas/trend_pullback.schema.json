@@ -6,11 +6,11 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "pullbackAtrTolerance": {"type": "number", "exclusiveMinimum": 0, "maximum": 5},
+    "pullbackTouchAtr":     {"type": "number", "exclusiveMinimum": 0, "maximum": 5},
     "adxRisingMin":         {"type": "number", "minimum": 0, "maximum": 100},
     "adxEntryMin":          {"type": "number", "minimum": 0, "maximum": 100},
     "stopAtrBuffer":        {"type": "number", "exclusiveMinimum": 0, "maximum": 5},
-    "tpR":                  {"type": "number", "exclusiveMinimum": 0, "maximum": 20},
+    "tp1R":                 {"type": "number", "exclusiveMinimum": 0, "maximum": 20},
     "breakEvenR":           {"type": "number", "minimum": 0, "maximum": 5},
     "maxEntryRiskPct":      {"type": "number", "exclusiveMinimum": 0, "maximum": 0.5},
     "maxBarsHeld":          {"type": "integer", "minimum": 1, "maximum": 1000},

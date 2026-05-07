@@ -1,0 +1,36 @@
+{
+  "target_id": "plan:MMR:f3d82c2b657d273fe2116162c59c54dfde2461c1d4ccfa2b3cf049fd8ec815a2:aff00b73-f72a-48ab-a7a1-f7453e8664de",
+  "target_kind": "plan",
+  "verdict": "APPROVED",
+  "strategy_code": "MMR",
+  "summary_reason": "All 3 plan-review checks pass. Pre-registration confirmed (hypothesis aff00b73 created at 07:20:38, plan written after). Mechanism named explicitly: 'MECHANISM: The 4h timeframe naturally provides the hold duration...' — causal story is that 4h bars = 4h per bar, so maxBarsHeld=12 = 48h of hold time, squarely in the 24-96h range for ETH mean-reversion completion. This is structurally DIFFERENT from the 1h tests: the 1h test was failing because maxBarsHeld=12 meant 12h total. Axes [extremeAtrMult, stopAtrBuffer, rsiOversoldMax] appear in the prior 1h test (hypothesis 5557851f), but: (a) the interval is different (4h vs 1h), (b) the structural constraint being tested is different (natural hold time via bar size vs extending maxBarsHeld), (c) the STRATEGY_OUTCOME from 5557851f does not have axis_names in structured_data so the mechanical check does not fire. Qualitative judgement: this is a genuine new test, not re-discovery. The 4h surface has never been exercised on MMR ETHUSDT. Proceed to null-screen.",
+  "summary_n_blocker_fails": 0,
+  "summary_n_warning_fails": 0,
+  "findings": [
+    {
+      "check_name": "pre_registration",
+      "severity": "blocker",
+      "passed": true,
+      "finding": "HYPOTHESIS aff00b73-f72a-48ab-a7a1-f7453e8664de predates plan RESEARCH_PLAN_2026-05-07l.md. Hypothesis created 2026-05-07T07:20:38. Pre-registration confirmed.",
+      "details": {"hypothesis_id": "aff00b73-f72a-48ab-a7a1-f7453e8664de"}
+    },
+    {
+      "check_name": "mechanism_named",
+      "severity": "warning",
+      "passed": true,
+      "finding": "Mechanism marker 'mechanism' found in hypothesis content. Explicit causal chain: 4h bars provide 4h per bar; maxBarsHeld=12 (default) = 48h hold time; ETH EMA200-extreme to EMA50 reversion takes 24-96h; therefore 4h timeframe naturally solves the hold-time problem that caused ETH 1h NO_EDGE. Mechanistically OPPOSITE to VBO/DCB2 breakout expansion.",
+      "details": {"markers_found": ["mechanism"]}
+    },
+    {
+      "check_name": "axis_not_recently_failed",
+      "severity": "warning",
+      "passed": true,
+      "finding": "Axis set [extremeAtrMult, stopAtrBuffer, rsiOversoldMax] was used in prior MMR ETHUSDT 1h null-screen (hypothesis 5557851f). However: (1) interval is different (4h vs 1h); (2) the 4h hypothesis tests a structurally different mechanism (natural hold time from bar size, not extended maxBarsHeld); (3) the prior STRATEGY_OUTCOME does not store axis_names in structured_data, so the mechanical discard gate would not fire. The 4h surface is genuinely virgin territory. This is scientifically warranted exploration.",
+      "details": {
+        "prior_interval": "1h",
+        "proposed_interval": "4h",
+        "note": "Different interval = different structural test; not re-discovery"
+      }
+    }
+  ]
+}
