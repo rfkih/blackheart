@@ -44,6 +44,13 @@ public interface FundingRateRepository extends JpaRepository<FundingRate, Fundin
      */
     Optional<FundingRate> findFirstBySymbolOrderByFundingTimeDesc(String symbol);
 
+    /**
+     * Earliest known funding event per symbol — used by the range-mode
+     * coverage repair to decide whether the existing history already covers
+     * the requested window (and skip a redundant Binance fetch if so).
+     */
+    Optional<FundingRate> findFirstBySymbolOrderByFundingTimeAsc(String symbol);
+
     long countBySymbol(String symbol);
 
     /**

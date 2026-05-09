@@ -117,8 +117,8 @@ class FeaturePatcherRegistryTest {
         }
 
         @Override
-        public void patchRow(FeatureStore row, Object aux) {
-            // no-op
+        public PatchOutcome patchRow(FeatureStore row, Object aux) {
+            return PatchOutcome.NOT_FILLED;
         }
     }
 }

@@ -64,13 +64,28 @@ public abstract class FeaturePatcher<T> {
                                LocalDateTime windowStart, LocalDateTime windowEnd);
 
     /**
-     * Mutate {@code row} in-place using {@code aux}. May write multiple
-     * columns. The framework handles persistence — do not save inside this
-     * method.
+     * Mutate {@code row} in-place using {@code aux} and report whether the
+     * row was actually filled. May write multiple columns. The framework
+     * handles persistence — do not save inside this method.
      *
-     * <p>Implementations should be defensive: if the row's start_time
-     * doesn't map to any index in {@code aux}, leave it unchanged rather
-     * than throwing. Skipped rows are reported as "skipped" in the result.
+     * <p>Return {@link PatchOutcome#FILLED} when the row's columns were set
+     * to non-null values. Return {@link PatchOutcome#NOT_FILLED} when the
+     * patcher had insufficient source data and left the row untouched (the
+     * row will remain NULL in the DB). The framework uses the outcome to
+     * decide whether to flush the row and to keep accurate metrics — a
+     * NOT_FILLED row is not counted as "patched".
+     *
+     * <p>Implementations must NOT set columns to {@code null} and return
+     * {@code FILLED}; that defeats the metrics. If the source data is
+     * insufficient, return {@code NOT_FILLED} without mutating the row.
      */
-    public abstract void patchRow(FeatureStore row, T aux);
+    public abstract PatchOutcome patchRow(FeatureStore row, T aux);
+
+    /** Result of a single {@link #patchRow} call. */
+    public enum PatchOutcome {
+        /** Row's columns were set to non-null values. */
+        FILLED,
+        /** Patcher had insufficient source data; row was left unchanged. */
+        NOT_FILLED
+    }
 }

@@ -742,6 +742,21 @@ public class TechnicalIndicatorService {
         log.info("Bulk backfill: {} target candle(s) for {}/{} [{} → {}] (recompute={})",
                 totalCandidates, symbol, interval, from, to, recompute);
 
+        // Pre-flight: warn loudly if funding_rate_history is cold for this
+        // symbol. The bulk path does not auto-trigger the funding backfill —
+        // every feature_store row written here will have NULL funding
+        // columns, and the downstream PATCH_NULL_COLUMN job (or the
+        // chained patch in BACKFILL_FUNDING_HISTORY) will need to rescue
+        // them later. Surfacing this upfront prevents the silent-NULL
+        // class of bugs that masqueraded as "patch ran but did nothing".
+        if (fundingRateRepository.countBySymbol(symbol) == 0) {
+            log.warn("Bulk backfill: funding_rate_history is cold for symbol={} — feature_store rows " +
+                            "will be written with NULL funding columns. Run BACKFILL_FUNDING_HISTORY " +
+                            "for {} first if it's a perpetual symbol; otherwise the chained patch " +
+                            "after the next funding-history backfill will fill them retroactively.",
+                    symbol, symbol);
+        }
+
         TransactionTemplate windowTx = new TransactionTemplate(transactionManager);
         windowTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 
@@ -844,8 +859,14 @@ public class TechnicalIndicatorService {
         BarSeries series = convertToBarSeries(data, interval);
         IndicatorBundle ind = IndicatorBundle.build(series);
 
-        // Funding history up to windowEnd — bounded; Spot symbols see empty.
-        List<FundingRate> fundingSeries = fundingRateRepository.findAllUpTo(symbol, windowEnd);
+        // Funding history up to (windowEnd + interval) — Spot symbols see empty.
+        // The +interval overshoot covers the bar at start_time = windowEnd whose
+        // end_time crosses into the next window; without it a funding event
+        // landing on the boundary would be missed and the bulk row's funding
+        // columns would diverge from the live single-bar path's findLatest()
+        // semantics (which uses <= on end_time).
+        LocalDateTime fundingBoundary = windowEnd.plusMinutes(intervalMinutes);
+        List<FundingRate> fundingSeries = fundingRateRepository.findAllUpTo(symbol, fundingBoundary);
 
         int inserted = 0;
         int skipped = 0;

@@ -84,3 +84,34 @@ Architecture is quant-grade in code structure but **single-asset-live in data pl
 - **Q2 Operational**: Phase 6 frontend leaderboard. Phase 7 Prometheus + Slack/Telegram alerts (V39 alert_event shipped). Phase 8 risk model.
 - **Q3 Search scale**: Phase 9 evolutionary search. Phase 10 OI+basis.
 - **Skip**: full Gradle module split; DB-role activation beyond V14; real-time tick/microstructure; ML/prediction.
+
+## Catalog maintenance
+
+The agent-facing catalogs in `docs/agent-context/` exist to **save the next agent's tokens** — they replace blind Glob/Grep walks across the codebase. The cost of a stale entry is higher than the cost of no entry, so updates ride in the same PR as the code change.
+
+**Trigger table — what to update when:**
+
+| You changed | Update |
+|---|---|
+| Added / renamed / deleted a class in `engine/` or `service/strategy/` ending in `Engine` / `StrategyService` | `STRATEGIES.md` table row + status |
+| Promoted a strategy (research → production), demoted, or discarded | `STRATEGIES.md` (move row to correct section) AND CLAUDE.md "Active strategies" headline AND "Active Strategies (full table)" above |
+| Added / renamed a `JobType` enum value | `JOBS.md` table row + handler path |
+| Added / renamed a `HistoricalJobHandler` impl | `JOBS.md` row, even if the JobType existed before |
+| Added a Flyway migration creating a new table that other services or agents will read regularly | `SCHEMA.md` row (skip routine internal tables — they live in `MIGRATIONS.md` only) |
+| Renamed / dropped a column on a "key 8" table | `SCHEMA.md` row + relevant `MIGRATIONS.md` V<n> entry |
+| Shipped a new Flyway migration | `MIGRATIONS.md` V<n> entry, regardless of whether it touches a "key 8" table |
+
+**Inclusion bar for SCHEMA.md / STRATEGIES.md / JOBS.md:** would the next agent grep / scan files looking for this? If yes, table row. If the entry exists only because it exists — delete it. The catalog rots when it lists everything.
+
+**Style rules** (match the existing entries):
+
+- One row per item, one sentence, **`path:line`** format so the agent `Read`s directly without a Glob.
+- Lead with the *purpose* (verb-first), not the class name — the class name is in the next column.
+- No code blocks inside table cells. If you need to explain implementation, link out to the file with a line number.
+- Keep the discarded list short. After 6 months a discarded strategy is archaeology — move to `MIGRATIONS.md` and prune.
+
+**Anti-patterns (don't do):**
+
+- Auto-generated tables that list every method / field — agents read code for that.
+- "TODO update later" placeholders — write the entry now or leave it out.
+- Duplicating CLAUDE.md content into the catalog — link, don't copy.

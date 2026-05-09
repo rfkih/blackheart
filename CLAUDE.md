@@ -12,6 +12,9 @@ Java/Spring Boot algo trading on Binance: live trading + backtesting.
 | Flyway history (V14–V40), promotion pipeline state machine | `docs/agent-context/MIGRATIONS.md` |
 | Build / run / test / research-ops recipes | `docs/agent-context/COMMANDS.md` |
 | Working rules, parity invariants, point-in-time discipline, full strategy table | `docs/agent-context/WORKING_RULES.md` |
+| **Strategy / engine catalog** (LSR/VCB/VBO/TPR + spec-driven engines) | `docs/agent-context/STRATEGIES.md` |
+| **JobType handler catalog** (BACKFILL_*, PATCH_*, RECOMPUTE_*, COVERAGE_*) | `docs/agent-context/JOBS.md` |
+| **Key tables / schema reference** (feature_store, market_data, funding_*, research_*) | `docs/agent-context/SCHEMA.md` |
 | Two-JVM deployment runbook | `research/DEPLOYMENT.md` |
 | DB role separation | `research/DB_USER_SEPARATION.md` |
 | Spec language (Phase 2) | `research/specs/SCHEMA.md` |
@@ -48,6 +51,7 @@ Tick returns `verdict=PASS` only when **all**: n_trades≥100, PF 95% CI lower>1
 - **Code change format:** root cause → solution → files → risks → diff → test plan.
 - **Persistence:** `@JdbcTypeCode(SqlTypes.JSON)` for JSONB (NOT `AttributeConverter`); evict Redis cache via `afterCommit()`.
 - **Migrations are immutable once applied.** New schema = new V<N>.
+- **Update catalogs in the same PR as the code change** — see WORKING_RULES.md "Catalog maintenance". If you add/rename/delete a strategy class, JobType, handler, or important table, update `STRATEGIES.md` / `JOBS.md` / `SCHEMA.md` accordingly. The catalogs exist to save the next agent's tokens; stale entries cost more than no entries.
 - **If uncertain:** ask whether the user wants minimal patch or refactor.
 
 ## DRY consolidation standard

@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Pre-commit guard — fails the commit when a code change touches a catalogued
+# area without updating the corresponding catalog file.
+#
+# Wire-up (one-time, from repo root):
+#     git config --local core.hooksPath .githooks
+#
+# Bypass (legitimate cases — explain in PR description):
+#     git commit --no-verify
+#
+# Triggers (kept in sync with docs/agent-context/WORKING_RULES.md → "Catalog maintenance"):
+#   engine/ or service/strategy/ Java class    → docs/agent-context/STRATEGIES.md
+#   JobType.java or job/handler/*.java         → docs/agent-context/JOBS.md
+#   Any new/modified Flyway V<n>__*.sql        → docs/agent-context/MIGRATIONS.md
+
+set -euo pipefail
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR || true)
+[ -z "$STAGED" ] && exit 0
+
+errors=0
+
+require_catalog() {
+    local label="$1"
+    local code_pattern="$2"
+    local catalog="$3"
+
+    if echo "$STAGED" | grep -qE "$code_pattern"; then
+        if ! echo "$STAGED" | grep -qF "$catalog"; then
+            echo ""
+            echo "✗ Catalog out of date: $label"
+            echo "   touched code matching: $code_pattern"
+            echo "   needs entry in:        $catalog"
+            echo "   (stage the catalog edit in the same commit, or pass --no-verify with reason in PR)"
+            errors=$((errors + 1))
+        fi
+    fi
+}
+
+# 1. Strategy / engine catalog
+require_catalog \
+    "STRATEGIES.md" \
+    "^src/main/java/id/co/blackheart/(engine|service/strategy)/[A-Za-z0-9_]+\\.java$" \
+    "docs/agent-context/STRATEGIES.md"
+
+# 2. JobType + handler catalog
+require_catalog \
+    "JOBS.md" \
+    "^src/main/java/id/co/blackheart/(model/JobType\\.java|service/marketdata/job/handler/[A-Za-z0-9_]+Handler\\.java)$" \
+    "docs/agent-context/JOBS.md"
+
+# 3. Flyway migration → migration history (always)
+require_catalog \
+    "MIGRATIONS.md" \
+    "^src/main/resources/db/flyway/V[0-9]+__.+\\.sql$" \
+    "docs/agent-context/MIGRATIONS.md"
+
+if [ $errors -gt 0 ]; then
+    echo ""
+    echo "$errors catalog mismatch(es) — commit blocked."
+    echo "See docs/agent-context/WORKING_RULES.md → 'Catalog maintenance' for the trigger table."
+    exit 1
+fi
+
+exit 0

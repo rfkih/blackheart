@@ -2,6 +2,7 @@ package id.co.blackheart.client;
 
 import id.co.blackheart.model.FundingRate;
 import io.netty.channel.ChannelOption;
+import io.netty.handler.timeout.ReadTimeoutException;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -122,11 +123,31 @@ public class FapiClient {
     private static boolean isTransient(Throwable t) {
         if (t instanceof WebClientResponseException w) {
             int status = w.getStatusCode().value();
-            return status == 429 || status >= 500;
+            if (status == 429 || status >= 500) return true;
+            // Body-read failures surface as a 200 WebClientResponseException
+            // (headers arrived, body stalled). The transient cause may be the
+            // direct getCause() or wrapped one level deeper depending on the
+            // Reactor version, so walk the chain rather than relying on a
+            // single instanceof check.
+            return hasTransientCause(w);
         }
         return t instanceof TimeoutException
                 || t instanceof SocketException
                 || t instanceof IOException;
+    }
+
+    private static boolean hasTransientCause(Throwable t) {
+        Throwable cause = t.getCause();
+        while (cause != null) {
+            if (cause instanceof ReadTimeoutException
+                    || cause instanceof TimeoutException
+                    || cause instanceof SocketException
+                    || cause instanceof IOException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     private static BigDecimal safeBigDecimal(String s) {

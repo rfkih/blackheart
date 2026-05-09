@@ -2,8 +2,11 @@ package id.co.blackheart.service.marketdata.job.handler;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import id.co.blackheart.model.FundingRate;
 import id.co.blackheart.model.HistoricalBackfillJob;
 import id.co.blackheart.model.JobType;
+import id.co.blackheart.repository.FundingRateRepository;
+import id.co.blackheart.service.marketdata.FundingRateBackfillService;
 import id.co.blackheart.service.marketdata.HistoricalDataService;
 import id.co.blackheart.service.marketdata.job.HistoricalJobHandler;
 import id.co.blackheart.service.marketdata.job.JobContext;
@@ -15,6 +18,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Optional;
 
 /**
  * Handler for {@link JobType#COVERAGE_REPAIR} — the "fill what's missing"
@@ -48,6 +52,16 @@ public class CoverageRepairHandler implements HistoricalJobHandler {
 
     private final HistoricalDataService historicalDataService;
     private final TechnicalIndicatorService technicalIndicatorService;
+    private final FundingRateBackfillService fundingRateBackfillService;
+    private final FundingRateRepository fundingRateRepository;
+
+    /**
+     * Lookback added to the funding-history fetch start so the rolling 7-day
+     * window has at least one full window of leading data on the boundary
+     * row. Without this, the leftmost feature_store rows in the new range
+     * would compute funding_rate_7d_avg / z over a partial window.
+     */
+    private static final int FUNDING_LEADING_WINDOW_DAYS = 8;
 
     @Override
     public JobType jobType() {
@@ -113,6 +127,16 @@ public class CoverageRepairHandler implements HistoricalJobHandler {
         historicalDataService.backfillMissingMarketDataByRange(
                 job.getSymbol(), job.getInterval(), from, to);
 
+        // Phase 1.5: ensure funding_rate_history covers the range BEFORE we
+        // compute features. Without this, ranges older than the existing
+        // funding history (or symbols added after the 8h scheduler started)
+        // produce feature_store rows with NULL funding columns and the
+        // operator has to remember to run a second job. Idempotent — does
+        // nothing when the existing history already covers the window.
+        // Soft-fails for spot-only symbols where fapi has no data.
+        ctx.setPhase("range:funding_rate_history");
+        ensureFundingHistoryCovers(job, from, result);
+
         // Phase 2: repair feature_store for the range using the bulk path so
         // the UI sees per-chunk progress + cooperative cancel.
         ctx.setPhase("range:feature_store");
@@ -125,5 +149,35 @@ public class CoverageRepairHandler implements HistoricalJobHandler {
         result.put("recordsSkipped", res.skipped());
         result.put("recordsFailed", res.failed());
         result.put("totalCandidates", res.total());
+    }
+
+    private void ensureFundingHistoryCovers(HistoricalBackfillJob job,
+                                            LocalDateTime rangeFrom,
+                                            ObjectNode result) {
+        LocalDateTime fundingFrom = rangeFrom.minusDays(FUNDING_LEADING_WINDOW_DAYS);
+        try {
+            Optional<FundingRate> earliest =
+                    fundingRateRepository.findFirstBySymbolOrderByFundingTimeAsc(job.getSymbol());
+            if (earliest.isPresent() && !earliest.get().getFundingTime().isAfter(fundingFrom)) {
+                log.info("funding_rate_history already covers {} for symbol={} — skipping fetch (jobId={})",
+                        fundingFrom, job.getSymbol(), job.getJobId());
+                result.put("fundingBackfillSkipped", true);
+                return;
+            }
+            FundingRateBackfillService.BackfillResult fr =
+                    fundingRateBackfillService.backfillHistorical(job.getSymbol(), fundingFrom);
+            log.info("funding_rate_history backfill | jobId={} symbol={} from={} pages={} fetched={} inserted={}",
+                    job.getJobId(), job.getSymbol(), fundingFrom, fr.pages(), fr.fetched(), fr.inserted());
+            result.put("fundingBackfillFetched", fr.fetched());
+            result.put("fundingBackfillInserted", fr.inserted());
+            result.put("fundingBackfillTruncated", fr.truncated());
+        } catch (Exception e) {
+            // Spot-only symbols will fail here (no perp endpoint). Don't fail
+            // the whole job — feature_store compute downstream will leave
+            // funding columns NULL for those symbols, which is correct.
+            log.warn("funding_rate_history backfill failed for symbol={} — funding columns may be NULL: {}",
+                    job.getSymbol(), e.getMessage());
+            result.put("fundingBackfillError", e.getMessage());
+        }
     }
 }

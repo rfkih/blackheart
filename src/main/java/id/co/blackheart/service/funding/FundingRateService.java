@@ -262,13 +262,20 @@ public class FundingRateService {
             }
             double variance = sumSq / (peerN - 1);
             double std = Math.sqrt(variance);
-            if (std <= 0.0 || Double.isNaN(std)) {
+            // Guard against near-zero std (all funding rates identical or nearly so —
+            // common in stable-rate regimes). 1e-9 is ~10x below the smallest meaningful
+            // funding rate increment; below this the z-score is numerically meaningless
+            // and would overflow NUMERIC(18,10) on the feature_store column.
+            if (std < 1e-9 || Double.isNaN(std)) {
                 return new FundingFeatureSnapshot(rate8h, mean, null);
             }
             double z = (rate8h.doubleValue() - peerMean) / std;
             if (Double.isNaN(z) || Double.isInfinite(z)) {
                 return new FundingFeatureSnapshot(rate8h, mean, null);
             }
+            // Clamp to ±20: extreme z-scores carry no extra signal and values beyond
+            // ~8 digits integer part overflow NUMERIC(18,10).
+            z = Math.max(-20.0, Math.min(20.0, z));
             BigDecimal zBd = BigDecimal.valueOf(z).setScale(10, java.math.RoundingMode.HALF_UP);
             return new FundingFeatureSnapshot(rate8h, mean, zBd);
         }

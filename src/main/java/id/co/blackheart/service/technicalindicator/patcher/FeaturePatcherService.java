@@ -8,6 +8,8 @@ import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Query;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,6 +50,21 @@ public class FeaturePatcherService {
     private EntityManager entityManager;
 
     /**
+     * Self-reference routed through the Spring proxy so the {@code @Transactional}
+     * annotations on {@link #patchWindow}, {@link #findNullBounds} and
+     * {@link #findPairsWithNullColumn} actually fire when called from sibling
+     * methods in this class. Without this, {@code this.patchWindow(...)} would
+     * bypass the proxy (Spring AOP self-invocation gotcha) and the per-window
+     * transaction would never start — entities loaded via
+     * {@link #findNullRowsInWindow} would be detached, forcing
+     * {@code saveAll(buffer)} into a per-row merge with an extra SELECT each.
+     * {@code @Lazy} sidesteps the construction-time circular-reference check.
+     */
+    @Autowired
+    @Lazy
+    private FeaturePatcherService self;
+
+    /**
      * Auto-discover all distinct (symbol, interval) pairs where at least one
      * feature_store row has NULL in {@code column}. Used by the
      * PATCH_NULL_COLUMN handler when no specific pair is requested.
@@ -71,10 +88,12 @@ public class FeaturePatcherService {
 
     /**
      * Run the patcher across all auto-discovered pairs that need it.
-     * Returns a map of "symbol/interval" → rows updated.
+     * Returns a map of "symbol/interval" → patch summary so callers can
+     * distinguish rows actually filled from rows skipped because the
+     * upstream source data is still missing.
      */
-    public Map<String, Integer> patchAllPairs(FeaturePatcher<?> patcher, JobContext ctx) {
-        List<SymbolInterval> pairs = findPairsWithNullColumn(patcher.primaryColumn());
+    public Map<String, PatchSummary> patchAllPairs(FeaturePatcher<?> patcher, JobContext ctx) {
+        List<SymbolInterval> pairs = self.findPairsWithNullColumn(patcher.primaryColumn());
         if (pairs.isEmpty()) {
             log.info("Patcher {}: no pairs need patching", patcher.primaryColumn());
             return Map.of();
@@ -83,7 +102,7 @@ public class FeaturePatcherService {
         log.info("Patcher {}: auto-discovered {} pair(s) needing work",
                 patcher.primaryColumn(), pairs.size());
 
-        Map<String, Integer> result = new LinkedHashMap<>();
+        Map<String, PatchSummary> result = new LinkedHashMap<>();
         int pairsDone = 0;
         for (SymbolInterval pair : pairs) {
             if (ctx != null && ctx.isCancellationRequested()) {
@@ -92,8 +111,8 @@ public class FeaturePatcherService {
                 break;
             }
             ctx.setPhase("patch:" + patcher.primaryColumn() + " " + pair.symbol() + "/" + pair.interval());
-            int updated = patchPair(patcher, pair.symbol(), pair.interval(), null, null, ctx);
-            result.put(pair.symbol() + "/" + pair.interval(), updated);
+            PatchSummary summary = patchPair(patcher, pair.symbol(), pair.interval(), null, null, ctx);
+            result.put(pair.symbol() + "/" + pair.interval(), summary);
             pairsDone++;
             ctx.setProgress(pairsDone, pairs.size());
         }
@@ -104,42 +123,55 @@ public class FeaturePatcherService {
      * Run the patcher across one pair. {@code from}/{@code to} default to
      * the pair's earliest/latest NULL row when null.
      */
-    public int patchPair(FeaturePatcher<?> patcher, String symbol, String interval,
-                         LocalDateTime from, LocalDateTime to, JobContext ctx) {
+    public PatchSummary patchPair(FeaturePatcher<?> patcher, String symbol, String interval,
+                                  LocalDateTime from, LocalDateTime to, JobContext ctx) {
         if (from == null || to == null) {
-            LocalDateTime[] bounds = findNullBounds(patcher.primaryColumn(), symbol, interval);
-            if (bounds == null) return 0;
+            LocalDateTime[] bounds = self.findNullBounds(patcher.primaryColumn(), symbol, interval);
+            if (bounds == null) return PatchSummary.zero();
             if (from == null) from = bounds[0];
             if (to == null) to = bounds[1];
         }
 
-        int total = 0;
+        PatchSummary total = PatchSummary.zero();
         LocalDateTime windowStart = from;
         while (!windowStart.isAfter(to)) {
             if (ctx != null && ctx.isCancellationRequested()) break;
             LocalDateTime windowEnd = windowStart.plusMonths(WINDOW_MONTHS);
             if (windowEnd.isAfter(to)) windowEnd = to;
-            total += patchWindow(patcher, symbol, interval, windowStart, windowEnd);
+            total = total.plus(self.patchWindow(patcher, symbol, interval, windowStart, windowEnd));
             windowStart = windowEnd.plusNanos(1);
         }
 
-        log.info("Patcher {} for {}/{}: total updated={}",
-                patcher.primaryColumn(), symbol, interval, total);
+        log.info("Patcher {} for {}/{}: filled={} skipped_no_source={} skipped_no_change={}",
+                patcher.primaryColumn(), symbol, interval,
+                total.patched(), total.skippedNoSource(), total.skippedNoChange());
+        if (total.skippedNoSource() > 0 || total.skippedNoChange() > 0) {
+            log.warn("Patcher {} for {}/{}: {} row(s) remain NULL after patch run — " +
+                            "{} due to missing upstream source data, {} due to insufficient series coverage",
+                    patcher.primaryColumn(), symbol, interval,
+                    total.skippedNoSource() + total.skippedNoChange(),
+                    total.skippedNoSource(), total.skippedNoChange());
+        }
         return total;
     }
 
     @Transactional
-    public <T> int patchWindow(FeaturePatcher<T> patcher, String symbol, String interval,
-                               LocalDateTime windowStart, LocalDateTime windowEnd) {
+    public <T> PatchSummary patchWindow(FeaturePatcher<T> patcher, String symbol, String interval,
+                                        LocalDateTime windowStart, LocalDateTime windowEnd) {
         List<FeatureStore> nullRows = findNullRowsInWindow(
                 patcher.primaryColumn(), symbol, interval, windowStart, windowEnd);
-        if (nullRows.isEmpty()) return 0;
+        if (nullRows.isEmpty()) return PatchSummary.zero();
 
         T aux = patcher.buildAux(symbol, interval, windowStart, windowEnd);
         if (aux == null) {
-            log.debug("Patcher {} returned null aux for {}/{} window [{} → {}] — skipping",
-                    patcher.primaryColumn(), symbol, interval, windowStart, windowEnd);
-            return 0;
+            // Visible WARN rather than DEBUG: silent skips were the root
+            // cause of "patch reported success but NULLs persist" — the
+            // operator needs to see this to know they must run the upstream
+            // backfill before re-trying the patch.
+            log.warn("Patcher {} returned null aux for {}/{} window [{} → {}] — {} row(s) left NULL " +
+                            "(upstream source data missing)",
+                    patcher.primaryColumn(), symbol, interval, windowStart, windowEnd, nullRows.size());
+            return new PatchSummary(0, nullRows.size(), 0);
         }
 
         // NOTE on memory: nullRows is bounded by the orchestrator's 1-month
@@ -149,23 +181,31 @@ public class FeaturePatcherService {
         // detach the unprocessed tail. saveAll() on a detached entity falls
         // into merge() → one extra SELECT per row, defeating the chunked
         // batch. The per-window cap keeps L1 cache growth acceptable.
-        int updated = 0;
+        int filled = 0;
+        int skippedNoChange = 0;
         List<FeatureStore> buffer = new ArrayList<>(CHUNK_SIZE);
         for (FeatureStore row : nullRows) {
-            patcher.patchRow(row, aux);
-            buffer.add(row);
-            updated++;
-            if (buffer.size() >= CHUNK_SIZE) {
-                featureStoreRepository.saveAll(buffer);
-                featureStoreRepository.flush();
-                buffer.clear();
+            FeaturePatcher.PatchOutcome outcome = patcher.patchRow(row, aux);
+            if (outcome == FeaturePatcher.PatchOutcome.FILLED) {
+                buffer.add(row);
+                filled++;
+                if (buffer.size() >= CHUNK_SIZE) {
+                    featureStoreRepository.saveAll(buffer);
+                    featureStoreRepository.flush();
+                    buffer.clear();
+                }
+            } else {
+                // patchRow returned NOT_FILLED — row stays NULL. The patcher's
+                // contract requires it not to mutate the row in this case, so
+                // Hibernate's dirty-check at commit will leave it untouched.
+                skippedNoChange++;
             }
         }
         if (!buffer.isEmpty()) {
             featureStoreRepository.saveAll(buffer);
             featureStoreRepository.flush();
         }
-        return updated;
+        return new PatchSummary(filled, 0, skippedNoChange);
     }
 
     /**
@@ -212,5 +252,38 @@ public class FeaturePatcherService {
     }
 
     public record SymbolInterval(String symbol, String interval) {
+    }
+
+    /**
+     * Outcome of a patch run, broken down so callers (and the operator UI)
+     * can tell apart "filled" from "still NULL because source data is
+     * missing". A 0 in {@link #patched} no longer means "everything was
+     * already clean" — check {@link #skippedNoSource} too.
+     *
+     * @param patched          rows whose columns were set to non-null values
+     * @param skippedNoSource  rows skipped because the patcher's source
+     *                         data (e.g. funding_rate_history) is empty for
+     *                         the window — re-run after the upstream
+     *                         backfill completes
+     * @param skippedNoChange  rows skipped because the source series didn't
+     *                         cover the row's timestamp (e.g. row's endTime
+     *                         predates the earliest funding event) — these
+     *                         are typically permanent NULLs, not actionable
+     */
+    public record PatchSummary(int patched, int skippedNoSource, int skippedNoChange) {
+        public static PatchSummary zero() {
+            return new PatchSummary(0, 0, 0);
+        }
+
+        public PatchSummary plus(PatchSummary other) {
+            return new PatchSummary(
+                    patched + other.patched,
+                    skippedNoSource + other.skippedNoSource,
+                    skippedNoChange + other.skippedNoChange);
+        }
+
+        public int total() {
+            return patched + skippedNoSource + skippedNoChange;
+        }
     }
 }

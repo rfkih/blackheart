@@ -9,12 +9,16 @@ import id.co.blackheart.service.marketdata.FundingRateBackfillService.BackfillRe
 import id.co.blackheart.service.marketdata.job.HistoricalJobHandler;
 import id.co.blackheart.service.marketdata.job.JobContext;
 import id.co.blackheart.service.marketdata.job.JobParamUtils;
+import id.co.blackheart.service.technicalindicator.patcher.FeaturePatcherService;
+import id.co.blackheart.service.technicalindicator.patcher.FeaturePatcherService.PatchSummary;
+import id.co.blackheart.service.technicalindicator.patcher.FundingColumnsPatcher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * Wraps {@link FundingRateBackfillService#backfillHistorical} as a job-system
@@ -50,6 +54,8 @@ public class BackfillFundingHistoryHandler implements HistoricalJobHandler {
     private static final LocalDateTime DEFAULT_FROM = LocalDateTime.of(2024, 1, 1, 0, 0);
 
     private final FundingRateBackfillService fundingRateBackfillService;
+    private final FeaturePatcherService featurePatcherService;
+    private final FundingColumnsPatcher fundingColumnsPatcher;
 
     @Override
     public JobType jobType() {
@@ -80,10 +86,29 @@ public class BackfillFundingHistoryHandler implements HistoricalJobHandler {
         resultJson.put("fetched", result.fetched());
         resultJson.put("inserted", result.inserted());
         resultJson.put("truncated", result.truncated());
-        ctx.setResult(resultJson);
 
-        // The underlying service does its own pagination accounting; report
-        // a single "1/1" tick so the UI's progress bar settles at 100%.
+        // Immediately patch feature_store funding columns so they are never
+        // left NULL after a successful history fetch. patchAllPairs discovers
+        // only (symbol, interval) pairs that still have NULLs, so this is a
+        // no-op when the feature_store is already clean. The summary
+        // distinguishes rows actually filled from rows still NULL because
+        // the upstream funding history is missing for that pair — a 0 in
+        // feature_rows_patched no longer hides a silent skip.
+        ctx.setPhase("patch_funding_columns");
+        Map<String, PatchSummary> patchResult = featurePatcherService.patchAllPairs(fundingColumnsPatcher, ctx);
+        int totalPatched = 0;
+        int totalSkippedNoSource = 0;
+        int totalSkippedNoChange = 0;
+        for (PatchSummary s : patchResult.values()) {
+            totalPatched += s.patched();
+            totalSkippedNoSource += s.skippedNoSource();
+            totalSkippedNoChange += s.skippedNoChange();
+        }
+        resultJson.put("feature_rows_patched", totalPatched);
+        resultJson.put("feature_rows_skipped_no_source", totalSkippedNoSource);
+        resultJson.put("feature_rows_skipped_no_change", totalSkippedNoChange);
+
+        ctx.setResult(resultJson);
         ctx.setProgress(1, 1);
     }
 }

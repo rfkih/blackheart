@@ -10,6 +10,7 @@ import id.co.blackheart.service.marketdata.job.JobParamUtils;
 import id.co.blackheart.service.technicalindicator.patcher.FeaturePatcher;
 import id.co.blackheart.service.technicalindicator.patcher.FeaturePatcherRegistry;
 import id.co.blackheart.service.technicalindicator.patcher.FeaturePatcherService;
+import id.co.blackheart.service.technicalindicator.patcher.FeaturePatcherService.PatchSummary;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -70,14 +71,24 @@ public class PatchNullColumnHandler implements HistoricalJobHandler {
         if (autoDiscover) {
             ctx.setPhase("patch:" + column + " (auto-discover)");
             log.info("PATCH_NULL_COLUMN auto-discover | jobId={} column={}", job.getJobId(), column);
-            Map<String, Integer> byPair = patcherService.patchAllPairs(patcher, ctx);
+            Map<String, PatchSummary> byPair = patcherService.patchAllPairs(patcher, ctx);
             ObjectNode byPairNode = result.putObject("byPair");
-            int total = 0;
+            int totalPatched = 0;
+            int totalSkippedNoSource = 0;
+            int totalSkippedNoChange = 0;
             for (var e : byPair.entrySet()) {
-                byPairNode.put(e.getKey(), e.getValue());
-                total += e.getValue();
+                PatchSummary s = e.getValue();
+                ObjectNode pairNode = byPairNode.putObject(e.getKey());
+                pairNode.put("patched", s.patched());
+                pairNode.put("skippedNoSource", s.skippedNoSource());
+                pairNode.put("skippedNoChange", s.skippedNoChange());
+                totalPatched += s.patched();
+                totalSkippedNoSource += s.skippedNoSource();
+                totalSkippedNoChange += s.skippedNoChange();
             }
-            result.put("totalRowsUpdated", total);
+            result.put("totalRowsUpdated", totalPatched);
+            result.put("totalSkippedNoSource", totalSkippedNoSource);
+            result.put("totalSkippedNoChange", totalSkippedNoChange);
             result.put("pairsProcessed", byPair.size());
         } else {
             ctx.setPhase("patch:" + column + " " + job.getSymbol() + "/" + job.getInterval());
@@ -85,14 +96,16 @@ public class PatchNullColumnHandler implements HistoricalJobHandler {
             LocalDateTime to = JobParamUtils.parseLocalDateTime(job.getParams(), "to");
             log.info("PATCH_NULL_COLUMN single-pair | jobId={} column={} symbol={} interval={} from={} to={}",
                     job.getJobId(), column, job.getSymbol(), job.getInterval(), from, to);
-            int updated = patcherService.patchPair(patcher, job.getSymbol(), job.getInterval(),
+            PatchSummary summary = patcherService.patchPair(patcher, job.getSymbol(), job.getInterval(),
                     from, to, ctx);
             result.put("symbol", job.getSymbol());
             result.put("interval", job.getInterval());
             if (from != null) result.put("from", from.toString());
             if (to != null) result.put("to", to.toString());
-            result.put("totalRowsUpdated", updated);
-            ctx.setProgress(updated, updated);
+            result.put("totalRowsUpdated", summary.patched());
+            result.put("skippedNoSource", summary.skippedNoSource());
+            result.put("skippedNoChange", summary.skippedNoChange());
+            ctx.setProgress(summary.patched(), Math.max(summary.total(), 1));
         }
 
         ctx.setResult(result);

@@ -5,6 +5,7 @@ import id.co.blackheart.model.FundingRate;
 import id.co.blackheart.repository.FundingRateRepository;
 import id.co.blackheart.service.funding.FundingRateService;
 import id.co.blackheart.service.funding.FundingRateService.FundingFeatureSnapshot;
+import id.co.blackheart.util.MapperUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -38,6 +39,7 @@ public class FundingColumnsPatcher extends FeaturePatcher<FundingColumnsPatcher.
 
     private final FundingRateRepository fundingRateRepository;
     private final FundingRateService fundingRateService;
+    private final MapperUtil mapperUtil;
 
     @Override
     public String primaryColumn() {
@@ -52,7 +54,16 @@ public class FundingColumnsPatcher extends FeaturePatcher<FundingColumnsPatcher.
     @Override
     public Aux buildAux(String symbol, String interval,
                         LocalDateTime windowStart, LocalDateTime windowEnd) {
-        List<FundingRate> series = fundingRateRepository.findAllUpTo(symbol, windowEnd);
+        // Look one bar past windowEnd so funding events landing inside
+        // (windowEnd, windowEnd + interval] are visible to the last bar in
+        // this window. The bar at start_time = windowEnd has end_time =
+        // windowEnd + interval and the live path uses findLatest(symbol,
+        // end_time) with <= semantics; without this overshoot the bulk
+        // patch would miss a fresh funding event right at the boundary
+        // and diverge from the live computation.
+        long intervalMinutes = mapperUtil.getIntervalMinutes(interval);
+        LocalDateTime auxBoundary = windowEnd.plusMinutes(intervalMinutes);
+        List<FundingRate> series = fundingRateRepository.findAllUpTo(symbol, auxBoundary);
         if (series.isEmpty()) {
             log.warn("FundingColumnsPatcher: no funding_rate_history for {} (cold-start?). Skipping window.",
                     symbol);
@@ -62,12 +73,20 @@ public class FundingColumnsPatcher extends FeaturePatcher<FundingColumnsPatcher.
     }
 
     @Override
-    public void patchRow(FeatureStore row, Aux aux) {
+    public PatchOutcome patchRow(FeatureStore row, Aux aux) {
         FundingFeatureSnapshot snap = fundingRateService.computeFundingFeaturesFromSeries(
                 aux.series, row.getEndTime());
+        if (snap.rate8h() == null) {
+            // Row's end_time predates the first funding event in the series.
+            // Leaving the columns NULL is the correct outcome — overwriting
+            // existing nulls with new nulls would still register as "patched"
+            // in the metrics and obscure that real source data is missing.
+            return PatchOutcome.NOT_FILLED;
+        }
         row.setFundingRate8h(snap.rate8h());
         row.setFundingRate7dAvg(snap.rate7dAvg());
         row.setFundingRateZ(snap.rateZ());
+        return PatchOutcome.FILLED;
     }
 
     /** Per-window funding-rate series snapshot, frozen at windowEnd. */

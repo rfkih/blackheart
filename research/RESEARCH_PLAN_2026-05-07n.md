@@ -2,7 +2,7 @@
 
 ## Session Context
 
-**Date**: 2026-05-07 (fire n)  
+**Date**: 2026-05-07 (fire n) — continued 2026-05-09 (new session)  
 **Prior session cleanup**: BBR ETH 1h abandoned (journal c6ed8035) per operator; BBR archetype fully closed.  
 **Operator actions completed**:
 1. `trend_pullback.schema.json` fixed: `pullbackAtrTolerance` -> `pullbackTouchAtr`, `tpR` -> `tp1R` (matches TrendPullbackEngine.java:519-547)

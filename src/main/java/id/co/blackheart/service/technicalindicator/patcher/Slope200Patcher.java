@@ -72,14 +72,14 @@ public class Slope200Patcher extends FeaturePatcher<Slope200Patcher.Aux> {
     }
 
     @Override
-    public void patchRow(FeatureStore row, Aux aux) {
+    public PatchOutcome patchRow(FeatureStore row, Aux aux) {
         Integer idx = aux.idxByTime.get(row.getStartTime());
         if (idx == null) {
             // Row's start_time isn't in the loaded window — could happen at
             // a boundary if market_data has a gap exactly at the patch row.
-            // Skip rather than throw; the framework will report it as
-            // unpatched and the operator can re-fetch market_data first.
-            return;
+            // Skip rather than throw; the framework reports it as unpatched
+            // and the operator can re-fetch market_data first.
+            return PatchOutcome.NOT_FILLED;
         }
 
         BigDecimal slope200;
@@ -93,6 +93,7 @@ public class Slope200Patcher extends FeaturePatcher<Slope200Patcher.Aux> {
             slope200 = BigDecimal.ZERO;
         }
         row.setSlope200(slope200);
+        return PatchOutcome.FILLED;
     }
 
     /** Per-window auxiliary state — carries EMA200 + a start_time → bar-index map. */
