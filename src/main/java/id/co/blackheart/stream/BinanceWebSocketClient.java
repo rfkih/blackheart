@@ -58,7 +58,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class BinanceWebSocketClient {
 
     @Value("${app.live.binance-ws-base:wss://data-stream.binance.vision}")
-    private final static String WS_BASE;
+    private  String wsBase;
 
     /** Intervals subscribed on the kline stream. Order is irrelevant; iterate as a list to keep the URL deterministic for logs. */
     private static final List<String> SUBSCRIBED_INTERVALS = List.of("5m", "15m", "1h", "4h");
@@ -284,7 +284,7 @@ public class BinanceWebSocketClient {
         String streams = SUBSCRIBED_INTERVALS.stream()
                 .map(i -> prefix + "@kline_" + i)
                 .collect(Collectors.joining("/"));
-        return WS_BASE + "/stream?streams=" + streams;
+        return wsBase + "/stream?streams=" + streams;
     }
 
     private boolean isProcessable(String interval, boolean finalCandle) {

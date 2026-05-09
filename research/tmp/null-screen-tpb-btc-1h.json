@@ -1,0 +1,12 @@
+{
+  "strategy_code": "TPB",
+  "interval_name": "1h",
+  "instrument": "BTCUSDT",
+  "param_ranges": [
+    {"name": "adxEntryMin", "type": "float", "low": "20.0", "high": "35.0"},
+    {"name": "stopAtrBuffer", "type": "float", "low": "0.4", "high": "0.8"},
+    {"name": "tp1R", "type": "float", "low": "1.5", "high": "3.0"}
+  ],
+  "n_draws": 8,
+  "seed": 42
+}
