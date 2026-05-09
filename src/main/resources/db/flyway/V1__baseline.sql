@@ -1353,7 +1353,7 @@ CREATE TABLE IF NOT EXISTS funding_rate_history (
 -- 45. cross_window_run  (V38)
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cross_window_run (
-    cross_window_id             UUID          PRIMARY KEY,
+    cross_window_id             UUID          NOT NULL,
     strategy_code               VARCHAR(60)   NOT NULL,
     interval_name               VARCHAR(20)   NOT NULL,
     instrument                  VARCHAR(30)   NOT NULL,
@@ -1391,7 +1391,7 @@ CREATE INDEX IF NOT EXISTS idx_cross_window_walk_forward ON cross_window_run (mo
 -- 46. alert_event  (V39)
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS alert_event (
-    alert_event_id UUID         PRIMARY KEY,
+    alert_event_id UUID         NOT NULL,
     severity       VARCHAR(20)  NOT NULL,
     kind           VARCHAR(60)  NOT NULL,
     message        TEXT         NOT NULL,

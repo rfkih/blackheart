@@ -1,5 +1,6 @@
 package id.co.blackheart.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Data;
 
@@ -11,12 +12,14 @@ import java.util.UUID;
 @Builder
 public class AccountStrategyResponse {
 
+    @JsonProperty("id")
     private UUID accountStrategyId;
     private UUID accountId;
     private UUID strategyDefinitionId;
     private String strategyCode;
     private String presetName;
     private String symbol;
+    @JsonProperty("interval")
     private String intervalName;
     private Boolean enabled;
     /** Paper-trade flag: when true the strategy emits real signals but
@@ -29,8 +32,11 @@ public class AccountStrategyResponse {
     private Integer maxOpenPositions;
     private BigDecimal capitalAllocationPct;
     private Integer priorityOrder;
+    @JsonProperty("status")
     private String currentStatus;
+    @JsonProperty("createdAt")
     private LocalDateTime createdTime;
+    @JsonProperty("updatedAt")
     private LocalDateTime updatedTime;
     /** Drawdown kill-switch state — surfaced so the strategy detail page can
      *  render a clear "tripped" badge and the re-arm button. */

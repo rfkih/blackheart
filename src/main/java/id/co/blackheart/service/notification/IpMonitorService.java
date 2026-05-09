@@ -5,11 +5,13 @@ import id.co.blackheart.repository.ServerIpLogRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
@@ -17,7 +19,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequiredArgsConstructor
 public class IpMonitorService {
 
-    private static final String IP_CHECK_URL = "https://api.ipify.org?format=text";
+    @Value("${nodejs.api.base-url}")
+    private String nodejsBaseUrl;
 
     private final RestTemplate restTemplate;
     private final TelegramNotificationService telegramNotificationService;
@@ -31,8 +34,10 @@ public class IpMonitorService {
                 .ifPresent(log -> lastKnownIp.set(log.getIpAddress()));
     }
 
+    @SuppressWarnings("unchecked")
     public String getCurrentPublicIp() {
-        return restTemplate.getForObject(IP_CHECK_URL, String.class);
+        Map<String, String> body = restTemplate.getForObject(nodejsBaseUrl + "/server-ip", Map.class);
+        return body != null ? body.get("ip") : null;
     }
 
     public void checkAndNotifyIfChanged() {

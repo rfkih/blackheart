@@ -2,14 +2,17 @@ package id.co.blackheart.service.user;
 
 import id.co.blackheart.dto.request.CreateAccountRequest;
 import id.co.blackheart.dto.request.RotateAccountCredentialsRequest;
+import id.co.blackheart.dto.request.UpdateAccountRequest;
 import id.co.blackheart.dto.response.AccountSummaryResponse;
 import id.co.blackheart.exception.UserAlreadyExistsException;
 import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.AccountRepository;
+import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.audit.AuditService;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,7 +31,17 @@ import java.util.UUID;
 public class AccountQueryService {
 
     private final AccountRepository accountRepository;
+    private final TradesRepository tradesRepository;
     private final AuditService auditService;
+
+    /** Generic message used for both per-user-conflict and (rare) race-condition
+     *  unique-violation paths. Generic on purpose - no echoing the requested
+     *  username back, which would leak existence to other tenants if the
+     *  uniqueness ever became cross-user again. */
+    private static final String DUPLICATE_LABEL_MSG = "That label is already in use on your account.";
+
+    /** Char-flag value mirrors what existing rows store. Soft-delete sets it to "0". */
+    private static final String INACTIVE_FLAG = "0";
 
     /**
      * Risk defaults for freshly-created accounts. The NewAccountDialog
@@ -41,6 +54,17 @@ public class AccountQueryService {
     private static final BigDecimal DEFAULT_STOP_LOSS = new BigDecimal("1.00");
     /** Char flag mirrors existing rows; see {@code Account.isActive} ("1"/"0"). */
     private static final String ACTIVE_FLAG = "1";
+
+    // Risk-policy defaults. The DB columns have NOT NULL + DEFAULT clauses,
+    // but Hibernate generates an INSERT with these fields explicitly set to
+    // NULL when the entity values are null - which then trips the NOT NULL
+    // (Postgres column DEFAULTs are only used when the column is omitted
+    // from the INSERT, not when it's explicitly NULL). Easiest fix: mirror
+    // the schema defaults at the Java side.
+    private static final int        DEFAULT_MAX_CONCURRENT_LONGS  = 2;
+    private static final int        DEFAULT_MAX_CONCURRENT_SHORTS = 2;
+    private static final boolean    DEFAULT_VOL_TARGETING_ENABLED = false;
+    private static final BigDecimal DEFAULT_BOOK_VOL_TARGET_PCT   = new BigDecimal("15.00");
 
     @Transactional(readOnly = true)
     public List<AccountSummaryResponse> getAccountsByUser(UUID userId) {
@@ -62,26 +86,33 @@ public class AccountQueryService {
 
     /**
      * Creates a new exchange account for {@code userId}. API key + secret
-     * arrive as plaintext over HTTPS and are stored verbatim — adding
-     * at-rest encryption is a follow-up (requires a key-management story).
+     * arrive as plaintext over HTTPS and are encrypted at rest by
+     * {@link id.co.blackheart.converter.EncryptedStringConverter}.
      *
      * <p>Throws {@link UserAlreadyExistsException} (mapped to HTTP 409 by
-     * GlobalExceptionHandler) when the username is already taken, rather
-     * than letting a unique-constraint violation bubble up as a 500.
+     * GlobalExceptionHandler) when the user already has an account with
+     * the same label. Uses a generic message that never echoes the requested
+     * label - per-user uniqueness is an info-disclosure risk if the error
+     * leaks the label back.
+     *
+     * <p>Atomic against concurrent submits: the precheck is best-effort;
+     * a unique-constraint violation from {@link AccountRepository#save}
+     * is caught and translated to the same friendly 409.
      */
     @Transactional
     public AccountSummaryResponse createAccount(UUID userId, CreateAccountRequest request) {
-        log.info("Creating account: userId={} username={} exchange={}",
-                userId, request.getUsername(), request.getExchange());
+        // Username deliberately omitted from the log line - it can encode PII
+        // ("rifki-savings", "alice@gmail-spot") that we don't want shipped to
+        // log aggregators. accountId after save is sufficient for forensics.
+        log.info("Creating account: userId={} exchange={}", userId, request.getExchange());
 
-        if (accountRepository.existsByUsernameIgnoreCase(request.getUsername())) {
-            throw new UserAlreadyExistsException(
-                    "An account with username '" + request.getUsername() + "' already exists");
+        if (accountRepository.existsByUserIdAndUsernameIgnoreCase(userId, request.getUsername())) {
+            throw new UserAlreadyExistsException(DUPLICATE_LABEL_MSG);
         }
 
         Account account = new Account();
         account.setUserId(userId);
-        account.setUsername(request.getUsername());
+        account.setUsername(request.getUsername().trim());
         account.setExchange(request.getExchange().toUpperCase());
         account.setIsActive(ACTIVE_FLAG);
         account.setApiKey(request.getApiKey());
@@ -90,10 +121,101 @@ public class AccountQueryService {
         account.setConfidence(DEFAULT_CONFIDENCE);
         account.setTakeProfit(DEFAULT_TAKE_PROFIT);
         account.setStopLoss(DEFAULT_STOP_LOSS);
+        account.setMaxConcurrentLongs(DEFAULT_MAX_CONCURRENT_LONGS);
+        account.setMaxConcurrentShorts(DEFAULT_MAX_CONCURRENT_SHORTS);
+        account.setVolTargetingEnabled(DEFAULT_VOL_TARGETING_ENABLED);
+        account.setBookVolTargetPct(DEFAULT_BOOK_VOL_TARGET_PCT);
 
-        Account saved = accountRepository.save(account);
-        log.info("Account created: accountId={}", saved.getAccountId());
+        Account saved;
+        try {
+            saved = accountRepository.save(account);
+        } catch (DataIntegrityViolationException ex) {
+            // Race: a concurrent insert beat us between the precheck and save.
+            // Per-user unique index (V51) trips here. Translate to friendly 409.
+            throw new UserAlreadyExistsException(DUPLICATE_LABEL_MSG);
+        }
+        log.info("Account created: userId={} accountId={}", userId, saved.getAccountId());
         return toSummary(saved);
+    }
+
+    /**
+     * Updates the label and/or exchange of an account the caller owns. Either
+     * field can be null to leave it unchanged. Throws {@link UserAlreadyExistsException}
+     * if the requested label is already taken by another of the caller's
+     * accounts. Returns 404 (via {@link EntityNotFoundException}) if the id
+     * doesn't resolve to one of the caller's accounts.
+     */
+    @Transactional
+    public AccountSummaryResponse updateAccount(UUID userId, UUID accountId, UpdateAccountRequest req) {
+        Account account = accountRepository.findByAccountId(accountId)
+                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException("Account not found: " + accountId);
+        }
+
+        boolean changed = false;
+        if (req.getUsername() != null) {
+            String candidate = req.getUsername().trim();
+            // No-op when the label matches the existing one (case-sensitive
+            // match - "Main" -> "Main" is a no-op; "main" -> "Main" is a real
+            // change so we still run the conflict check).
+            if (!candidate.equals(account.getUsername())) {
+                if (accountRepository.existsByUserIdAndUsernameIgnoreCaseExcludingId(
+                        userId, candidate, accountId)) {
+                    throw new UserAlreadyExistsException(DUPLICATE_LABEL_MSG);
+                }
+                account.setUsername(candidate);
+                changed = true;
+            }
+        }
+        if (req.getExchange() != null) {
+            String e = req.getExchange().toUpperCase();
+            if (!e.equals(account.getExchange())) {
+                account.setExchange(e);
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            return toSummary(account);
+        }
+
+        Account saved;
+        try {
+            saved = accountRepository.save(account);
+        } catch (DataIntegrityViolationException ex) {
+            throw new UserAlreadyExistsException(DUPLICATE_LABEL_MSG);
+        }
+        log.info("Account updated: userId={} accountId={}", userId, accountId);
+        return toSummary(saved);
+    }
+
+    /**
+     * Soft-deletes an account by flipping {@code is_active} to "0". Refuses
+     * if any open / partially-closed trades reference this account - those
+     * are live exposure that has to be closed first.
+     *
+     * <p>Soft-delete (not hard-delete) preserves FK integrity for historical
+     * trades, P&amp;L curves, and audit rows that reference {@code accountId}.
+     */
+    @Transactional
+    public void softDeleteAccount(UUID userId, UUID accountId) {
+        Account account = accountRepository.findByAccountId(accountId)
+                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException("Account not found: " + accountId);
+        }
+        long openTrades = tradesRepository.countOpenByAccountId(accountId);
+        if (openTrades > 0) {
+            throw new IllegalStateException(
+                    "Cannot delete account with " + openTrades + " open trade(s). " +
+                    "Close them first.");
+        }
+        if (!INACTIVE_FLAG.equals(account.getIsActive())) {
+            account.setIsActive(INACTIVE_FLAG);
+            accountRepository.save(account);
+        }
+        log.info("Account soft-deleted: userId={} accountId={}", userId, accountId);
     }
 
     /**

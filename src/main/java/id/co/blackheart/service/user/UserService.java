@@ -10,7 +10,9 @@ import id.co.blackheart.exception.UserAccountDisabledException;
 import id.co.blackheart.exception.UserAlreadyExistsException;
 import id.co.blackheart.exception.UserNotFoundException;
 import id.co.blackheart.model.User;
+import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.UserRepository;
+import id.co.blackheart.service.portfolio.PortfolioService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -34,9 +36,11 @@ import java.util.UUID;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final AccountRepository accountRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final EmailVerificationService emailVerificationService;
+    private final PortfolioService portfolioService;
 
     private static final String ROLE_USER    = "USER";
     private static final String STATUS_ACTIVE = "ACTIVE";
@@ -111,6 +115,12 @@ public class UserService {
 
         // Stamp last login without triggering a full entity dirty-check round-trip
         userRepository.updateLastLogin(user.getUserId(), user.getEmail(), LocalDateTime.now());
+
+        // Fire-and-forget balance sync for every account that has Binance credentials.
+        // Runs on taskExecutor so login response is not blocked by the Binance round-trip.
+        accountRepository.findByUserId(user.getUserId()).stream()
+                .filter(a -> StringUtils.hasText(a.getApiKey()) && StringUtils.hasText(a.getApiSecret()))
+                .forEach(portfolioService::refreshAccountBalance);
 
         log.info("Login successful: userId={}", user.getUserId());
         return buildLoginResponse(user);

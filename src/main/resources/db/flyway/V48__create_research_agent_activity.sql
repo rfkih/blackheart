@@ -24,4 +24,10 @@ CREATE INDEX idx_raa_created          ON research_agent_activity (created_time D
 CREATE INDEX idx_raa_agent_created    ON research_agent_activity (agent_name, created_time DESC);
 
 GRANT SELECT, INSERT ON research_agent_activity TO blackheart_research;
-GRANT SELECT          ON research_agent_activity TO blackheart_readonly;
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'blackheart_readonly') THEN
+        EXECUTE 'GRANT SELECT ON research_agent_activity TO blackheart_readonly';
+    END IF;
+END$$;

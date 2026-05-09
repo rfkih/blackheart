@@ -28,9 +28,9 @@ import java.time.LocalDateTime;
  *       from Binance and repair missing market_data + feature_store rows.
  *       For interval=4h, fans out to 1h/15m/5m companions automatically
  *       (preserved behavior of the legacy {@code /backfill} endpoint).</li>
- *   <li>{@code mode=range} — fill missing feature_store rows in the
- *       {@code [from, to]} range. Requires market_data already present;
- *       use {@code mode=warmup} first if market_data is sparse.</li>
+ *   <li>{@code mode=range} — fetch missing market_data candles from Binance
+ *       for {@code [from, to]}, then fill any missing feature_store rows in
+ *       the same window. Both steps are idempotent.</li>
  * </ul>
  *
  * <p>Mid-run progress is single-shot — the underlying services don't accept
@@ -107,9 +107,15 @@ public class CoverageRepairHandler implements HistoricalJobHandler {
 
         log.info("COVERAGE_REPAIR range | jobId={} symbol={} interval={} from={} to={}",
                 job.getJobId(), job.getSymbol(), job.getInterval(), from, to);
-        // Use the bulk path with a live JobContext so the UI sees per-chunk
-        // progress + cooperative cancel. Phase labels are emitted by the
-        // service ("bulk:build_indicators", "bulk:write_rows").
+
+        // Phase 1: fetch missing candles from Binance into market_data.
+        ctx.setPhase("range:market_data");
+        historicalDataService.backfillMissingMarketDataByRange(
+                job.getSymbol(), job.getInterval(), from, to);
+
+        // Phase 2: repair feature_store for the range using the bulk path so
+        // the UI sees per-chunk progress + cooperative cancel.
+        ctx.setPhase("range:feature_store");
         TechnicalIndicatorService.BulkBackfillResult res =
                 technicalIndicatorService.bulkComputeAndStoreInRange(
                         job.getSymbol(), job.getInterval(), from, to, false, ctx);

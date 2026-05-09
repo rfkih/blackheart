@@ -386,7 +386,7 @@ public class HistoricalDataService {
         );
     }
 
-    private MarketDataRangeBackfillStats backfillMissingMarketDataByRange(
+    public MarketDataRangeBackfillStats backfillMissingMarketDataByRange(
             String symbol,
             String interval,
             LocalDateTime startTime,

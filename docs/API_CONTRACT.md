@@ -713,11 +713,10 @@ Authorization:Bearer eyJhbGci...
 ### ✅ `/topic/sentiment/:symbol`
 Real-time market sentiment updates (already implemented via `SentimentWebSocketController`).
 
-### ❌ `/topic/pnl/:accountId`
+### ✅ `/topic/pnl/:accountId`
 Real-time P&L updates for all open trades of `accountId`.
 
-> **Current backend:** `LivePnlWebSocketController` handles `@MessageMapping("/pnl.subscribe")`.
-> The publish topic `/topic/pnl/{accountId}` needs to be verified/aligned.
+> Client sends `@MessageMapping("/pnl.subscribe")` to register; backend publishes to `/topic/pnl/{accountId}` via `LivePnlPublisherService` on a 1-second cadence.
 
 **Message body**
 ```json

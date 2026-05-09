@@ -6,6 +6,8 @@ import id.co.blackheart.dto.request.BinanceAssetRequest;
 import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
 import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.response.*;
+import id.co.blackheart.exception.ServiceUnavailableException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -48,19 +50,25 @@ public class BinanceClientService {
         this.objectMapper = objectMapper;
     }
 
+    @CircuitBreaker(name = "binance", fallbackMethod = "getCurrentBtcPriceFallback")
     public double getCurrentBtcPrice() {
         String url = UriComponentsBuilder
                 .fromHttpUrl("https://api.binance.com/api/v3/ticker/price")
                 .queryParam("symbol", "BTCUSDT")
                 .toUriString();
 
-        BinancePriceResponse response = restTemplate.getForObject(url, BinancePriceResponse.class);
+        BinancePriceResponse response = binanceRestTemplate.getForObject(url, BinancePriceResponse.class);
 
         if (response != null) {
             return Double.parseDouble(response.getPrice());
         } else {
-            throw new RuntimeException("Failed to fetch BTC price from Binance");
+            throw new ServiceUnavailableException("Binance returned empty price response");
         }
+    }
+
+    private double getCurrentBtcPriceFallback(Exception e) {
+        log.warn("Circuit breaker open for BTC price; upstream unavailable: {}", e.getMessage());
+        throw new ServiceUnavailableException("Binance price feed temporarily unavailable");
     }
 
     /**
@@ -75,6 +83,7 @@ public class BinanceClientService {
      * retry per-symbol so valid ones still resolve. Any other failure returns
      * an empty map — callers fall back to negative-cache + ZERO usdtValue.
      */
+    @CircuitBreaker(name = "binance", fallbackMethod = "getLatestPricesFallback")
     public Map<String, BigDecimal> getLatestPrices(Collection<String> symbols) {
         if (CollectionUtils.isEmpty(symbols)) {
             return Collections.emptyMap();
@@ -116,6 +125,11 @@ public class BinanceClientService {
             log.warn("Binance bulk price fetch error | symbols={}", distinct, e);
             return Collections.emptyMap();
         }
+    }
+
+    private Map<String, BigDecimal> getLatestPricesFallback(Collection<String> symbols, Exception e) {
+        log.warn("Circuit breaker open for bulk price fetch; returning empty map: {}", e.getMessage());
+        return Collections.emptyMap();
     }
 
     private Map<String, BigDecimal> fetchPricesPerSymbol(Collection<String> symbols) {

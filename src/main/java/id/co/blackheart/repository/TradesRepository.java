@@ -95,6 +95,17 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
             """, nativeQuery = true)
     long countOpenByAccountStrategyId(@Param("accountStrategyId") UUID accountStrategyId);
 
+    /**
+     * Open + partially-closed trades for a single account. Used by the
+     * account-delete flow to refuse removal of an account with live exposure.
+     */
+    @Query(value = """
+            SELECT COUNT(*) FROM trades t
+            WHERE t.account_id = :accountId
+              AND t.status IN ('OPEN', 'PARTIALLY_CLOSED')
+            """, nativeQuery = true)
+    long countOpenByAccountId(@Param("accountId") UUID accountId);
+
     @Query(value = "SELECT COUNT(*) FROM trades WHERE account_id IN (:accountIds) AND status = :status", nativeQuery = true)
     long countByAccountIdsAndStatus(
             @Param("accountIds") List<UUID> accountIds,
