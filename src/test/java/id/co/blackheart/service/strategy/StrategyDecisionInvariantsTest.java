@@ -115,8 +115,9 @@ class StrategyDecisionInvariantsTest {
 
         @Test
         void priceChecksSkippedWhenEntryIsNull() {
-            // Strategy decisions get persisted to BacktestRun for replay;
-            // older rows may not have an associated price.
+            // Persisted strategy decisions on older backtest rows can lack
+            // an associated entry price. The validator skips price-side
+            // checks when the entry reference is null.
             StrategyDecision d = validLong()
                     .stopLossPrice(new BigDecimal("999999"))   // wrong side
                     .takeProfitPrice1(new BigDecimal("0.01"))  // wrong side

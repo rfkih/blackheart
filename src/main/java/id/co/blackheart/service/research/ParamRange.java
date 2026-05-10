@@ -60,9 +60,9 @@ public class ParamRange {
         java.util.Set<BigDecimal> out = new java.util.LinkedHashSet<>();
         for (int i = -half; i <= half; i++) {
             BigDecimal candidate = seed.add(step.multiply(BigDecimal.valueOf(i)));
-            if (min != null && candidate.compareTo(min) < 0) continue;
-            if (max != null && candidate.compareTo(max) > 0) continue;
-            out.add(candidate);
+            boolean inRange = (min == null || candidate.compareTo(min) >= 0)
+                    && (max == null || candidate.compareTo(max) <= 0);
+            if (inRange) out.add(candidate);
         }
         return new java.util.ArrayList<>(out);
     }

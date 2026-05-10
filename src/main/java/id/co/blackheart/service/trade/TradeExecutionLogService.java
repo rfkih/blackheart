@@ -28,7 +28,10 @@ public class TradeExecutionLogService {
             String entryReason,
             UUID tradeId
     ) {
-        record("OPEN", side, SUCCESS, account, asset, strategyName, entryReason, tradeId, null);
+        persistEntry(account,
+                baseBuilder("OPEN", side, SUCCESS, account, asset, entryReason, tradeId)
+                        .strategyName(strategyName)
+                        .build());
     }
 
     public void logOpenFailure(
@@ -40,7 +43,11 @@ public class TradeExecutionLogService {
             UUID tradeId,
             String errorMessage
     ) {
-        record("OPEN", side, FAILED, account, asset, strategyName, entryReason, tradeId, truncate(errorMessage));
+        persistEntry(account,
+                baseBuilder("OPEN", side, FAILED, account, asset, entryReason, tradeId)
+                        .strategyName(strategyName)
+                        .errorMessage(truncate(errorMessage))
+                        .build());
     }
 
     public void logCloseSuccess(
@@ -50,7 +57,9 @@ public class TradeExecutionLogService {
             String exitReason,
             UUID tradeId
     ) {
-        record("CLOSE", side, SUCCESS, account, asset, null, exitReason, tradeId, null);
+        persistEntry(account,
+                baseBuilder("CLOSE", side, SUCCESS, account, asset, exitReason, tradeId)
+                        .build());
     }
 
     public void logCloseFailure(
@@ -61,39 +70,40 @@ public class TradeExecutionLogService {
             UUID tradeId,
             String errorMessage
     ) {
-        record("CLOSE", side, FAILED, account, asset, null, exitReason, tradeId, truncate(errorMessage));
+        persistEntry(account,
+                baseBuilder("CLOSE", side, FAILED, account, asset, exitReason, tradeId)
+                        .errorMessage(truncate(errorMessage))
+                        .build());
     }
 
-    private void record(
+    private static TradeExecutionLog.TradeExecutionLogBuilder baseBuilder(
             String executionType,
             String side,
             String status,
             Account account,
             String asset,
-            String strategyName,
             String executionReason,
-            UUID tradeId,
-            String errorMessage
+            UUID tradeId
     ) {
-        try {
-            TradeExecutionLog entry = TradeExecutionLog.builder()
-                    .executionType(executionType)
-                    .side(side)
-                    .status(status)
-                    .accountId(account != null ? account.getAccountId() : null)
-                    .username(account != null ? account.getUsername() : null)
-                    .asset(asset)
-                    .strategyName(strategyName)
-                    .executionReason(executionReason)
-                    .tradeId(tradeId)
-                    .errorMessage(errorMessage)
-                    .executedAt(LocalDateTime.now())
-                    .build();
+        return TradeExecutionLog.builder()
+                .executionType(executionType)
+                .side(side)
+                .status(status)
+                .accountId(account != null ? account.getAccountId() : null)
+                .username(account != null ? account.getUsername() : null)
+                .asset(asset)
+                .executionReason(executionReason)
+                .tradeId(tradeId)
+                .executedAt(LocalDateTime.now());
+    }
 
+    private void persistEntry(Account account, TradeExecutionLog entry) {
+        try {
             tradeExecutionLogRepository.save(entry);
         } catch (Exception e) {
             log.error("[TradeExecutionLog] Failed to persist execution log | type={} status={} account={} asset={}",
-                    executionType, status, account != null ? account.getUsername() : "null", asset, e);
+                    entry.getExecutionType(), entry.getStatus(),
+                    account != null ? account.getUsername() : "null", entry.getAsset(), e);
         }
     }
 

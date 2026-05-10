@@ -44,6 +44,14 @@ public class StrategyDefinitionService {
     private static final String DEFAULT_STATUS = "ACTIVE";
     private static final String DEPRECATED_STATUS = "DEPRECATED";
     private static final String LEGACY_ARCHETYPE = "LEGACY_JAVA";
+    /** Sort field name + Sortable whitelist key — matches the JPA property
+     *  on {@code StrategyDefinition}. Kept as a constant so a future entity
+     *  rename catches every site at compile time. */
+    private static final String FIELD_STRATEGY_CODE = "strategyCode";
+    /** Prefix for the "definition not found" exception message. The lookup +
+     *  {@code orElseThrow} pattern repeats across read/update/deprecate, so
+     *  a constant keeps the wording (and any future i18n) in one place. */
+    private static final String NOT_FOUND_PREFIX = "Strategy definition not found: ";
 
     private final StrategyDefinitionRepository repository;
     private final StrategyDefinitionHistoryService historyService;
@@ -66,22 +74,22 @@ public class StrategyDefinitionService {
     @Transactional(readOnly = true)
     public Page<StrategyDefinitionResponse> listPaged(String query, String sort, int page, int size) {
         String normalized = StringUtils.hasText(query) ? query.trim() : null;
-        int cappedSize = Math.max(1, Math.min(size, 100));
+        int cappedSize = Math.clamp(size, 1, 100);
         Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize, parseSort(sort));
         return repository.findFiltered(normalized, pageable).map(this::toResponse);
     }
 
     private static final Set<String> SORTABLE_FIELDS =
-            Set.of("strategyCode", "strategyName", "strategyType", "archetype", "createdTime");
+            Set.of(FIELD_STRATEGY_CODE, "strategyName", "strategyType", "archetype", "createdTime");
 
     private static Sort parseSort(String sort) {
         if (!StringUtils.hasText(sort)) {
-            return Sort.by(Sort.Order.asc("strategyCode"));
+            return Sort.by(Sort.Order.asc(FIELD_STRATEGY_CODE));
         }
         String[] parts = sort.split(",", 2);
         String field = parts[0].trim();
         if (!SORTABLE_FIELDS.contains(field)) {
-            return Sort.by(Sort.Order.asc("strategyCode"));
+            return Sort.by(Sort.Order.asc(FIELD_STRATEGY_CODE));
         }
         Sort.Direction dir = (parts.length > 1 && "desc".equalsIgnoreCase(parts[1].trim()))
                 ? Sort.Direction.DESC
@@ -93,7 +101,7 @@ public class StrategyDefinitionService {
     public StrategyDefinitionResponse getById(UUID id) {
         return repository.findById(id)
                 .map(this::toResponse)
-                .orElseThrow(() -> new EntityNotFoundException("Strategy definition not found: " + id));
+                .orElseThrow(() -> new EntityNotFoundException(NOT_FOUND_PREFIX + id));
     }
 
     @Transactional
@@ -130,7 +138,7 @@ public class StrategyDefinitionService {
         entity.setUpdatedBy(actorEmail);
 
         StrategyDefinition saved = repository.save(entity);
-        historyService.record(saved, StrategyDefinitionHistoryService.OP_INSERT, null,
+        historyService.recordChange(saved, StrategyDefinitionHistoryService.OP_INSERT, null,
                 "Created by " + actorEmail);
         return toResponse(saved);
     }
@@ -139,7 +147,7 @@ public class StrategyDefinitionService {
     public StrategyDefinitionResponse update(UUID id, UpdateStrategyDefinitionRequest request, String actorEmail) {
         log.info("Updating strategy definition: id={} actor={}", id, actorEmail);
         StrategyDefinition entity = repository.findById(id)
-                .orElseThrow(() -> new EntityNotFoundException("Strategy definition not found: " + id));
+                .orElseThrow(() -> new EntityNotFoundException(NOT_FOUND_PREFIX + id));
 
         boolean archetypeChanged = false;
         if (request.getStrategyName() != null) {
@@ -179,7 +187,7 @@ public class StrategyDefinitionService {
         String operation = archetypeChanged
                 ? StrategyDefinitionHistoryService.OP_UPGRADE
                 : StrategyDefinitionHistoryService.OP_UPDATE;
-        historyService.record(saved, operation, null, request.getChangeReason());
+        historyService.recordChange(saved, operation, null, request.getChangeReason());
         // Drop the cached spec-driven adapter so the next live tick rebuilds
         // from the fresh definition. Live executors keyed off this strategy
         // code would otherwise hold the old archetype/version/body until
@@ -199,14 +207,14 @@ public class StrategyDefinitionService {
     public StrategyDefinitionResponse deprecate(UUID id, String actorEmail) {
         log.info("Deprecating strategy definition: id={} actor={}", id, actorEmail);
         StrategyDefinition entity = repository.findById(id)
-                .orElseThrow(() -> new EntityNotFoundException("Strategy definition not found: " + id));
+                .orElseThrow(() -> new EntityNotFoundException(NOT_FOUND_PREFIX + id));
         entity.setStatus(DEPRECATED_STATUS);
         entity.setIsDeleted(true);
         entity.setDeletedAt(LocalDateTime.now());
         entity.setUpdatedBy(actorEmail);
 
         StrategyDefinition saved = repository.save(entity);
-        historyService.record(saved, StrategyDefinitionHistoryService.OP_DELETE, null,
+        historyService.recordChange(saved, StrategyDefinitionHistoryService.OP_DELETE, null,
                 "Deprecated by " + actorEmail);
         executorFactory.invalidateSpecCache();
         return toResponse(saved);

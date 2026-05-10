@@ -24,7 +24,6 @@ import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -83,7 +82,7 @@ public class PnlService {
         if (StringUtils.hasText(strategyCode)) {
             closed = closed.stream()
                     .filter(t -> strategyCode.equalsIgnoreCase(t.getStrategyName()))
-                    .collect(Collectors.toList());
+                    .toList();
         }
 
         Map<String, List<Trades>> byDate = new TreeMap<>();
@@ -101,7 +100,7 @@ public class PnlService {
                     .realizedPnl(pnl.setScale(8, RoundingMode.HALF_UP))
                     .tradeCount(e.getValue().size())
                     .build();
-        }).collect(Collectors.toList());
+        }).toList();
     }
 
     public List<StrategyPnlResponse> getByStrategy(UUID userId, LocalDate from, LocalDate to) {
@@ -133,7 +132,7 @@ public class PnlService {
                     .tradeCount(list.size())
                     .winRate(winRate)
                     .build();
-        }).collect(Collectors.toList());
+        }).toList();
     }
 
     /**
@@ -177,53 +176,16 @@ public class PnlService {
 
         // Walk all closed trades up to `to` so cumulative pnl is accurate at the
         // window's start; only emit points whose exit time falls inside the window.
-        BigDecimal cumulative = BigDecimal.ZERO;
-        BigDecimal cumulativeAtFrom = BigDecimal.ZERO;
-        boolean fromBoundaryRecorded = false;
-        List<EquityPointResponse> points = new ArrayList<>();
-        BigDecimal peak = baseline;
-
+        EquityCurveState state = new EquityCurveState(baseline);
         for (Trades t : closed) {
-            BigDecimal pnl = t.getRealizedPnlAmount() != null ? t.getRealizedPnlAmount() : BigDecimal.ZERO;
-            LocalDateTime exit = t.getExitTime();
-            if (exit == null) continue;
-
-            // Carry pnl that closed BEFORE the window into the starting baseline.
-            if (exit.isBefore(fromDt)) {
-                cumulative = cumulative.add(pnl);
-                continue;
-            }
-
-            // First trade in-window: anchor a point at `from` representing the
-            // equity right at the window's left edge.
-            if (!fromBoundaryRecorded) {
-                cumulativeAtFrom = cumulative;
-                BigDecimal equityAtFrom = baseline.add(cumulativeAtFrom);
-                if (equityAtFrom.compareTo(peak) > 0) peak = equityAtFrom;
-                points.add(EquityPointResponse.builder()
-                        .time(fromMs)
-                        .equity(equityAtFrom.setScale(8, RoundingMode.HALF_UP))
-                        .drawdown(percentDrop(equityAtFrom, peak))
-                        .build());
-                fromBoundaryRecorded = true;
-            }
-
-            cumulative = cumulative.add(pnl);
-            BigDecimal equity = baseline.add(cumulative);
-            if (equity.compareTo(peak) > 0) peak = equity;
-
-            points.add(EquityPointResponse.builder()
-                    .time(DateTimeUtil.toEpochMillisUtc(exit))
-                    .equity(equity.setScale(8, RoundingMode.HALF_UP))
-                    .drawdown(percentDrop(equity, peak))
-                    .build());
+            applyTrade(state, t, baseline, fromDt, fromMs);
         }
 
         // No trades closed in-window: emit a flat anchor so the chart still has
         // something to draw at the requested baseline.
-        if (!fromBoundaryRecorded) {
-            BigDecimal equityAtFrom = baseline.add(cumulative);
-            points.add(EquityPointResponse.builder()
+        if (!state.fromBoundaryRecorded) {
+            BigDecimal equityAtFrom = baseline.add(state.cumulative);
+            state.points.add(EquityPointResponse.builder()
                     .time(fromMs)
                     .equity(equityAtFrom.setScale(8, RoundingMode.HALF_UP))
                     .drawdown(BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP))
@@ -231,16 +193,68 @@ public class PnlService {
         }
 
         // Trailing anchor at `to` so the line extends to the right edge of the window.
-        EquityPointResponse last = points.get(points.size() - 1);
+        EquityPointResponse last = state.points.get(state.points.size() - 1);
         if (!Objects.equals(last.getTime(), toMs)) {
-            points.add(EquityPointResponse.builder()
+            state.points.add(EquityPointResponse.builder()
                     .time(toMs)
                     .equity(last.getEquity())
                     .drawdown(last.getDrawdown())
                     .build());
         }
 
-        return points;
+        return state.points;
+    }
+
+    private void applyTrade(EquityCurveState state, Trades t, BigDecimal baseline,
+                            LocalDateTime fromDt, long fromMs) {
+        LocalDateTime exit = t.getExitTime();
+        if (exit == null) return;
+        BigDecimal pnl = t.getRealizedPnlAmount() != null ? t.getRealizedPnlAmount() : BigDecimal.ZERO;
+
+        // Carry pnl that closed BEFORE the window into the starting baseline.
+        if (exit.isBefore(fromDt)) {
+            state.cumulative = state.cumulative.add(pnl);
+            return;
+        }
+
+        recordWindowEdge(state, baseline, fromMs);
+
+        state.cumulative = state.cumulative.add(pnl);
+        BigDecimal equity = baseline.add(state.cumulative);
+        if (equity.compareTo(state.peak) > 0) state.peak = equity;
+
+        state.points.add(EquityPointResponse.builder()
+                .time(DateTimeUtil.toEpochMillisUtc(exit))
+                .equity(equity.setScale(8, RoundingMode.HALF_UP))
+                .drawdown(percentDrop(equity, state.peak))
+                .build());
+    }
+
+    /**
+     * First trade in-window: anchor a point at {@code from} representing the
+     * equity right at the window's left edge. No-op on subsequent calls.
+     */
+    private void recordWindowEdge(EquityCurveState state, BigDecimal baseline, long fromMs) {
+        if (state.fromBoundaryRecorded) return;
+        BigDecimal equityAtFrom = baseline.add(state.cumulative);
+        if (equityAtFrom.compareTo(state.peak) > 0) state.peak = equityAtFrom;
+        state.points.add(EquityPointResponse.builder()
+                .time(fromMs)
+                .equity(equityAtFrom.setScale(8, RoundingMode.HALF_UP))
+                .drawdown(percentDrop(equityAtFrom, state.peak))
+                .build());
+        state.fromBoundaryRecorded = true;
+    }
+
+    private static final class EquityCurveState {
+        BigDecimal cumulative = BigDecimal.ZERO;
+        BigDecimal peak;
+        boolean fromBoundaryRecorded = false;
+        final List<EquityPointResponse> points = new ArrayList<>();
+
+        EquityCurveState(BigDecimal baseline) {
+            this.peak = baseline;
+        }
     }
 
     private BigDecimal percentDrop(BigDecimal equity, BigDecimal peak) {
@@ -276,7 +290,7 @@ public class PnlService {
     private List<UUID> getAccountIds(UUID userId) {
         return accountRepository.findByUserId(userId).stream()
                 .map(Account::getAccountId)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private LocalDateTime[] periodRange(String period) {
@@ -284,7 +298,7 @@ public class PnlService {
         LocalDateTime from;
         switch (period.toLowerCase()) {
             case "week":
-                from = now.toLocalDate().atStartOfDay().minusDays(now.getDayOfWeek().getValue() - 1);
+                from = now.toLocalDate().atStartOfDay().minusDays((long) now.getDayOfWeek().getValue() - 1);
                 break;
             case "month":
                 from = now.toLocalDate().withDayOfMonth(1).atStartOfDay();

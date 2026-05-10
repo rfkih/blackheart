@@ -6,6 +6,7 @@ import id.co.blackheart.dto.request.BinanceAssetRequest;
 import id.co.blackheart.dto.request.BinanceOrderDetailRequest;
 import id.co.blackheart.dto.request.BinanceOrderRequest;
 import id.co.blackheart.dto.response.*;
+import id.co.blackheart.exception.InvalidResponseException;
 import id.co.blackheart.exception.ServiceUnavailableException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.AllArgsConstructor;
@@ -35,6 +36,9 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class BinanceClientService {
+
+    private static final String BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price";
+
     private final RestTemplate restTemplate;
     private final RestTemplate binanceRestTemplate;
     private final ObjectMapper objectMapper;
@@ -53,7 +57,7 @@ public class BinanceClientService {
     @CircuitBreaker(name = "binance", fallbackMethod = "getCurrentBtcPriceFallback")
     public double getCurrentBtcPrice() {
         String url = UriComponentsBuilder
-                .fromHttpUrl("https://api.binance.com/api/v3/ticker/price")
+                .fromHttpUrl(BINANCE_TICKER_URL)
                 .queryParam("symbol", "BTCUSDT")
                 .toUriString();
 
@@ -101,7 +105,7 @@ public class BinanceClientService {
                 .map(s -> "\"" + s + "\"")
                 .collect(Collectors.joining(",", "[", "]"));
         String bulkUrl = UriComponentsBuilder
-                .fromHttpUrl("https://api.binance.com/api/v3/ticker/price")
+                .fromHttpUrl(BINANCE_TICKER_URL)
                 .queryParam("symbols", symbolsJson)
                 .build()
                 .toUriString();
@@ -128,7 +132,8 @@ public class BinanceClientService {
     }
 
     private Map<String, BigDecimal> getLatestPricesFallback(Collection<String> symbols, Exception e) {
-        log.warn("Circuit breaker open for bulk price fetch; returning empty map: {}", e.getMessage());
+        log.warn("Circuit breaker open for bulk price fetch | symbols={} returning empty map: {}",
+                symbols, e.getMessage());
         return Collections.emptyMap();
     }
 
@@ -136,20 +141,15 @@ public class BinanceClientService {
         Map<String, BigDecimal> result = new HashMap<>();
         for (String symbol : symbols) {
             String url = UriComponentsBuilder
-                    .fromHttpUrl("https://api.binance.com/api/v3/ticker/price")
+                    .fromHttpUrl(BINANCE_TICKER_URL)
                     .queryParam("symbol", symbol)
                     .build()
                     .toUriString();
             try {
                 BinancePriceResponse r =
                         binanceRestTemplate.getForObject(url, BinancePriceResponse.class);
-                if (r != null && r.getPrice() != null) {
-                    try {
-                        result.put(symbol, new BigDecimal(r.getPrice()));
-                    } catch (NumberFormatException ex) {
-                        log.warn("Bad price from Binance | symbol={} price={}",
-                                symbol, r.getPrice());
-                    }
+                if (r != null) {
+                    putParsedPrice(symbol, r.getPrice(), result);
                 }
             } catch (HttpStatusCodeException ignored) {
                 // Symbol genuinely doesn't exist on Binance — caller will
@@ -167,15 +167,19 @@ public class BinanceClientService {
         }
         Map<String, BigDecimal> result = new HashMap<>();
         for (BinancePriceResponse r : response) {
-            if (r == null || r.getSymbol() == null || r.getPrice() == null) continue;
-            try {
-                result.put(r.getSymbol(), new BigDecimal(r.getPrice()));
-            } catch (NumberFormatException ex) {
-                log.warn("Bad price from Binance | symbol={} price={}",
-                        r.getSymbol(), r.getPrice());
-            }
+            if (r == null || r.getSymbol() == null) continue;
+            putParsedPrice(r.getSymbol(), r.getPrice(), result);
         }
         return result;
+    }
+
+    private void putParsedPrice(String symbol, String priceStr, Map<String, BigDecimal> sink) {
+        if (priceStr == null) return;
+        try {
+            sink.put(symbol, new BigDecimal(priceStr));
+        } catch (NumberFormatException ex) {
+            log.warn("Bad price from Binance | symbol={} price={}", symbol, priceStr);
+        }
     }
 
     public BinanceAssetResponse getBinanceAssetDetails(BinanceAssetRequest binanceAssetRequest) {
@@ -235,7 +239,7 @@ public class BinanceClientService {
             return objectMapper.readValue(response.getBody(), typeRef);
         } catch (IOException e) {
             log.error("Error decoding response: {}", e.getMessage());
-            throw new RuntimeException("Failed to decode response", e);
+            throw new InvalidResponseException("Failed to decode response", e);
         }
     }
 }

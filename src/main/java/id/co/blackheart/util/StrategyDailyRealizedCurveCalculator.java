@@ -7,7 +7,6 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Component
@@ -23,8 +22,7 @@ public class StrategyDailyRealizedCurveCalculator {
             LocalDate curveDate,
             StrategyDailyRealizedCurve previousCurve,
             StrategyDailyRealizedCurve currentCurveOrNull,
-            DailyPositionAggregateDto aggregate,
-            LocalDateTime now
+            DailyPositionAggregateDto aggregate
     ) {
         BigDecimal previousCumulativePnl = previousCurve != null
                 ? safe(previousCurve.getCumulativeRealizedPnlAmount())
@@ -45,8 +43,6 @@ public class StrategyDailyRealizedCurveCalculator {
         BigDecimal cumulativeRealizedPnlAmount = previousCumulativePnl.add(dailyRealizedPnlAmount);
         BigDecimal cumulativeWeightedReturnIndex = previousIndex.multiply(ONE.add(dailyWeightedReturnPct))
                 .setScale(SCALE, RoundingMode.HALF_UP);
-
-        LocalDateTime createdAt = currentCurveOrNull != null ? currentCurveOrNull.getCreatedTime() : now;
 
         return StrategyDailyRealizedCurve.builder()
                 .strategyDailyRealizedCurveId(currentCurveOrNull != null

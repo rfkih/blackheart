@@ -32,62 +32,16 @@ public class TradePnlQueryService {
         BigDecimal totalUnrealizedPnlAmount = BigDecimal.ZERO;
 
         for (UUID tradeId : cacheService.getAccountActiveTradeIds(accountId)) {
+            ActiveTradePnlSnapshot snapshot;
             try {
-                Trades trade = cacheService.getTrade(tradeId);
-                if (trade == null) {
-                    continue;
-                }
-
-                if (!isTradeActive(trade)) {
-                    continue;
-                }
-
-                String symbol = trade.getAsset();
-                BigDecimal currentPrice = cacheService.getLatestPrice(symbol);
-
-                if (currentPrice == null) {
-                    log.warn("Latest price not found in cache for symbol={} tradeId={}", symbol, tradeId);
-                    continue;
-                }
-
-                BigDecimal entryPrice = defaultIfNull(trade.getAvgEntryPrice());
-                BigDecimal remainingQty = defaultIfNull(trade.getTotalRemainingQty());
-
-                if (entryPrice.compareTo(BigDecimal.ZERO) <= 0 || remainingQty.compareTo(BigDecimal.ZERO) <= 0) {
-                    continue;
-                }
-
-                BigDecimal unrealizedPnlAmount = calculatePnlAmount(
-                        entryPrice,
-                        currentPrice,
-                        remainingQty,
-                        trade.getSide()
-                );
-
-                BigDecimal unrealizedPnlPercent = calculatePnlPercent(
-                        unrealizedPnlAmount,
-                        entryPrice,
-                        remainingQty
-                );
-
-                items.add(
-                        ActiveTradePnlItemResponse.builder()
-                                .tradeId(trade.getTradeId())
-                                .asset(trade.getAsset())
-                                .side(trade.getSide())
-                                .status(trade.getStatus())
-                                .avgEntryPrice(format3(entryPrice))
-                                .currentPrice(format3(currentPrice))
-                                .totalRemainingQty(format3(remainingQty))
-                                .unrealizedPnlAmount(format3(unrealizedPnlAmount))
-                                .unrealizedPnlPercent(format3(unrealizedPnlPercent))
-                                .build()
-                );
-
-                totalUnrealizedPnlAmount = totalUnrealizedPnlAmount.add(unrealizedPnlAmount);
-
+                snapshot = buildActiveTradePnlSnapshot(tradeId);
             } catch (Exception e) {
                 log.error("Failed to calculate active trade pnl for accountId={} tradeId={}", accountId, tradeId, e);
+                continue;
+            }
+            if (snapshot != null) {
+                items.add(snapshot.item());
+                totalUnrealizedPnlAmount = totalUnrealizedPnlAmount.add(snapshot.unrealizedPnlAmount());
             }
         }
 
@@ -99,6 +53,50 @@ public class TradePnlQueryService {
                 .trades(items)
                 .build();
     }
+
+    /**
+     * Returns the per-trade snapshot for inclusion in the active-PnL feed, or
+     * {@code null} when the trade should be omitted (missing in cache, no
+     * longer active, no fresh price, or degenerate entry/remaining quantity).
+     */
+    private ActiveTradePnlSnapshot buildActiveTradePnlSnapshot(UUID tradeId) {
+        Trades trade = cacheService.getTrade(tradeId);
+        if (trade == null) return null;
+        if (!isTradeActive(trade)) return null;
+
+        String symbol = trade.getAsset();
+        BigDecimal currentPrice = cacheService.getLatestPrice(symbol);
+        if (currentPrice == null) {
+            log.warn("Latest price not found in cache for symbol={} tradeId={}", symbol, tradeId);
+            return null;
+        }
+
+        BigDecimal entryPrice = defaultIfNull(trade.getAvgEntryPrice());
+        BigDecimal remainingQty = defaultIfNull(trade.getTotalRemainingQty());
+        if (entryPrice.compareTo(BigDecimal.ZERO) <= 0 || remainingQty.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+
+        BigDecimal unrealizedPnlAmount = calculatePnlAmount(
+                entryPrice, currentPrice, remainingQty, trade.getSide());
+        BigDecimal unrealizedPnlPercent = calculatePnlPercent(
+                unrealizedPnlAmount, entryPrice, remainingQty);
+
+        ActiveTradePnlItemResponse item = ActiveTradePnlItemResponse.builder()
+                .tradeId(trade.getTradeId())
+                .asset(trade.getAsset())
+                .side(trade.getSide())
+                .status(trade.getStatus())
+                .avgEntryPrice(format3(entryPrice))
+                .currentPrice(format3(currentPrice))
+                .totalRemainingQty(format3(remainingQty))
+                .unrealizedPnlAmount(format3(unrealizedPnlAmount))
+                .unrealizedPnlPercent(format3(unrealizedPnlPercent))
+                .build();
+        return new ActiveTradePnlSnapshot(item, unrealizedPnlAmount);
+    }
+
+    private record ActiveTradePnlSnapshot(ActiveTradePnlItemResponse item, BigDecimal unrealizedPnlAmount) {}
 
 
     private String format3(BigDecimal value) {

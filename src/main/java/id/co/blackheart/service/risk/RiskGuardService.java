@@ -12,6 +12,8 @@ import id.co.blackheart.service.alert.AlertService;
 import id.co.blackheart.service.alert.AlertSeverity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,6 +69,20 @@ public class RiskGuardService {
     private final CorrelationGuardService correlationGuardService;
 
     /**
+     * Self-reference used by the {@link #canOpen(UUID, String)} convenience
+     * overload to dispatch to the @Transactional 3-arg form via the Spring
+     * proxy (so the @Transactional advice actually fires). Defaults to
+     * {@code this} so unit tests that build the bean without a Spring context
+     * still work — production wires the proxy via {@link #setSelf}.
+     */
+    private RiskGuardService self = this;
+
+    @Autowired
+    public void setSelf(@Lazy RiskGuardService self) {
+        this.self = self;
+    }
+
+    /**
      * Verdict for one entry attempt. {@link #allowed} is the gate; the
      * other fields are diagnostics for logs and the strategy detail UI.
      */
@@ -90,9 +106,8 @@ public class RiskGuardService {
      * 3-arg form when the caller already has the current bar's FeatureStore to
      * avoid a redundant round-trip and a subtle per-candle race condition.
      */
-    @Transactional
     public GuardVerdict canOpen(UUID accountStrategyId, String side) {
-        return canOpen(accountStrategyId, side, null);
+        return self.canOpen(accountStrategyId, side, null);
     }
 
     /**
@@ -138,16 +153,12 @@ public class RiskGuardService {
         // (3) Concurrent-direction cap across the account.
         Account account = accountRepository.findByAccountId(strategy.getAccountId()).orElse(null);
         if (account == null) {
-            // Defensive — strategy with no account row shouldn't exist, but
-            // don't take destructive risk action on the basis of missing data.
+            // Defensive fallback for the impossible case where a strategy
+            // has no account row. Allow rather than block on missing data.
             return GuardVerdict.allow(ddPct, 0);
         }
         long concurrent = tradesRepository.countOpenByAccountIdAndSide(account.getAccountId(), side);
-        Integer cap = SIDE_LONG.equalsIgnoreCase(side)
-                ? account.getMaxConcurrentLongs()
-                : SIDE_SHORT.equalsIgnoreCase(side)
-                        ? account.getMaxConcurrentShorts()
-                        : null;
+        Integer cap = resolveConcurrentCap(account, side);
         if (cap != null && concurrent >= cap) {
             return GuardVerdict.deny(
                     String.format("Concurrent %s positions (%d) at account cap %d",
@@ -155,8 +166,8 @@ public class RiskGuardService {
                     ddPct, concurrent);
         }
 
-        // (4) Regime gate — use the caller-supplied FeatureStore when available;
-        //     only fall back to a DB query when the caller didn't have one.
+        // (4) Regime gate. Use the caller-supplied FeatureStore when available
+        //     and only fall back to a DB query when the caller didn't have one.
         FeatureStore effectiveFs = featureStore != null ? featureStore
                 : featureStoreRepository.findLatestCompletedBySymbolAndInterval(
                         strategy.getSymbol(), strategy.getIntervalName(), LocalDateTime.now())
@@ -228,6 +239,12 @@ public class RiskGuardService {
         return drawdown.divide(peak, 6, RoundingMode.HALF_UP)
                 .multiply(new BigDecimal("100"))
                 .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private static Integer resolveConcurrentCap(Account account, String side) {
+        if (SIDE_LONG.equalsIgnoreCase(side)) return account.getMaxConcurrentLongs();
+        if (SIDE_SHORT.equalsIgnoreCase(side)) return account.getMaxConcurrentShorts();
+        return null;
     }
 
     private void tripKillSwitch(AccountStrategy strategy, String reason) {

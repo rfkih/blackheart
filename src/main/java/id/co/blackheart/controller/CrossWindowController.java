@@ -54,7 +54,7 @@ public class CrossWindowController {
             @RequestParam String instrument,
             @RequestParam(defaultValue = "5") int limit
     ) {
-        int safeLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
+        int safeLimit = Math.clamp(limit, 1, MAX_LIMIT);
         List<CrossWindowRun> rows = repository
                 .findByStrategyCodeAndIntervalNameAndInstrumentOrderByCreatedTimeDesc(
                         strategyCode, intervalName, instrument, PageRequest.of(0, safeLimit));

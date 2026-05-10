@@ -94,7 +94,7 @@ public class SpecDrivenExecutorAdapter implements StrategyExecutor {
             long elapsed = System.nanoTime() - start;
             if (traceLogger != null) {
                 // Rules wiring lands per-archetype in M3.2+; null = empty array.
-                traceLogger.record(resolvedSpec, context, decision, elapsed, error, null);
+                traceLogger.recordTrace(resolvedSpec, context, decision, elapsed, error, null);
             }
             // Skip engine metrics for backtest evaluations — backtest errors
             // must not trip the live kill-switch, and counter inflation from

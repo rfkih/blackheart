@@ -64,7 +64,7 @@ public class Slope200Patcher extends FeaturePatcher<Slope200Patcher.Aux> {
         BarSeries series = BarSeriesUtil.toBarSeries(data, interval, mapperUtil);
         EMAIndicator ema200 = new EMAIndicator(new ClosePriceIndicator(series), EMA_PERIOD);
 
-        Map<LocalDateTime, Integer> idxByTime = new HashMap<>(data.size() * 2);
+        Map<LocalDateTime, Integer> idxByTime = HashMap.newHashMap(data.size());
         for (int i = 0; i < data.size(); i++) {
             idxByTime.put(data.get(i).getStartTime(), i);
         }

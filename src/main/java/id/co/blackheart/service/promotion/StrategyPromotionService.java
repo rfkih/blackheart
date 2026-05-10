@@ -69,6 +69,9 @@ public class StrategyPromotionService {
     public static final String STATE_REJECTED    = "REJECTED";
     public static final String STATE_DEMOTED     = "DEMOTED";
 
+    private static final String UNKNOWN = "UNKNOWN";
+    private static final String DEFINITION_NOT_FOUND_PREFIX = "strategy_definition not found: ";
+
     /**
      * Allowed promotions/demotions. The same graph lives in V15's
      * chk_promotion_states; this is service-layer pre-validation so the
@@ -116,46 +119,10 @@ public class StrategyPromotionService {
             EnrichedStrategyContext context
     ) {
         try {
-            String side = inferSide(decision);
-            BigDecimal price = context != null && context.getMarketData() != null
-                    ? context.getMarketData().getClosePrice()
-                    : null;
-
-            JsonNode decisionSnap = decision != null
-                    ? objectMapper.valueToTree(decision)
-                    : null;
-            JsonNode contextSnap = context != null
-                    ? objectMapper.valueToTree(buildContextSnapshot(context))
-                    : null;
-
-            PaperTradeRun row = PaperTradeRun.builder()
-                    .paperTradeId(UUID.randomUUID())
-                    .accountStrategyId(accountStrategyId)
-                    .strategyCode(decision != null ? decision.getStrategyCode() : "UNKNOWN")
-                    .symbol(context != null && context.getAccountStrategy() != null
-                            ? context.getAccountStrategy().getSymbol()
-                            : "UNKNOWN")
-                    .intervalName(context != null && context.getAccountStrategy() != null
-                            ? context.getAccountStrategy().getIntervalName()
-                            : "UNKNOWN")
-                    .decisionType(decision != null && decision.getDecisionType() != null
-                            ? decision.getDecisionType().name()
-                            : "UNKNOWN")
-                    .side(side)
-                    .intendedPrice(price)
-                    .intendedQuantity(decision != null ? decision.getPositionSize() : null)
-                    .intendedNotionalUsdt(decision != null ? decision.getNotionalSize() : null)
-                    .stopLossPrice(decision != null ? decision.getStopLossPrice() : null)
-                    .takeProfitPrice(decision != null ? decision.getTakeProfitPrice1() : null)
-                    .decisionSnapshot(decisionSnap)
-                    .contextSnapshot(contextSnap)
-                    .skipReason("SIMULATED")
-                    .createdTime(LocalDateTime.now())
-                    .build();
-
+            PaperTradeRun row = buildPaperTradeRow(accountStrategyId, decision, context);
             paperTradeRunRepository.save(row);
             log.info("[PaperTrade] recorded | strategy={} decision={} side={} price={}",
-                    row.getStrategyCode(), row.getDecisionType(), side, price);
+                    row.getStrategyCode(), row.getDecisionType(), row.getSide(), row.getIntendedPrice());
         } catch (Exception e) {
             // Live flow is intentionally not affected — losing one paper-
             // trade row is preferable to crashing the live executor on a
@@ -171,8 +138,43 @@ public class StrategyPromotionService {
                     accountStrategyId,
                     decision != null ? decision.getStrategyCode() : null,
                     decision != null ? decision.getDecisionType() : null, e);
-            recordPaperTradeFailureAudit(accountStrategyId, decision, e);
+            recordPaperTradeFailureAudit(accountStrategyId, e);
         }
+    }
+
+    private PaperTradeRun buildPaperTradeRow(UUID accountStrategyId,
+                                             StrategyDecision decision,
+                                             EnrichedStrategyContext context) {
+        AccountStrategy as = context != null ? context.getAccountStrategy() : null;
+        BigDecimal price = context != null && context.getMarketData() != null
+                ? context.getMarketData().getClosePrice() : null;
+        JsonNode decisionSnap = decision != null ? objectMapper.valueToTree(decision) : null;
+        JsonNode contextSnap = context != null
+                ? objectMapper.valueToTree(buildContextSnapshot(context)) : null;
+
+        return PaperTradeRun.builder()
+                .paperTradeId(UUID.randomUUID())
+                .accountStrategyId(accountStrategyId)
+                .strategyCode(decision != null ? decision.getStrategyCode() : UNKNOWN)
+                .symbol(as != null ? as.getSymbol() : UNKNOWN)
+                .intervalName(as != null ? as.getIntervalName() : UNKNOWN)
+                .decisionType(decisionTypeName(decision))
+                .side(inferSide(decision))
+                .intendedPrice(price)
+                .intendedQuantity(decision != null ? decision.getPositionSize() : null)
+                .intendedNotionalUsdt(decision != null ? decision.getNotionalSize() : null)
+                .stopLossPrice(decision != null ? decision.getStopLossPrice() : null)
+                .takeProfitPrice(decision != null ? decision.getTakeProfitPrice1() : null)
+                .decisionSnapshot(decisionSnap)
+                .contextSnapshot(contextSnap)
+                .skipReason("SIMULATED")
+                .createdTime(LocalDateTime.now())
+                .build();
+    }
+
+    private static String decisionTypeName(StrategyDecision decision) {
+        if (decision == null || decision.getDecisionType() == null) return UNKNOWN;
+        return decision.getDecisionType().name();
     }
 
     /**
@@ -182,11 +184,7 @@ public class StrategyPromotionService {
      * everything internally because audit failure during failure handling
      * must not propagate.
      */
-    private void recordPaperTradeFailureAudit(
-            UUID accountStrategyId,
-            StrategyDecision decision,
-            Exception cause
-    ) {
+    private void recordPaperTradeFailureAudit(UUID accountStrategyId, Exception cause) {
         try {
             AuditEvent ae = AuditEvent.builder()
                     .auditEventId(UUID.randomUUID())
@@ -323,7 +321,7 @@ public class StrategyPromotionService {
      * something extreme; the dashboard polls this every 30s.
      */
     public List<StrategyPromotionLog> recent(int limit) {
-        int safeLimit = Math.min(Math.max(limit, 1), 200);
+        int safeLimit = Math.clamp(limit, 1, 200);
         return promotionLogRepository.findRecent(
                 org.springframework.data.domain.PageRequest.of(0, safeLimit));
     }
@@ -340,7 +338,7 @@ public class StrategyPromotionService {
             int size
     ) {
         int safePage = Math.max(page, 0);
-        int safeSize = Math.min(Math.max(size, 1), 100);
+        int safeSize = Math.clamp(size, 1, 100);
         String codeFilter = !StringUtils.hasText(strategyCode) ? null : strategyCode.trim();
         String stateFilter = !StringUtils.hasText(toState) ? null : toState.trim();
         return promotionLogRepository.findRecentFiltered(
@@ -384,7 +382,7 @@ public class StrategyPromotionService {
         StrategyDefinition def = strategyDefinitionRepository
                 .findByStrategyCodeForUpdate(strategyCode)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "strategy_definition not found: " + strategyCode));
+                        DEFINITION_NOT_FOUND_PREFIX + strategyCode));
 
         String fromState = currentDefinitionState(def.getStrategyDefinitionId());
         String key = fromState + "→" + toState;
@@ -443,14 +441,14 @@ public class StrategyPromotionService {
     public String currentDefinitionStateByCode(String strategyCode) {
         StrategyDefinition def = strategyDefinitionRepository.findByStrategyCode(strategyCode)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "strategy_definition not found: " + strategyCode));
+                        DEFINITION_NOT_FOUND_PREFIX + strategyCode));
         return currentDefinitionState(def.getStrategyDefinitionId());
     }
 
     public List<StrategyPromotionLog> definitionHistory(String strategyCode) {
         StrategyDefinition def = strategyDefinitionRepository.findByStrategyCode(strategyCode)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "strategy_definition not found: " + strategyCode));
+                        DEFINITION_NOT_FOUND_PREFIX + strategyCode));
         return promotionLogRepository
                 .findByStrategyDefinitionIdOrderByCreatedTimeDesc(def.getStrategyDefinitionId());
     }

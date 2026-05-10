@@ -13,6 +13,7 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.lang.Nullable;
 import org.springframework.util.StringUtils;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -58,7 +59,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     private final BacktestRunRepository backtestRunRepository;
 
     @Override
-    public Message<?> preSend(Message<?> message, MessageChannel channel) {
+    public @Nullable Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
         if (accessor == null) return message;
 
@@ -117,54 +118,58 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
 
         if (destination.startsWith(PNL_TOPIC_PREFIX)) {
-            String tail = destination.substring(PNL_TOPIC_PREFIX.length());
-            if (!StringUtils.hasText(tail)) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing accountId");
-            }
-            UUID accountId;
-            try {
-                accountId = UUID.fromString(tail);
-            } catch (IllegalArgumentException e) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid accountId");
-            }
-
-            Optional<Account> account = accountRepository.findByAccountId(accountId);
-            if (account.isEmpty()
-                    || account.get().getUserId() == null
-                    || !account.get().getUserId().equals(principal.getUserId())) {
-                // Log with the attempting user's id — useful for detection of enumeration.
-                log.warn(
-                        "STOMP SUBSCRIBE rejected — account not owned by caller | destination={} callerUserId={}",
-                        destination, principal.getUserId()
-                );
-                throw new AccessDeniedException("Not authorized for this topic");
-            }
+            authorizeForPnlTopic(destination, principal);
             return;
         }
-
         if (destination.startsWith(BACKTEST_TOPIC_PREFIX)) {
-            String tail = destination.substring(BACKTEST_TOPIC_PREFIX.length());
-            if (!StringUtils.hasText(tail)) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing backtestRunId");
-            }
-            UUID runId;
-            try {
-                runId = UUID.fromString(tail);
-            } catch (IllegalArgumentException e) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid backtestRunId");
-            }
-            Optional<BacktestRun> run = backtestRunRepository.findByIdAndUserId(runId, principal.getUserId());
-            if (run.isEmpty()) {
-                log.warn(
-                        "STOMP SUBSCRIBE rejected — backtest run not owned by caller | destination={} callerUserId={}",
-                        destination, principal.getUserId()
-                );
-                throw new AccessDeniedException("Not authorized for this topic");
-            }
-            return;
+            authorizeForBacktestTopic(destination, principal);
         }
         // /user/** destinations are routed privately by Spring per-session; no gate here.
         // Anything else (public market-data topics etc.) is allowed for authenticated sessions.
+    }
+
+    private void authorizeForPnlTopic(String destination, StompPrincipal principal) {
+        String tail = destination.substring(PNL_TOPIC_PREFIX.length());
+        if (!StringUtils.hasText(tail)) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing accountId");
+        }
+        UUID accountId;
+        try {
+            accountId = UUID.fromString(tail);
+        } catch (IllegalArgumentException e) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid accountId");
+        }
+        Optional<Account> account = accountRepository.findByAccountId(accountId);
+        if (account.isEmpty()
+                || account.get().getUserId() == null
+                || !account.get().getUserId().equals(principal.getUserId())) {
+            log.warn(
+                    "STOMP SUBSCRIBE rejected — account not owned by caller | destination={} callerUserId={}",
+                    destination, principal.getUserId()
+            );
+            throw new AccessDeniedException("Not authorized for this topic");
+        }
+    }
+
+    private void authorizeForBacktestTopic(String destination, StompPrincipal principal) {
+        String tail = destination.substring(BACKTEST_TOPIC_PREFIX.length());
+        if (!StringUtils.hasText(tail)) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing backtestRunId");
+        }
+        UUID runId;
+        try {
+            runId = UUID.fromString(tail);
+        } catch (IllegalArgumentException e) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid backtestRunId");
+        }
+        Optional<BacktestRun> run = backtestRunRepository.findByIdAndUserId(runId, principal.getUserId());
+        if (run.isEmpty()) {
+            log.warn(
+                    "STOMP SUBSCRIBE rejected — backtest run not owned by caller | destination={} callerUserId={}",
+                    destination, principal.getUserId()
+            );
+            throw new AccessDeniedException("Not authorized for this topic");
+        }
     }
 
     private String extractToken(StompHeaderAccessor accessor) {

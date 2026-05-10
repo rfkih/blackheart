@@ -6,6 +6,7 @@ import io.netty.handler.timeout.ReadTimeoutException;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -42,7 +43,6 @@ import java.util.concurrent.TimeoutException;
 public class FapiClient {
 
     private static final String BASE_URL = "https://fapi.binance.com";
-    private static final String FUNDING_RATE_PATH = "/fapi/v1/fundingRate";
     public static final int FUNDING_RATE_MAX_LIMIT = 1000;
     private static final ZoneId UTC = ZoneId.of("UTC");
 
@@ -52,6 +52,15 @@ public class FapiClient {
     private static final Duration RETRY_INITIAL_BACKOFF = Duration.ofSeconds(1);
     private static final Duration RETRY_MAX_BACKOFF = Duration.ofSeconds(10);
 
+    /** Funding-rate JSON field name — used 3× when materialising the row.
+     *  Constant prevents drift if Binance ever renames the field. */
+    private static final String FIELD_MARK_PRICE = "markPrice";
+
+    /** Externalised so a deployment can point at a non-default path (e.g. an
+     *  internal proxy) without recompiling. Default matches Binance's
+     *  public futures API. */
+    private final String fundingRatePath;
+
     private final WebClient webClient = WebClient.builder()
             .baseUrl(BASE_URL)
             .clientConnector(new ReactorClientHttpConnector(
@@ -59,6 +68,12 @@ public class FapiClient {
                             .responseTimeout(RESPONSE_TIMEOUT)
                             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS)))
             .build();
+
+    public FapiClient(
+            @Value("${app.binance.fapi.funding-rate-path:/fapi/v1/fundingRate}") String fundingRatePath
+    ) {
+        this.fundingRatePath = fundingRatePath;
+    }
 
     /**
      * Fetch one page of funding-rate events for {@code symbol}. Both bounds
@@ -74,12 +89,12 @@ public class FapiClient {
         if (!StringUtils.hasText(symbol)) {
             throw new IllegalArgumentException("symbol cannot be blank");
         }
-        int boundedLimit = Math.min(Math.max(limit, 1), FUNDING_RATE_MAX_LIMIT);
+        int boundedLimit = Math.clamp(limit, 1, FUNDING_RATE_MAX_LIMIT);
 
         String response = webClient.get()
                 .uri(uriBuilder -> {
                     var b = uriBuilder
-                            .path(FUNDING_RATE_PATH)
+                            .path(fundingRatePath)
                             .queryParam("symbol", symbol)
                             .queryParam("limit", boundedLimit);
                     if (startTimeMs != null) b.queryParam("startTime", startTimeMs);
@@ -106,8 +121,8 @@ public class FapiClient {
             LocalDateTime fundingTime = LocalDateTime.ofInstant(
                     Instant.ofEpochMilli(o.getLong("fundingTime")), UTC);
             BigDecimal rate = new BigDecimal(o.getString("fundingRate"));
-            BigDecimal markPrice = o.has("markPrice") && !o.isNull("markPrice")
-                    ? safeBigDecimal(o.getString("markPrice"))
+            BigDecimal markPrice = o.has(FIELD_MARK_PRICE) && !o.isNull(FIELD_MARK_PRICE)
+                    ? safeBigDecimal(o.getString(FIELD_MARK_PRICE))
                     : null;
             out.add(FundingRate.builder()
                     .symbol(o.getString("symbol"))

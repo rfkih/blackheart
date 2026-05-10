@@ -261,13 +261,6 @@ public class BacktestRun extends BaseEntity {
     private String appVersion;
 
     /**
-     * Locked-holdout marker. {@code true} means this run was the one-shot
-     * unbiased evaluation that ran AFTER a sweep picked its winner; the
-     * sweep itself was never allowed to touch this window during
-     * optimization. Set only by {@code ResearchSweepService.evaluateHoldout};
-     * a unique partial index enforces at-most-one per sweep at the DB level.
-     */
-    /**
      * Phase A — max concurrent open trades across all strategies in this
      * backtest. Null = no cap (legacy behaviour). Enforced by the backtest
      * executor before allowing a new entry.
@@ -295,6 +288,13 @@ public class BacktestRun extends BaseEntity {
     @Column(name = "strategy_intervals", columnDefinition = "jsonb")
     private Map<String, String> strategyIntervals;
 
+    /**
+     * Locked-holdout marker. {@code true} means this run was the one-shot
+     * unbiased evaluation that ran AFTER a sweep picked its winner; the
+     * sweep itself was never allowed to touch this window during
+     * optimization. Set only by {@code ResearchSweepService.evaluateHoldout};
+     * a unique partial index enforces at-most-one per sweep at the DB level.
+     */
     @Column(name = "is_holdout_run", nullable = false)
     @Builder.Default
     private Boolean isHoldoutRun = Boolean.FALSE;

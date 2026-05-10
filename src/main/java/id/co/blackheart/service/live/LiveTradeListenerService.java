@@ -40,88 +40,85 @@ public class LiveTradeListenerService {
             return;
         }
 
-        Map<String, TriggeredGroup> groupedTriggeredPositions = new LinkedHashMap<>();
-
-        for (TradePosition activeTradePosition : activeTradePositions) {
-            try {
-                PositionSnapshot positionSnapshot = livePositionSnapshotMapper.toSnapshot(activeTradePosition);
-
-                ListenerContext listenerContext = ListenerContext.builder()
-                        .asset(asset)
-                        .interval(activeTradePosition.getInterval())
-                        .positionSnapshot(positionSnapshot)
-                        .latestPrice(latestPrice)
-                        .build();
-
-                ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
-
-                if (listenerDecision == null || !listenerDecision.isTriggered()) {
-                    continue;
-                }
-
-                String groupKey = buildGroupKey(activeTradePosition, listenerDecision);
-
-                groupedTriggeredPositions
-                        .computeIfAbsent(groupKey, key -> new TriggeredGroup(listenerDecision))
-                        .positions
-                        .add(activeTradePosition);
-
-            } catch (Exception e) {
-                log.error("Live listener failed | tradePositionId={} asset={}",
-                        activeTradePosition.getTradePositionId(), asset, e);
-            }
-        }
-
-        if (groupedTriggeredPositions.isEmpty()) {
+        Map<String, TriggeredGroup> grouped = collectTriggeredGroups(asset, latestPrice, activeTradePositions);
+        if (grouped.isEmpty()) {
             return;
         }
 
-        for (Map.Entry<String, TriggeredGroup> entry : groupedTriggeredPositions.entrySet()) {
-            List<TradePosition> groupedPositions = entry.getValue().positions;
-            ListenerDecision listenerDecision = entry.getValue().listenerDecision;
+        for (TriggeredGroup group : grouped.values()) {
+            executeGroup(asset, group);
+        }
+    }
 
-            if (groupedPositions.isEmpty()) {
-                continue;
-            }
-
-            TradePosition firstPosition = groupedPositions.getFirst();
-            Account user = accountRepository.findByAccountId(firstPosition.getAccountId()).orElse(null);
-
-            if (user == null) {
-                log.warn("Listener close skipped because user not found | tradeId={} accountId={} groupSize={}",
-                        firstPosition.getTradeId(), firstPosition.getAccountId(), groupedPositions.size());
-                continue;
-            }
-
+    private Map<String, TriggeredGroup> collectTriggeredGroups(
+            String asset, BigDecimal latestPrice, List<TradePosition> activeTradePositions) {
+        Map<String, TriggeredGroup> grouped = new LinkedHashMap<>();
+        for (TradePosition position : activeTradePositions) {
             try {
-                if (groupedPositions.size() == 1) {
-                    liveTradingDecisionExecutorService.executeListenerClosePosition(
-                            user,
-                            firstPosition,
-                            asset,
-                            listenerDecision
-                    );
-                } else {
-                    liveTradingDecisionExecutorService.executeListenerClosePositions(
-                            user,
-                            groupedPositions,
-                            asset,
-                            listenerDecision
-                    );
-                }
-
-                log.info("Grouped listener close executed | asset={} tradeId={} side={} stop={} groupSize={} exitReason={}",
-                        asset,
-                        firstPosition.getTradeId(),
-                        firstPosition.getSide(),
-                        normalizePrice(firstPosition.getCurrentStopLossPrice()),
-                        groupedPositions.size(),
-                        listenerDecision.getExitReason());
-
+                addPositionIfTriggered(asset, latestPrice, position, grouped);
             } catch (Exception e) {
-                log.error("Grouped live listener close failed | tradeId={} asset={} groupSize={}",
-                        firstPosition.getTradeId(), asset, groupedPositions.size(), e);
+                log.error("Live listener failed | tradePositionId={} asset={}",
+                        position.getTradePositionId(), asset, e);
             }
+        }
+        return grouped;
+    }
+
+    private void addPositionIfTriggered(
+            String asset,
+            BigDecimal latestPrice,
+            TradePosition position,
+            Map<String, TriggeredGroup> grouped) {
+        PositionSnapshot snapshot = livePositionSnapshotMapper.toSnapshot(position);
+        ListenerContext context = ListenerContext.builder()
+                .asset(asset)
+                .interval(position.getInterval())
+                .positionSnapshot(snapshot)
+                .latestPrice(latestPrice)
+                .build();
+
+        ListenerDecision decision = tradeListenerService.evaluate(context);
+        if (decision == null || !decision.isTriggered()) return;
+
+        String groupKey = buildGroupKey(position, decision);
+        grouped.computeIfAbsent(groupKey, k -> new TriggeredGroup(decision))
+                .positions
+                .add(position);
+    }
+
+    private void executeGroup(String asset, TriggeredGroup group) {
+        List<TradePosition> positions = group.positions;
+        if (positions.isEmpty()) return;
+
+        TradePosition firstPosition = positions.getFirst();
+        Account user = accountRepository.findByAccountId(firstPosition.getAccountId()).orElse(null);
+        if (user == null) {
+            log.warn("Listener close skipped because user not found | tradeId={} accountId={} groupSize={}",
+                    firstPosition.getTradeId(), firstPosition.getAccountId(), positions.size());
+            return;
+        }
+
+        ListenerDecision listenerDecision = group.listenerDecision;
+        try {
+            if (positions.size() == 1) {
+                liveTradingDecisionExecutorService.executeListenerClosePosition(
+                        user, firstPosition, asset, listenerDecision);
+            } else {
+                liveTradingDecisionExecutorService.executeListenerClosePositions(
+                        user, positions, asset, listenerDecision);
+            }
+
+            log.info("Grouped listener close executed | asset={} tradeId={} side={} stop={} groupSize={} exitReason={}",
+                    asset,
+                    firstPosition.getTradeId(),
+                    firstPosition.getSide(),
+                    normalizePrice(firstPosition.getCurrentStopLossPrice()),
+                    positions.size(),
+                    listenerDecision.getExitReason());
+
+        } catch (Exception e) {
+            log.error("Grouped live listener close failed | tradeId={} asset={} groupSize={}",
+                    firstPosition.getTradeId(), asset, positions.size(), e);
         }
     }
 

@@ -9,8 +9,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
@@ -43,20 +43,33 @@ import java.util.concurrent.ConcurrentMap;
  * before touching the user-details cache or the database.
  */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class AuthRateLimitFilter extends OncePerRequestFilter {
 
-    private static final String LOGIN_PATH = "/api/v1/users/login";
-    private static final String REGISTER_PATH = "/api/v1/users/register";
-    private static final String SUPPORT_PATH = "/api/v1/support";
-
     private final ObjectMapper objectMapper;
+
+    /** Rate-limited path for login. Externalised so a deployment can rebrand the
+     *  API surface (e.g. {@code /api/v2/...}) without recompiling the filter. */
+    private final String loginPath;
+    private final String registerPath;
+    private final String supportPath;
 
     private final ConcurrentMap<String, Bucket> loginBuckets = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Bucket> registerBuckets = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Bucket> supportBuckets = new ConcurrentHashMap<>();
+
+    public AuthRateLimitFilter(
+            ObjectMapper objectMapper,
+            @Value("${app.security.rate-limit.login-path:/api/v1/users/login}") String loginPath,
+            @Value("${app.security.rate-limit.register-path:/api/v1/users/register}") String registerPath,
+            @Value("${app.security.rate-limit.support-path:/api/v1/support}") String supportPath
+    ) {
+        this.objectMapper = objectMapper;
+        this.loginPath = loginPath;
+        this.registerPath = registerPath;
+        this.supportPath = supportPath;
+    }
 
     private Bucket resolveBucket(ConcurrentMap<String, Bucket> store, String key, Bandwidth policy) {
         return store.computeIfAbsent(key, k -> Bucket.builder().addLimit(policy).build());
@@ -90,12 +103,12 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
         }
 
         final String path = request.getServletPath();
-        final boolean isLogin = LOGIN_PATH.equals(path);
-        final boolean isRegister = REGISTER_PATH.equals(path);
-        // SUPPORT_PATH covers the bare collection POST only — the path equals
-        // the constant exactly. Status PATCH and admin GET use longer paths
-        // (PATCH /{id}, GET with query) and aren't matched here.
-        final boolean isSupport = SUPPORT_PATH.equals(path);
+        final boolean isLogin = loginPath.equals(path);
+        final boolean isRegister = registerPath.equals(path);
+        // supportPath covers the bare collection POST only — the path equals
+        // the configured value exactly. Status PATCH and admin GET use longer
+        // paths (PATCH /{id}, GET with query) and aren't matched here.
+        final boolean isSupport = supportPath.equals(path);
 
         if (!isLogin && !isRegister && !isSupport) {
             filterChain.doFilter(request, response);

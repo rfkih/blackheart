@@ -66,8 +66,8 @@ public class ResearchQueueService {
                 .status(STATUS_PENDING)
                 .iterationNumber(0)
                 .iterBudget(req.getIterBudget())
-                .earlyStopOnNoEdge(req.getEarlyStopOnNoEdge() != null ? req.getEarlyStopOnNoEdge() : true)
-                .requireWalkForward(req.getRequireWalkForward() != null ? req.getRequireWalkForward() : true)
+                .earlyStopOnNoEdge(!Boolean.FALSE.equals(req.getEarlyStopOnNoEdge()))
+                .requireWalkForward(!Boolean.FALSE.equals(req.getRequireWalkForward()))
                 .createdTime(LocalDateTime.now())
                 .createdBy(actor)
                 .build();

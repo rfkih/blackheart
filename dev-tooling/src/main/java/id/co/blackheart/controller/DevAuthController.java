@@ -73,7 +73,8 @@ public class DevAuthController {
      * the bypass. {@link IllegalStateException} surfaces in startup logs as a
      * loud, blocking failure.
      */
-    @lombok.Generated  // setUp not under unit-test coverage; logic is profile-gated
+    // Profile-gated startup check — excluded from coverage via @lombok.Generated.
+    @lombok.Generated
     public void setUp() {
         List<String> active = Arrays.asList(environment.getActiveProfiles());
         for (String forbidden : FORBIDDEN_PROFILES) {
@@ -96,9 +97,8 @@ public class DevAuthController {
     )
     public ResponseEntity<ResponseDto> loginAs(@RequestBody(required = false) LoginAsRequest body,
                                                @RequestHeader(value = "X-Forwarded-For", required = false) String forwardedFor) {
-        // Re-check active profiles per request — cheap, and catches the case
-        // where someone reloads the application context with prod profiles
-        // active without restarting the JVM.
+        // Per-request profile re-check guards against a context reload that
+        // activates a prod profile without a JVM restart.
         List<String> active = Arrays.asList(environment.getActiveProfiles());
         for (String forbidden : FORBIDDEN_PROFILES) {
             if (active.contains(forbidden)) {
@@ -107,9 +107,9 @@ public class DevAuthController {
             }
         }
 
-        // Operator kill-switch (V14+). Allows disabling the bypass without
-        // redeploying — flip the env var, restart, verify orchestrator
-        // survives via dev-token-prod.sh, then delete this controller.
+        // V14+ operator kill-switch — flip the env var to disable this bypass
+        // without redeploying. See research/DEPLOYMENT.md for the migration
+        // path off this controller.
         String disabled = System.getenv(DISABLE_ENV_VAR);
         if (disabled != null && "true".equalsIgnoreCase(disabled.trim())) {
             log.warn("[DEV-AUTH-BYPASS] Refused — kill-switch {}=true active", DISABLE_ENV_VAR);

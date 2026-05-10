@@ -81,7 +81,7 @@ public final class WalkForwardWindowing {
         List<Fold> folds = new ArrayList<>(k);
         for (int i = 0; i < k; i++) {
             LocalDateTime oosFrom = sweepStart.plusSeconds(
-                    sizing.trainHeadSeconds() + (long) i * sizing.oosPerFoldSeconds());
+                    sizing.trainHeadSeconds() + i * sizing.oosPerFoldSeconds());
             // Last fold absorbs any rounding remainder so the OOS coverage
             // hits sweepEnd exactly. Earlier folds are equal-sized tiles.
             LocalDateTime oosTo = (i == k - 1)

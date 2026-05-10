@@ -41,6 +41,7 @@ public class FundingRate {
     private LocalDateTime fundingTime;
 
     @Column(name = "funding_rate", nullable = false, precision = 18, scale = 10)
+    @SuppressWarnings("java:S1700") // Schema-mapped column; renaming cascades to 30+ caller sites for no semantic gain.
     private BigDecimal fundingRate;
 
     @Column(name = "mark_price", precision = 38, scale = 8)

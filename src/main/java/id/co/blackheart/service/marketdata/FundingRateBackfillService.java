@@ -81,12 +81,13 @@ public class FundingRateBackfillService {
             List<FundingRate> page = fapiClient.fetchFundingRates(
                     symbol, cursor, null, FapiClient.FUNDING_RATE_MAX_LIMIT);
             pages++;
-            if (page.isEmpty()) break;
-
-            int newRows = fundingRateService.upsertAll(page);
-            fetched += page.size();
-            inserted += newRows;
-
+            if (!page.isEmpty()) {
+                int newRows = fundingRateService.upsertAll(page);
+                fetched += page.size();
+                inserted += newRows;
+            }
+            // A short page (including empty) means Binance has no more rows for
+            // this cursor — that's the only termination signal short of the cap.
             if (page.size() < FapiClient.FUNDING_RATE_MAX_LIMIT) break;
 
             // Advance cursor past the last fundingTime we just saw. +1ms keeps

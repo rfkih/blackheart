@@ -23,11 +23,11 @@ import java.util.List;
  *
  * <h3>Combined label thresholds</h3>
  * <pre>
- *   >= 0.65  → STRONG_BUY
- *   >= 0.30  → BUY
+ *   &gt;= 0.65  → STRONG_BUY
+ *   &gt;= 0.30  → BUY
  *   (-0.30, 0.30) → NEUTRAL
- *   <= -0.30 → SELL
- *   <= -0.65 → STRONG_SELL
+ *   &lt;= -0.30 → SELL
+ *   &lt;= -0.65 → STRONG_SELL
  * </pre>
  */
 @Slf4j
@@ -45,6 +45,14 @@ public class SentimentAnalyzerService {
     private static final BigDecimal WEIGHT_4H = new BigDecimal("0.60");
     private static final BigDecimal WEIGHT_1H = new BigDecimal("0.40");
 
+    private static final BigDecimal LOWER_BOUND = new BigDecimal("-1.00");
+    private static final BigDecimal UPPER_BOUND = new BigDecimal("1.00");
+
+    private static final BigDecimal D_020 = new BigDecimal("0.20");
+    private static final BigDecimal D_015 = new BigDecimal("0.15");
+    private static final BigDecimal D_010 = new BigDecimal("0.10");
+    private static final BigDecimal D_005 = new BigDecimal("0.05");
+
     /**
      * Computes combined sentiment from 1h and 4h feature snapshots.
      * Either can be null; the available frame(s) will be used with their full weight normalised.
@@ -56,22 +64,7 @@ public class SentimentAnalyzerService {
         BigDecimal raw1h = fs1h != null ? scoreFrame(fs1h, signals1h) : null;
         BigDecimal raw4h = fs4h != null ? scoreFrame(fs4h, signals4h) : null;
 
-        String label1h = raw1h != null ? toLabel(raw1h) : NEUTRAL;
-        String label4h = raw4h != null ? toLabel(raw4h) : NEUTRAL;
-
-        // Weighted combination — fall back to whichever frame is available
-        BigDecimal combined;
-        if (raw1h != null && raw4h != null) {
-            combined = raw4h.multiply(WEIGHT_4H).add(raw1h.multiply(WEIGHT_1H));
-        } else if (raw4h != null) {
-            combined = raw4h;
-        } else if (raw1h != null) {
-            combined = raw1h;
-        } else {
-            combined = ZERO;
-        }
-
-        combined = combined.max(new BigDecimal("-1.00")).min(new BigDecimal("1.00"))
+        BigDecimal combined = clamp(combineScores(raw1h, raw4h))
                 .setScale(4, RoundingMode.HALF_UP);
 
         if (signals1h.isEmpty()) signals1h.add("Insufficient 1h data");
@@ -82,36 +75,63 @@ public class SentimentAnalyzerService {
         log.debug("Sentiment | symbol={} score1h={} score4h={} combined={} label={}",
                 symbol, raw1h, raw4h, combined, combinedLabel);
 
-        return SentimentResponse.builder()
+        FrameScores scores = new FrameScores(raw1h, raw4h, combined, combinedLabel);
+        return buildResponse(symbol, fs1h, fs4h, signals1h, signals4h, scores);
+    }
+
+    private record FrameScores(BigDecimal raw1h, BigDecimal raw4h, BigDecimal combined, String combinedLabel) {}
+
+    private BigDecimal combineScores(BigDecimal raw1h, BigDecimal raw4h) {
+        if (raw1h != null && raw4h != null) {
+            return raw4h.multiply(WEIGHT_4H).add(raw1h.multiply(WEIGHT_1H));
+        }
+        if (raw4h != null) return raw4h;
+        if (raw1h != null) return raw1h;
+        return ZERO;
+    }
+
+    private SentimentResponse buildResponse(String symbol, FeatureStore fs1h, FeatureStore fs4h,
+                                            List<String> signals1h, List<String> signals4h,
+                                            FrameScores scores) {
+        String lbl1h = scores.raw1h() != null ? toLabel(scores.raw1h()) : NEUTRAL;
+        String lbl4h = scores.raw4h() != null ? toLabel(scores.raw4h()) : NEUTRAL;
+        SentimentResponse.SentimentResponseBuilder b = SentimentResponse.builder()
                 .symbol(symbol)
-                .sentiment(combinedLabel)
-                .score(combined)
-                .score1h(raw1h != null ? raw1h.setScale(4, RoundingMode.HALF_UP) : null)
-                .score4h(raw4h != null ? raw4h.setScale(4, RoundingMode.HALF_UP) : null)
-                .sentiment1h(label1h)
-                .sentiment4h(label4h)
+                .sentiment(scores.combinedLabel())
+                .score(scores.combined())
+                .score1h(scaleOrNull(scores.raw1h()))
+                .score4h(scaleOrNull(scores.raw4h()))
+                .sentiment1h(lbl1h)
+                .sentiment4h(lbl4h)
                 .signals1h(signals1h)
                 .signals4h(signals4h)
-                // 1h snapshot
-                .price(fs1h != null ? fs1h.getPrice() : null)
-                .rsi1h(fs1h != null ? fs1h.getRsi() : null)
-                .adx1h(fs1h != null ? fs1h.getAdx() : null)
-                .macdHistogram1h(fs1h != null ? fs1h.getMacdHistogram() : null)
-                .relativeVolume1h(fs1h != null ? fs1h.getRelativeVolume20() : null)
-                .trendRegime1h(fs1h != null ? fs1h.getTrendRegime() : null)
-                .isBullishBreakout1h(fs1h != null ? fs1h.getIsBullishBreakout() : null)
-                .isBearishBreakout1h(fs1h != null ? fs1h.getIsBearishBreakout() : null)
-                // 4h snapshot
-                .rsi4h(fs4h != null ? fs4h.getRsi() : null)
-                .adx4h(fs4h != null ? fs4h.getAdx() : null)
-                .macdHistogram4h(fs4h != null ? fs4h.getMacdHistogram() : null)
-                .trendRegime4h(fs4h != null ? fs4h.getTrendRegime() : null)
-                .entryBias4h(fs4h != null ? fs4h.getEntryBias() : null)
-                // timestamps
-                .featureTime1h(fs1h != null ? fs1h.getStartTime() : null)
-                .featureTime4h(fs4h != null ? fs4h.getStartTime() : null)
-                .publishedAt(LocalDateTime.now())
-                .build();
+                .publishedAt(LocalDateTime.now());
+        apply1hFields(b, fs1h);
+        apply4hFields(b, fs4h);
+        return b.build();
+    }
+
+    private void apply1hFields(SentimentResponse.SentimentResponseBuilder b, FeatureStore fs) {
+        if (fs == null) return;
+        b.price(fs.getPrice()).rsi1h(fs.getRsi()).adx1h(fs.getAdx())
+                .macdHistogram1h(fs.getMacdHistogram()).relativeVolume1h(fs.getRelativeVolume20())
+                .trendRegime1h(fs.getTrendRegime()).isBullishBreakout1h(fs.getIsBullishBreakout())
+                .isBearishBreakout1h(fs.getIsBearishBreakout()).featureTime1h(fs.getStartTime());
+    }
+
+    private void apply4hFields(SentimentResponse.SentimentResponseBuilder b, FeatureStore fs) {
+        if (fs == null) return;
+        b.rsi4h(fs.getRsi()).adx4h(fs.getAdx()).macdHistogram4h(fs.getMacdHistogram())
+                .trendRegime4h(fs.getTrendRegime()).entryBias4h(fs.getEntryBias())
+                .featureTime4h(fs.getStartTime());
+    }
+
+    private BigDecimal scaleOrNull(BigDecimal v) {
+        return v != null ? v.setScale(4, RoundingMode.HALF_UP) : null;
+    }
+
+    private BigDecimal clamp(BigDecimal v) {
+        return v.max(LOWER_BOUND).min(UPPER_BOUND);
     }
 
     // ── Per-frame scoring ─────────────────────────────────────────────────────
@@ -122,131 +142,172 @@ public class SentimentAnalyzerService {
      */
     private BigDecimal scoreFrame(FeatureStore fs, List<String> signals) {
         BigDecimal score = ZERO;
+        score = score.add(scoreTrendRegime(fs, signals));
+        score = score.add(scoreEmaStack(fs, signals));
+        score = score.add(scoreEma50Slope(fs, signals));
+        score = score.add(scoreDirectionalIndex(fs, signals));
+        score = score.add(scoreAdxBonus(fs, signals, score));
+        score = score.add(scoreMacd(fs, signals));
+        score = score.add(scoreRsi(fs, signals));
+        score = score.add(scoreBreakouts(fs, signals));
+        score = score.add(scoreSignedEr(fs, signals));
+        score = score.add(scoreVolumeAmplifier(fs, signals, score));
+        return clamp(score);
+    }
 
-        // 1. Trend regime (+0.20 / -0.20)
+    private BigDecimal scoreTrendRegime(FeatureStore fs, List<String> signals) {
         if ("BULL".equalsIgnoreCase(fs.getTrendRegime())) {
-            score = score.add(new BigDecimal("0.20"));
             signals.add("Trend regime: BULL");
-        } else if ("BEAR".equalsIgnoreCase(fs.getTrendRegime())) {
-            score = score.subtract(new BigDecimal("0.20"));
+            return D_020;
+        }
+        if ("BEAR".equalsIgnoreCase(fs.getTrendRegime())) {
             signals.add("Trend regime: BEAR");
+            return D_020.negate();
         }
+        return ZERO;
+    }
 
-        // 2. EMA stack alignment (+0.15 / -0.15)
-        if (hasValue(fs.getPrice()) && hasValue(fs.getEma20())
-                && hasValue(fs.getEma50()) && hasValue(fs.getEma200())) {
-            boolean bullStack = fs.getPrice().compareTo(fs.getEma20()) > 0
-                    && fs.getEma20().compareTo(fs.getEma50()) > 0
-                    && fs.getEma50().compareTo(fs.getEma200()) > 0;
-            boolean bearStack = fs.getPrice().compareTo(fs.getEma20()) < 0
-                    && fs.getEma20().compareTo(fs.getEma50()) < 0
-                    && fs.getEma50().compareTo(fs.getEma200()) < 0;
-            if (bullStack) {
-                score = score.add(new BigDecimal("0.15"));
-                signals.add("EMA stack: bullish");
-            } else if (bearStack) {
-                score = score.subtract(new BigDecimal("0.15"));
-                signals.add("EMA stack: bearish");
-            }
+    private BigDecimal scoreEmaStack(FeatureStore fs, List<String> signals) {
+        if (!hasValue(fs.getPrice()) || !hasValue(fs.getEma20())
+                || !hasValue(fs.getEma50()) || !hasValue(fs.getEma200())) {
+            return ZERO;
         }
-
-        // 3. EMA50 slope (+0.10 / -0.10)
-        if (hasValue(fs.getEma50Slope())) {
-            if (fs.getEma50Slope().compareTo(ZERO) > 0) {
-                score = score.add(new BigDecimal("0.10"));
-                signals.add("EMA50 slope: rising");
-            } else if (fs.getEma50Slope().compareTo(ZERO) < 0) {
-                score = score.subtract(new BigDecimal("0.10"));
-                signals.add("EMA50 slope: falling");
-            }
+        boolean bullStack = fs.getPrice().compareTo(fs.getEma20()) > 0
+                && fs.getEma20().compareTo(fs.getEma50()) > 0
+                && fs.getEma50().compareTo(fs.getEma200()) > 0;
+        if (bullStack) {
+            signals.add("EMA stack: bullish");
+            return D_015;
         }
-
-        // 4. Directional index spread (+0.10 / -0.10)
-        if (hasValue(fs.getPlusDI()) && hasValue(fs.getMinusDI())) {
-            BigDecimal diSpread = fs.getPlusDI().subtract(fs.getMinusDI());
-            if (diSpread.compareTo(new BigDecimal("5")) > 0) {
-                score = score.add(new BigDecimal("0.10"));
-                signals.add("+DI > -DI: bullish directional pressure");
-            } else if (diSpread.compareTo(new BigDecimal("-5")) < 0) {
-                score = score.subtract(new BigDecimal("0.10"));
-                signals.add("-DI > +DI: bearish directional pressure");
-            }
+        boolean bearStack = fs.getPrice().compareTo(fs.getEma20()) < 0
+                && fs.getEma20().compareTo(fs.getEma50()) < 0
+                && fs.getEma50().compareTo(fs.getEma200()) < 0;
+        if (bearStack) {
+            signals.add("EMA stack: bearish");
+            return D_015.negate();
         }
+        return ZERO;
+    }
 
-        // 5. ADX strength bonus (±0.05 in dominant direction)
-        if (hasValue(fs.getAdx()) && fs.getAdx().compareTo(new BigDecimal("25")) >= 0) {
-            if (score.compareTo(ZERO) > 0) {
-                score = score.add(new BigDecimal("0.05"));
-                signals.add("ADX " + fmt(fs.getAdx()) + ": strong trend confirms bull");
-            } else if (score.compareTo(ZERO) < 0) {
-                score = score.subtract(new BigDecimal("0.05"));
-                signals.add("ADX " + fmt(fs.getAdx()) + ": strong trend confirms bear");
-            }
+    private BigDecimal scoreEma50Slope(FeatureStore fs, List<String> signals) {
+        if (!hasValue(fs.getEma50Slope())) return ZERO;
+        int sign = fs.getEma50Slope().compareTo(ZERO);
+        if (sign > 0) {
+            signals.add("EMA50 slope: rising");
+            return D_010;
         }
-
-        // 6. MACD histogram (+0.10 / -0.10)
-        if (hasValue(fs.getMacdHistogram())) {
-            if (fs.getMacdHistogram().compareTo(ZERO) > 0) {
-                score = score.add(new BigDecimal("0.10"));
-                signals.add("MACD histogram: positive momentum");
-            } else if (fs.getMacdHistogram().compareTo(ZERO) < 0) {
-                score = score.subtract(new BigDecimal("0.10"));
-                signals.add("MACD histogram: negative momentum");
-            }
+        if (sign < 0) {
+            signals.add("EMA50 slope: falling");
+            return D_010.negate();
         }
+        return ZERO;
+    }
 
-        // 7. RSI zone (±0.05 overbought/oversold, ±0.10 directional)
-        if (hasValue(fs.getRsi())) {
-            BigDecimal rsi = fs.getRsi();
-            if (rsi.compareTo(new BigDecimal("70")) >= 0) {
-                score = score.add(new BigDecimal("0.05"));
-                signals.add("RSI " + fmt(rsi) + ": overbought — momentum high, caution");
-            } else if (rsi.compareTo(new BigDecimal("55")) >= 0) {
-                score = score.add(new BigDecimal("0.10"));
-                signals.add("RSI " + fmt(rsi) + ": bullish zone");
-            } else if (rsi.compareTo(new BigDecimal("30")) <= 0) {
-                score = score.subtract(new BigDecimal("0.05"));
-                signals.add("RSI " + fmt(rsi) + ": oversold — momentum low, caution");
-            } else if (rsi.compareTo(new BigDecimal("45")) <= 0) {
-                score = score.subtract(new BigDecimal("0.10"));
-                signals.add("RSI " + fmt(rsi) + ": bearish zone");
-            }
+    private BigDecimal scoreDirectionalIndex(FeatureStore fs, List<String> signals) {
+        if (!hasValue(fs.getPlusDI()) || !hasValue(fs.getMinusDI())) return ZERO;
+        BigDecimal diSpread = fs.getPlusDI().subtract(fs.getMinusDI());
+        if (diSpread.compareTo(new BigDecimal("5")) > 0) {
+            signals.add("+DI > -DI: bullish directional pressure");
+            return D_010;
         }
+        if (diSpread.compareTo(new BigDecimal("-5")) < 0) {
+            signals.add("-DI > +DI: bearish directional pressure");
+            return D_010.negate();
+        }
+        return ZERO;
+    }
 
-        // 8. Breakout flags (+0.10 / -0.10)
+    private BigDecimal scoreAdxBonus(FeatureStore fs, List<String> signals, BigDecimal currentScore) {
+        if (!hasValue(fs.getAdx()) || fs.getAdx().compareTo(new BigDecimal("25")) < 0) return ZERO;
+        int dir = currentScore.compareTo(ZERO);
+        if (dir > 0) {
+            signals.add("ADX " + fmt(fs.getAdx()) + ": strong trend confirms bull");
+            return D_005;
+        }
+        if (dir < 0) {
+            signals.add("ADX " + fmt(fs.getAdx()) + ": strong trend confirms bear");
+            return D_005.negate();
+        }
+        return ZERO;
+    }
+
+    private BigDecimal scoreMacd(FeatureStore fs, List<String> signals) {
+        if (!hasValue(fs.getMacdHistogram())) return ZERO;
+        int sign = fs.getMacdHistogram().compareTo(ZERO);
+        if (sign > 0) {
+            signals.add("MACD histogram: positive momentum");
+            return D_010;
+        }
+        if (sign < 0) {
+            signals.add("MACD histogram: negative momentum");
+            return D_010.negate();
+        }
+        return ZERO;
+    }
+
+    private BigDecimal scoreRsi(FeatureStore fs, List<String> signals) {
+        if (!hasValue(fs.getRsi())) return ZERO;
+        BigDecimal rsi = fs.getRsi();
+        if (rsi.compareTo(new BigDecimal("70")) >= 0) {
+            signals.add("RSI " + fmt(rsi) + ": overbought — momentum high, caution");
+            return D_005;
+        }
+        if (rsi.compareTo(new BigDecimal("55")) >= 0) {
+            signals.add("RSI " + fmt(rsi) + ": bullish zone");
+            return D_010;
+        }
+        if (rsi.compareTo(new BigDecimal("30")) <= 0) {
+            signals.add("RSI " + fmt(rsi) + ": oversold — momentum low, caution");
+            return D_005.negate();
+        }
+        if (rsi.compareTo(new BigDecimal("45")) <= 0) {
+            signals.add("RSI " + fmt(rsi) + ": bearish zone");
+            return D_010.negate();
+        }
+        return ZERO;
+    }
+
+    private BigDecimal scoreBreakouts(FeatureStore fs, List<String> signals) {
+        BigDecimal delta = ZERO;
         if (Boolean.TRUE.equals(fs.getIsBullishBreakout())) {
-            score = score.add(new BigDecimal("0.10"));
             signals.add("Bullish breakout detected");
+            delta = delta.add(D_010);
         }
         if (Boolean.TRUE.equals(fs.getIsBearishBreakout())) {
-            score = score.subtract(new BigDecimal("0.10"));
             signals.add("Bearish breakout detected");
+            delta = delta.subtract(D_010);
         }
+        return delta;
+    }
 
-        // 9. Signed efficiency ratio (+0.10 / -0.10)
-        if (hasValue(fs.getSignedEr20())) {
-            if (fs.getSignedEr20().compareTo(new BigDecimal("0.30")) >= 0) {
-                score = score.add(new BigDecimal("0.10"));
-                signals.add("Signed ER: efficiently trending up");
-            } else if (fs.getSignedEr20().compareTo(new BigDecimal("-0.30")) <= 0) {
-                score = score.subtract(new BigDecimal("0.10"));
-                signals.add("Signed ER: efficiently trending down");
-            }
+    private BigDecimal scoreSignedEr(FeatureStore fs, List<String> signals) {
+        if (!hasValue(fs.getSignedEr20())) return ZERO;
+        if (fs.getSignedEr20().compareTo(new BigDecimal("0.30")) >= 0) {
+            signals.add("Signed ER: efficiently trending up");
+            return D_010;
         }
-
-        // 10. Relative volume amplifier (±0.05)
-        if (hasValue(fs.getRelativeVolume20())
-                && fs.getRelativeVolume20().compareTo(new BigDecimal("1.50")) >= 0) {
-            if (score.compareTo(ZERO) > 0) {
-                score = score.add(new BigDecimal("0.05"));
-                signals.add("Above-average volume confirms bullish move");
-            } else if (score.compareTo(ZERO) < 0) {
-                score = score.subtract(new BigDecimal("0.05"));
-                signals.add("Above-average volume confirms bearish move");
-            }
+        if (fs.getSignedEr20().compareTo(new BigDecimal("-0.30")) <= 0) {
+            signals.add("Signed ER: efficiently trending down");
+            return D_010.negate();
         }
+        return ZERO;
+    }
 
-        return score.max(new BigDecimal("-1.00")).min(new BigDecimal("1.00"));
+    private BigDecimal scoreVolumeAmplifier(FeatureStore fs, List<String> signals, BigDecimal currentScore) {
+        if (!hasValue(fs.getRelativeVolume20())
+                || fs.getRelativeVolume20().compareTo(new BigDecimal("1.50")) < 0) {
+            return ZERO;
+        }
+        int dir = currentScore.compareTo(ZERO);
+        if (dir > 0) {
+            signals.add("Above-average volume confirms bullish move");
+            return D_005;
+        }
+        if (dir < 0) {
+            signals.add("Above-average volume confirms bearish move");
+            return D_005.negate();
+        }
+        return ZERO;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

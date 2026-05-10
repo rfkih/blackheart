@@ -76,7 +76,7 @@ public class SpecTraceController {
             throw new IllegalArgumentException(
                     "Either backtestRunId or accountStrategyId is required");
         }
-        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        int safeSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(safePage, safeSize);
 

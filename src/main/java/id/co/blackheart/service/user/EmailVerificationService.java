@@ -18,8 +18,10 @@ import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.UUID;
 
-// Mirrors PasswordResetService. Verification is NOT a login gate today;
-// the dashboard shows a "verify your email" banner until confirmed.
+/**
+ * Mirrors {@code PasswordResetService}. Verification is NOT a login gate today;
+ * the dashboard shows a "verify your email" banner until confirmed.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j

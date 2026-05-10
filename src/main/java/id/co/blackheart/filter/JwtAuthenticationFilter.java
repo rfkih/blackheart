@@ -53,6 +53,8 @@ import java.time.Duration;
 @Slf4j
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    private static final String HEADER_AUTHORIZATION = "Authorization";
+
     private static final Duration CACHE_TTL = Duration.ofSeconds(60);
     /**
      * Hard cap on cached principals. A reasonable upper bound for concurrent
@@ -111,7 +113,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // authoritative auth input — SecurityContextHolder is — but for DX
         // this wrapper keeps the existing controllers working unmodified.
         final HttpServletRequest requestForChain =
-                request.getHeader("Authorization") != null
+                request.getHeader(HEADER_AUTHORIZATION) != null
                         ? request
                         : new BearerHeaderWrapper(request, jwt);
 
@@ -158,7 +160,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         @Override
         public String getHeader(String name) {
-            if ("Authorization".equalsIgnoreCase(name)) {
+            if (HEADER_AUTHORIZATION.equalsIgnoreCase(name)) {
                 return authorizationHeader;
             }
             return super.getHeader(name);
@@ -166,7 +168,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         @Override
         public Enumeration<String> getHeaders(String name) {
-            if ("Authorization".equalsIgnoreCase(name)) {
+            if (HEADER_AUTHORIZATION.equalsIgnoreCase(name)) {
                 return Collections.enumeration(Collections.singletonList(authorizationHeader));
             }
             return super.getHeaders(name);
@@ -179,13 +181,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             while (original.hasMoreElements()) {
                 names.add(original.nextElement());
             }
-            names.add("Authorization");
+            names.add(HEADER_AUTHORIZATION);
             return Collections.enumeration(names);
         }
     }
 
     private String resolveToken(HttpServletRequest request) {
-        String authHeader = request.getHeader("Authorization");
+        String authHeader = request.getHeader(HEADER_AUTHORIZATION);
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String candidate = authHeader.substring(7).trim();
             if (StringUtils.hasText(candidate)) {

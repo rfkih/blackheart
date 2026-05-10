@@ -38,47 +38,48 @@ public class StrategyHelper {
      * the canonical sizing field — a strategy without it doesn't trade.
      */
     public BigDecimal calculateEntryNotional(EnrichedStrategyContext context, String side) {
-        if (context == null || !StringUtils.hasText(side)) {
-            return ZERO;
-        }
+        if (context == null || !StringUtils.hasText(side)) return ZERO;
 
         BigDecimal allocFraction = resolveCapitalAllocationFraction(context);
         if (allocFraction.signum() <= 0) return ZERO;
 
-        String source = resolveExecutionSource(context);
-
-        if (SIDE_LONG.equalsIgnoreCase(side)) {
-            BigDecimal cashBalance = context.getCashBalance();
-            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
-                return ZERO;
-            }
-            return cashBalance.multiply(allocFraction).setScale(8, RoundingMode.HALF_UP);
-        }
-
-        if (SIDE_SHORT.equalsIgnoreCase(side)) {
-            if (SOURCE_LIVE.equalsIgnoreCase(source)) {
-                BigDecimal assetBalance = context.getAssetBalance();
-                BigDecimal price = context.getMarketData() != null
-                        ? context.getMarketData().getClosePrice() : null;
-
-                if (assetBalance == null || assetBalance.compareTo(ZERO) <= 0
-                        || price == null || price.compareTo(ZERO) <= 0) {
-                    return ZERO;
-                }
-                // Notional in USDT for the SHORT side — sellable BTC × price
-                // × allocation.
-                return assetBalance.multiply(price).multiply(allocFraction)
-                        .setScale(8, RoundingMode.HALF_UP);
-            }
-
-            BigDecimal cashBalance = context.getCashBalance();
-            if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) {
-                return ZERO;
-            }
-            return cashBalance.multiply(allocFraction).setScale(8, RoundingMode.HALF_UP);
-        }
-
+        if (SIDE_LONG.equalsIgnoreCase(side))  return longEntryNotional(context, allocFraction);
+        if (SIDE_SHORT.equalsIgnoreCase(side)) return shortEntryNotional(context, allocFraction);
         return ZERO;
+    }
+
+    /** LONG legs always size off USDT — {@code cashBalance × allocFraction}. */
+    private BigDecimal longEntryNotional(EnrichedStrategyContext context, BigDecimal allocFraction) {
+        return cashBasedNotional(context.getCashBalance(), allocFraction);
+    }
+
+    /** SHORT in live mode sizes off the BTC inventory the user actually owns
+     *  ({@code assetBalance × price × allocFraction}); backtest mode sizes off
+     *  USDT cash like LONG, since the engine is cash-1× and treats SHORT as
+     *  symmetrical for sizing purposes. */
+    private BigDecimal shortEntryNotional(EnrichedStrategyContext context, BigDecimal allocFraction) {
+        if (SOURCE_LIVE.equalsIgnoreCase(resolveExecutionSource(context))) {
+            return liveShortNotional(context, allocFraction);
+        }
+        return cashBasedNotional(context.getCashBalance(), allocFraction);
+    }
+
+    private static BigDecimal cashBasedNotional(BigDecimal cashBalance, BigDecimal allocFraction) {
+        if (cashBalance == null || cashBalance.compareTo(ZERO) <= 0) return ZERO;
+        return cashBalance.multiply(allocFraction).setScale(8, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal liveShortNotional(EnrichedStrategyContext context, BigDecimal allocFraction) {
+        BigDecimal assetBalance = context.getAssetBalance();
+        BigDecimal price = context.getMarketData() != null
+                ? context.getMarketData().getClosePrice()
+                : null;
+        if (assetBalance == null || assetBalance.compareTo(ZERO) <= 0
+                || price == null || price.compareTo(ZERO) <= 0) {
+            return ZERO;
+        }
+        return assetBalance.multiply(price).multiply(allocFraction)
+                .setScale(8, RoundingMode.HALF_UP);
     }
 
     /**
@@ -147,14 +148,10 @@ public class StrategyHelper {
             BigDecimal stopLossPrice,
             BigDecimal riskPct,
             BigDecimal maxAllocationPct) {
-        if (context == null) return ZERO;
-        if (riskPct == null || riskPct.signum() <= 0) return ZERO;
-        if (entryPrice == null || entryPrice.signum() <= 0) return ZERO;
-        if (stopLossPrice == null || stopLossPrice.signum() <= 0) return ZERO;
+        if (!hasValidRiskInputs(context, entryPrice, stopLossPrice, riskPct)) return ZERO;
 
         BigDecimal stopDistance = entryPrice.subtract(stopLossPrice).abs();
         if (stopDistance.signum() <= 0) return ZERO;
-
         BigDecimal stopDistancePct = stopDistance.divide(entryPrice, 8, RoundingMode.HALF_UP);
         if (stopDistancePct.signum() <= 0) return ZERO;
 
@@ -164,26 +161,52 @@ public class StrategyHelper {
         BigDecimal idealNotional = capital.multiply(riskPct)
                 .divide(stopDistancePct, 8, RoundingMode.HALF_UP);
 
-        BigDecimal capFraction = (maxAllocationPct != null && maxAllocationPct.signum() > 0)
-                ? maxAllocationPct
-                : resolveCapitalAllocationFraction(context);
+        BigDecimal capFraction = resolveCapFraction(context, maxAllocationPct);
         if (capFraction.signum() <= 0) return ZERO;
-        // Backtest is cash-1×; spot executors balance-check against
-        // cashBalance. Allowing >1.0 yields no leverage, just a downstream
-        // rejection. Clamp + warn once so the operator notices a misconfigured
-        // sweep that's silently flat-lining at the cap.
-        if (capFraction.compareTo(ONE) > 0) {
-            if (LEVERAGE_CLAMP_WARNED.compareAndSet(false, true)) {
-                log.warn("Risk-based sizing: maxAllocationPct={} clamped to 1.0 — "
-                        + "backtest engine is cash-1× (no leverage). Sweeps over [1.0, N] "
-                        + "will produce identical results above 1.0 until futures-leverage "
-                        + "support lands. Suppressing further occurrences.", capFraction);
-            }
-            capFraction = ONE;
-        }
 
         BigDecimal cap = capital.multiply(capFraction);
         return idealNotional.min(cap).setScale(8, RoundingMode.HALF_UP);
+    }
+
+    /** Risk-based sizing requires all four inputs to be present and positive.
+     *  When any is missing, callers fall back to {@link #calculateEntryNotional}
+     *  (legacy capital-allocation sizing). */
+    private static boolean hasValidRiskInputs(
+            EnrichedStrategyContext context,
+            BigDecimal entryPrice,
+            BigDecimal stopLossPrice,
+            BigDecimal riskPct) {
+        return context != null
+                && riskPct != null && riskPct.signum() > 0
+                && entryPrice != null && entryPrice.signum() > 0
+                && stopLossPrice != null && stopLossPrice.signum() > 0;
+    }
+
+    /** Resolve the cap fraction from the explicit {@code maxAllocationPct} or
+     *  fall back to the strategy's stored capital allocation. Clamps any value
+     *  above 1.0 to 1.0 because the backtest engine is cash-1× and spot
+     *  executors balance-check against {@code cashBalance} — values above 1.0
+     *  yield no leverage, only downstream rejection. The clamp warning fires
+     *  once per JVM lifetime so a misconfigured sweep gets visible attention
+     *  without spamming logs. */
+    private BigDecimal resolveCapFraction(EnrichedStrategyContext context, BigDecimal maxAllocationPct) {
+        BigDecimal capFraction = (maxAllocationPct != null && maxAllocationPct.signum() > 0)
+                ? maxAllocationPct
+                : resolveCapitalAllocationFraction(context);
+        if (capFraction.compareTo(ONE) > 0) {
+            warnLeverageClampOnce(capFraction);
+            return ONE;
+        }
+        return capFraction;
+    }
+
+    private static void warnLeverageClampOnce(BigDecimal capFraction) {
+        if (LEVERAGE_CLAMP_WARNED.compareAndSet(false, true)) {
+            log.warn("Risk-based sizing: maxAllocationPct={} clamped to 1.0 — "
+                    + "backtest engine is cash-1× (no leverage). Sweeps over [1.0, N] "
+                    + "will produce identical results above 1.0 until futures-leverage "
+                    + "support lands. Suppressing further occurrences.", capFraction);
+        }
     }
 
     /**

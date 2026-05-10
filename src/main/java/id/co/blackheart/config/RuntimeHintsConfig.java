@@ -16,7 +16,6 @@ import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class RuntimeHintsConfig implements RuntimeHintsRegistrar {
@@ -54,7 +53,7 @@ public class RuntimeHintsConfig implements RuntimeHintsRegistrar {
             ProxyHints proxies = hints.proxies();
             proxies.registerJdkProxy(HttpServletRequest.class);
         } catch (Exception e) {
-            throw new RuntimeException("Could not register RuntimeHint: " + e.getMessage());
+            throw new IllegalStateException("Could not register RuntimeHint: " + e.getMessage(), e);
         }
     }
 
@@ -83,9 +82,13 @@ public class RuntimeHintsConfig implements RuntimeHintsRegistrar {
     private void registerClassInPackage(String valPackage, ClassLoader classLoader, RuntimeHints hints) throws IOException {
         Path packageDirectory = Paths.get(classLoader.getResource(valPackage.replace('.','/')).getPath());
         try (Stream<Path> paths = Files.walk(packageDirectory)) {
+            // Explicit type witness on map() pins the wildcard so Stream.toList()
+            // can infer the element type. Without it, the captured wildcard
+            // from `Class<? extends Serializable>` widens to `Class<CAP#1>` and
+            // the .toList() result is incompatible with the LHS declaration.
             List<Class<? extends Serializable>> serializableClasses = paths.filter(Files::isRegularFile)
                     .filter(path -> path.toString().endsWith(".class"))
-                    .map(path -> {
+                    .<Class<? extends Serializable>>map(path -> {
                         String className = valPackage + "." + path.getFileName().toString().replace(".class", "");
                         try {
                             Class<?> clazz = Class.forName(className);
@@ -94,12 +97,12 @@ public class RuntimeHintsConfig implements RuntimeHintsRegistrar {
                                 return (Class<? extends Serializable>) clazz;
                             }
                         } catch (ClassNotFoundException e) {
-                            throw new RuntimeException("Failed to load class: " + className, e);
+                            throw new IllegalStateException("Failed to load class: " + className, e);
                         }
                         return null;
                     })
                     .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
+                    .toList();
 
             serializableClasses.forEach(clazz -> hints.serialization().registerType(clazz));
         }

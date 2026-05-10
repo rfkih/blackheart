@@ -55,30 +55,45 @@ public class PortfolioBalanceService {
         }
 
         if (accountId != null) {
-            boolean ownsAccount = accounts.stream()
-                    .anyMatch(a -> accountId.equals(a.getAccountId()));
-            if (!ownsAccount) {
-                throw new AccessDeniedException("Account does not belong to caller");
-            }
+            requireOwns(accounts, accountId);
             return buildResponse(accountId, portfolioRepository.findAllByAccountId(accountId));
         }
 
         // Aggregate across every owned account: sum free + locked per asset,
         // then recompute USDT value once on the merged totals so we don't
         // double-multiply by spot price.
+        Map<String, AggregatedAsset> byAsset = aggregateAcrossAccounts(accounts);
+        prefetchMissingPrices(byAsset.keySet());
+        return aggregatedResponse(byAsset);
+    }
+
+    private void requireOwns(List<Account> accounts, UUID accountId) {
+        boolean ownsAccount = accounts.stream()
+                .anyMatch(a -> accountId.equals(a.getAccountId()));
+        if (!ownsAccount) {
+            throw new AccessDeniedException("Account does not belong to caller");
+        }
+    }
+
+    private Map<String, AggregatedAsset> aggregateAcrossAccounts(List<Account> accounts) {
         Map<String, AggregatedAsset> byAsset = new LinkedHashMap<>();
         for (Account a : accounts) {
-            for (Portfolio p : portfolioRepository.findAllByAccountId(a.getAccountId())) {
-                String asset = p.getAsset();
-                if (asset == null) continue;
-                AggregatedAsset agg = byAsset.computeIfAbsent(asset, k -> new AggregatedAsset());
-                if (p.getBalance() != null) agg.free = agg.free.add(p.getBalance());
-                if (p.getLocked() != null) agg.locked = agg.locked.add(p.getLocked());
-            }
+            accumulateAccount(byAsset, a);
         }
+        return byAsset;
+    }
 
-        prefetchMissingPrices(byAsset.keySet());
+    private void accumulateAccount(Map<String, AggregatedAsset> byAsset, Account a) {
+        for (Portfolio p : portfolioRepository.findAllByAccountId(a.getAccountId())) {
+            String asset = p.getAsset();
+            if (asset == null) continue;
+            AggregatedAsset agg = byAsset.computeIfAbsent(asset, k -> new AggregatedAsset());
+            if (p.getBalance() != null) agg.free = agg.free.add(p.getBalance());
+            if (p.getLocked() != null) agg.locked = agg.locked.add(p.getLocked());
+        }
+    }
 
+    private PortfolioBalanceResponse aggregatedResponse(Map<String, AggregatedAsset> byAsset) {
         List<PortfolioAssetResponse> assets = new ArrayList<>(byAsset.size());
         BigDecimal availableUsdt = BigDecimal.ZERO;
         BigDecimal lockedUsdt = BigDecimal.ZERO;
@@ -100,7 +115,7 @@ public class PortfolioBalanceService {
 
         BigDecimal totalUsdt = assets.stream()
                 .map(PortfolioAssetResponse::getUsdtValue)
-                .filter(v -> v != null)
+                .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return PortfolioBalanceResponse.builder()
@@ -181,12 +196,8 @@ public class PortfolioBalanceService {
         }
         Set<String> missing = new LinkedHashSet<>();
         for (String asset : assets) {
-            if (!StringUtils.hasText(asset)) continue;
-            if ("USDT".equalsIgnoreCase(asset)) continue;
-            String symbol = asset.toUpperCase() + "USDT";
-            if (cacheService.getLatestPrice(symbol) != null) continue;
-            if (cacheService.isPriceUnavailable(symbol)) continue;
-            missing.add(symbol);
+            String symbol = candidateSymbolToFetch(asset);
+            if (symbol != null) missing.add(symbol);
         }
         if (missing.isEmpty()) {
             return;
@@ -210,6 +221,20 @@ public class PortfolioBalanceService {
                 cacheService.markPriceUnavailable(symbol);
             }
         }
+    }
+
+    /**
+     * Returns the {@code <ASSET>USDT} symbol to fetch for the given asset, or
+     * {@code null} when the asset should be skipped (blank, the quote currency
+     * itself, already cached, or already negative-cached as unavailable).
+     */
+    private String candidateSymbolToFetch(String asset) {
+        if (!StringUtils.hasText(asset)) return null;
+        if ("USDT".equalsIgnoreCase(asset)) return null;
+        String symbol = asset.toUpperCase() + "USDT";
+        if (cacheService.getLatestPrice(symbol) != null) return null;
+        if (cacheService.isPriceUnavailable(symbol)) return null;
+        return symbol;
     }
 
     private BigDecimal computeUsdtValue(String asset, BigDecimal free, BigDecimal locked) {

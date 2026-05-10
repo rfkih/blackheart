@@ -64,9 +64,18 @@ public class LiveTradingDecisionExecutorService {
             return;
         }
 
-        // Log-only guard. Catches contract violations like the LSR/VCB SHORT
-        // sizing bug at the boundary between strategy and executor — without
-        // blocking the live loop while we build confidence in the validator.
+        logInvariantViolations(decision, context);
+
+        if (!applyEntryGates(decision, context)) return;          // RiskGuard / Kelly / vol-target
+        if (handlePaperTradeShortCircuit(decision, context)) return;
+
+        dispatchDecision(activeTrade, context, decision);
+    }
+
+    /** Log-only guard — catches contract violations at the strategy/executor
+     *  boundary (e.g. the LSR/VCB SHORT sizing bug) without blocking the
+     *  live loop while we build confidence in the validator. */
+    private void logInvariantViolations(StrategyDecision decision, EnrichedStrategyContext context) {
         BigDecimal entryRef = context.getMarketData() != null
                 ? context.getMarketData().getClosePrice()
                 : null;
@@ -75,87 +84,90 @@ public class LiveTradingDecisionExecutorService {
             log.warn("[StrategyInvariant] {} {} violations: {}",
                     decision.getStrategyCode(), decision.getDecisionType(), violations);
         }
+    }
 
-        // Risk guard: rolling-DD kill switch + per-account concurrency cap.
-        // Only gates new entries; CLOSE_*/UPDATE_* always pass through so
-        // we can still get out of existing positions even when tripped.
-        if (decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
-                || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT) {
-            UUID accountStrategyId = decision.getAccountStrategyId();
-            if (accountStrategyId == null && context.getAccountStrategy() != null) {
-                accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
-            }
-            if (accountStrategyId != null) {
-                String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
-                        ? SIDE_LONG : SIDE_SHORT;
-                RiskGuardService.GuardVerdict verdict = riskGuardService.canOpen(
-                        accountStrategyId, side, context.getFeatureStore());
-                if (!verdict.allowed()) {
-                    log.warn("[RiskGuard] BLOCKED {} | strategy={} reason={}",
-                            decision.getDecisionType(), decision.getStrategyCode(), verdict.reason());
-                    return;
-                }
+    /**
+     * Risk guard + Kelly + vol-targeting, applied only to OPEN_LONG /
+     * OPEN_SHORT. Returns false when the entry was BLOCKED — caller short-
+     * circuits. {@code CLOSE_*} / {@code UPDATE_*} always pass through so
+     * we can still close existing positions even when the kill switch is
+     * tripped.
+     */
+    private boolean applyEntryGates(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (!isOpenAction(decision)) return true;
 
-                // Capture intent BEFORE vol-targeting mutates, so realized P&L
-                // can later be decomposed into signal-alpha / exec-drift /
-                // sizing-residual at close.
-                captureIntent(side, decision, context);
+        UUID accountStrategyId = resolveAccountStrategyId(decision, context);
+        if (accountStrategyId == null) return true;
 
-                // PSR-discounted half-Kelly multiplier from recent qualifying
-                // backtest runs. Off by default; when off returns 1.0.
-                // UUID passed alongside entity so the service can fall back to
-                // a DB lookup when context.getAccountStrategy() is null.
-                applyKellySizing(context.getAccountStrategy(), accountStrategyId, side, decision);
-
-                // Scales computed size so realized vol hits target and
-                // correlated bets shrink. Off by default per Account.
-                applyVolTargeting(accountStrategyId, side, decision);
-            }
+        String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                ? SIDE_LONG : SIDE_SHORT;
+        RiskGuardService.GuardVerdict verdict = riskGuardService.canOpen(
+                accountStrategyId, side, context.getFeatureStore());
+        if (!verdict.allowed()) {
+            log.warn("[RiskGuard] BLOCKED {} | strategy={} reason={}",
+                    decision.getDecisionType(), decision.getStrategyCode(), verdict.reason());
+            return false;
         }
 
-        // Paper/simulated gate — if EITHER scope says simulated
-        // (definition.simulated OR account_strategy.simulated), record the
-        // intent into paper_trade_run and short-circuit before real-order code.
-        // Fail-safe: either scope says paper → paper wins.
-        //
-        // CRITICAL: only OPEN_LONG / OPEN_SHORT are diverted. CLOSE_* and
-        // UPDATE_POSITION_MANAGEMENT MUST always fall through to real execution.
-        // If an emergency demote stranded a live position, its close signal
-        // would be recorded as a paper trade and the real position would never
-        // close. An operator demoting a promoted strategy with open positions
-        // blocks new entries immediately; existing legs wind down via the
-        // strategy's own exit logic. Use TradeController to force-flatten faster.
-        boolean isOpenAction =
-                decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
-                        || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
-        if (isOpenAction && context.getAccountStrategy() != null) {
-            boolean accountSimulated =
-                    Boolean.TRUE.equals(context.getAccountStrategy().getSimulated());
-            var defOpt = strategyDefinitionRepository.findByStrategyCode(decision.getStrategyCode());
-            boolean definitionDisabled = defOpt
-                    .map(d -> Boolean.FALSE.equals(d.getEnabled()))
-                    .orElse(false);
-            boolean definitionSimulated = defOpt
-                    .map(d -> Boolean.TRUE.equals(d.getSimulated()))
-                    .orElse(false);
+        // Capture intent BEFORE vol-targeting mutates, so realized P&L can
+        // later be decomposed into signal-alpha / exec-drift / sizing-residual.
+        captureIntent(side, decision, context);
+        // UUID alongside entity so Kelly can fall back to a DB lookup when
+        // context.getAccountStrategy() is null.
+        applyKellySizing(context.getAccountStrategy(), accountStrategyId, side, decision);
+        applyVolTargeting(accountStrategyId, side, decision);
+        return true;
+    }
 
-            // Kill-switch: definition disabled → drop entry silently (no paper
-            // trade either). CLOSE_*/UPDATE bypass this block entirely.
-            if (definitionDisabled) {
-                log.info("[KillSwitch] {} {} — definition disabled, dropping entry signal",
-                        decision.getStrategyCode(), decision.getDecisionType());
-                return;
-            }
-            if (accountSimulated || definitionSimulated) {
-                UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
-                log.info("[PaperTrade] {} {} — simulated (def={}, acct={}), recording without placing order",
-                        decision.getStrategyCode(), decision.getDecisionType(),
-                        definitionSimulated, accountSimulated);
-                strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
-                return;
-            }
+    /**
+     * Paper/simulated gate. If either scope says simulated
+     * (definition.simulated OR account_strategy.simulated) the decision is
+     * recorded into paper_trade_run and we short-circuit before real-order
+     * code — paper wins on any disagreement.
+     *
+     * <p><b>CRITICAL:</b> only OPEN_LONG / OPEN_SHORT are diverted. CLOSE_*
+     * and UPDATE_POSITION_MANAGEMENT MUST always fall through to real
+     * execution. If an emergency demote stranded a live position, its close
+     * signal would be recorded as a paper trade and the real position would
+     * never close. An operator demoting a promoted strategy with open
+     * positions blocks new entries immediately; existing legs wind down via
+     * the strategy's own exit logic. Use TradeController to force-flatten
+     * faster.
+     *
+     * @return true when the decision was diverted (caller short-circuits).
+     */
+    private boolean handlePaperTradeShortCircuit(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (!isOpenAction(decision) || context.getAccountStrategy() == null) return false;
+
+        boolean accountSimulated = Boolean.TRUE.equals(context.getAccountStrategy().getSimulated());
+        var defOpt = strategyDefinitionRepository.findByStrategyCode(decision.getStrategyCode());
+        boolean definitionDisabled = defOpt
+                .map(d -> Boolean.FALSE.equals(d.getEnabled()))
+                .orElse(false);
+        boolean definitionSimulated = defOpt
+                .map(d -> Boolean.TRUE.equals(d.getSimulated()))
+                .orElse(false);
+
+        // Kill-switch: definition disabled → drop entry silently (no paper
+        // trade either). CLOSE_*/UPDATE bypass this block entirely.
+        if (definitionDisabled) {
+            log.info("[KillSwitch] {} {} — definition disabled, dropping entry signal",
+                    decision.getStrategyCode(), decision.getDecisionType());
+            return true;
         }
+        if (accountSimulated || definitionSimulated) {
+            UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
+            log.info("[PaperTrade] {} {} — simulated (def={}, acct={}), recording without placing order",
+                    decision.getStrategyCode(), decision.getDecisionType(),
+                    definitionSimulated, accountSimulated);
+            strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
+            return true;
+        }
+        return false;
+    }
 
+    private void dispatchDecision(Trades activeTrade, EnrichedStrategyContext context, StrategyDecision decision)
+            throws JsonProcessingException {
         switch (decision.getDecisionType()) {
             case OPEN_LONG -> executeOpenLong(context, decision);
             case OPEN_SHORT -> executeOpenShort(context, decision);
@@ -165,6 +177,18 @@ public class LiveTradingDecisionExecutorService {
             case HOLD -> log.debug("No execution for HOLD");
             default -> log.debug("Decision type not handled yet: {}", decision.getDecisionType());
         }
+    }
+
+    private static boolean isOpenAction(StrategyDecision decision) {
+        return decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
+    }
+
+    private static UUID resolveAccountStrategyId(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (decision.getAccountStrategyId() != null) return decision.getAccountStrategyId();
+        return context.getAccountStrategy() != null
+                ? context.getAccountStrategy().getAccountStrategyId()
+                : null;
     }
 
     public void executeListenerClosePosition(
@@ -284,7 +308,7 @@ public class LiveTradingDecisionExecutorService {
 
         BigDecimal tradeAmount = decision.getNotionalSize() != null
                 ? decision.getNotionalSize()
-                : calculateLongTradeAmount(balance, account, context.getAccountStrategy());
+                : calculateLongTradeAmount(balance, context.getAccountStrategy());
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid LONG trade amount. tradeAmount={}", tradeAmount);
@@ -321,7 +345,7 @@ public class LiveTradingDecisionExecutorService {
 
         BigDecimal tradeAmount = decision.getPositionSize() != null
                 ? decision.getPositionSize()
-                : calculateShortTradeAmount(balance, account, context.getAccountStrategy());
+                : calculateShortTradeAmount(balance, context.getAccountStrategy());
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid SHORT trade amount. tradeAmount={}", tradeAmount);
@@ -490,7 +514,7 @@ public class LiveTradingDecisionExecutorService {
      * trade amount". MIN_USDT_NOTIONAL floor keeps Binance min-order rules
      * happy on small allocations.
      */
-    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Account account,
+    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance,
                                                 id.co.blackheart.model.AccountStrategy accountStrategy) {
         if (usdtBalance == null) return BigDecimal.ZERO;
         BigDecimal alloc = allocFraction(accountStrategy);
@@ -500,7 +524,7 @@ public class LiveTradingDecisionExecutorService {
         return tradeAmount.compareTo(MIN_USDT_NOTIONAL) < 0 ? MIN_USDT_NOTIONAL : tradeAmount;
     }
 
-    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Account account,
+    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance,
                                                  id.co.blackheart.model.AccountStrategy accountStrategy) {
         if (btcBalance == null) return BigDecimal.ZERO;
         BigDecimal alloc = allocFraction(accountStrategy);

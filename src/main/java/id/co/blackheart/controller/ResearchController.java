@@ -146,9 +146,18 @@ public class ResearchController {
 
     // ── Research log ─────────────────────────────────────────────────────────
 
+    /** Headline-metric column names — kept as constants because each appears
+     *  in {@link #ALLOWED_LOG_SORT}, on the response row, and as the lookup
+     *  key into the analysis snapshot's {@code headline} map. */
+    private static final String COL_CREATED_AT    = "createdAt";
+    private static final String COL_TRADE_COUNT   = "tradeCount";
+    private static final String COL_WIN_RATE      = "winRate";
+    private static final String COL_PROFIT_FACTOR = "profitFactor";
+    private static final String COL_MAX_DRAWDOWN  = "maxDrawdown";
+
     private static final Set<String> ALLOWED_LOG_SORT = Set.of(
-            "createdAt", "tradeCount", "winRate", "profitFactor",
-            "maxDrawdown", "strategyCode", "asset", "strategyVersion");
+            COL_CREATED_AT, COL_TRADE_COUNT, COL_WIN_RATE, COL_PROFIT_FACTOR,
+            COL_MAX_DRAWDOWN, "strategyCode", "asset", "strategyVersion");
 
     /**
      * Compact progression view — one row per completed backtest with the
@@ -178,11 +187,11 @@ public class ResearchController {
         String assetFilter   = blankToNull(asset);
         String intervalFilter= blankToNull(interval);
         String searchFilter  = blankToNull(search);
-        int cappedSize = Math.max(1, Math.min(size, 200));
+        int cappedSize = Math.clamp(size, 1, 200);
         Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize);
 
         String[] parts = sort.split(",", 2);
-        String sortColumn = ALLOWED_LOG_SORT.contains(parts[0].trim()) ? parts[0].trim() : "createdAt";
+        String sortColumn = ALLOWED_LOG_SORT.contains(parts[0].trim()) ? parts[0].trim() : COL_CREATED_AT;
         String sortDir = (parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim())) ? "ASC" : "DESC";
 
         Page<BacktestRun> runs = runRepository.findResearchLog(
@@ -247,7 +256,7 @@ public class ResearchController {
         Set<String> statusFilter = parseCsvUpper(status);
         // Cap size to keep dashboards from accidentally loading thousands of rows
         // through the in-memory filter (the same cap RecentPromotions uses).
-        int cappedSize = Math.max(1, Math.min(size, 100));
+        int cappedSize = Math.clamp(size, 1, 100);
         Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize);
         Page<SweepState> result = sweepService.listSweepsPaged(userId, statusFilter, sort, pageable);
         return ResponseEntity.ok(ResponseDto.builder()
@@ -334,19 +343,19 @@ public class ResearchController {
         row.put("strategyVersion", r.getStrategyVersion());
         row.put("asset", r.getAsset());
         row.put("interval", r.getInterval());
-        row.put("createdAt", r.getCreatedTime());
+        row.put(COL_CREATED_AT, r.getCreatedTime());
 
         try {
             Map<String, Object> snap = objectMapper.readValue(
                     r.getAnalysisSnapshot(), new TypeReference<Map<String, Object>>() {});
             Object headline = snap.get("headline");
             if (headline instanceof Map<?, ?> h) {
-                row.put("tradeCount", h.get("tradeCount"));
-                row.put("winRate", h.get("winRate"));
-                row.put("profitFactor", h.get("profitFactor"));
+                row.put(COL_TRADE_COUNT, h.get(COL_TRADE_COUNT));
+                row.put(COL_WIN_RATE, h.get(COL_WIN_RATE));
+                row.put(COL_PROFIT_FACTOR, h.get(COL_PROFIT_FACTOR));
                 row.put("avgR", h.get("avgR"));
                 row.put("netPnl", h.get("netPnl"));
-                row.put("maxDrawdown", h.get("maxDrawdown"));
+                row.put(COL_MAX_DRAWDOWN, h.get(COL_MAX_DRAWDOWN));
                 row.put("maxConsecutiveLosses", h.get("maxConsecutiveLosses"));
             }
         } catch (Exception e) {

@@ -28,12 +28,13 @@ public class DeepLearningService {
 
             if (response == null) {
                 log.warn("⚠No data received for ID Detail : {}", predictionRequest.getSymbol());
-                throw new Exception("No data Received for ID Detail :" + predictionRequest.getSymbol());
+                throw new IllegalStateException(
+                        "No data Received for ID Detail :" + predictionRequest.getSymbol());
             }
 
             return response;
-        }catch (Exception e) {
-            throw new RuntimeException(e);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -46,8 +47,8 @@ public class DeepLearningService {
             }
 
             deepLearningClientService.sendTrainRequestAsync();
-        }catch (Exception e) {
-            throw new RuntimeException(e);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
         }
     }
 }

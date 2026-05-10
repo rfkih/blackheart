@@ -43,9 +43,9 @@ class BacktestAllocationResolutionTest {
 
     @BeforeEach
     void setUp() {
-        // Most fields are unused by resolveAllocationsForRun — only the
-        // accountStrategyRepository matters. Pass nulls for the rest;
-        // the method under test never touches them.
+        // resolveAllocationsForRun only touches accountStrategyRepository, so
+        // every other ctor dep is nulled out — the method under test never
+        // dereferences them.
         coordinator = new BacktestCoordinatorService(
                 null, // marketDataRepository
                 null, // featureStoreRepository

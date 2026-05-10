@@ -123,7 +123,7 @@ class DonchianBreakoutEngineTest {
         return StrategySpec.builder()
                 .strategyCode("DCB")
                 .strategyName("DCB")
-                .archetype(DonchianBreakoutEngine.ARCHETYPE)
+                .archetype(DonchianBreakoutEngine.ARCHETYPE_NAME)
                 .archetypeVersion(DonchianBreakoutEngine.VERSION)
                 .specSchemaVersion(1)
                 .params(new HashMap<>())

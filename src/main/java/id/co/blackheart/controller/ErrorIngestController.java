@@ -69,7 +69,7 @@ public class ErrorIngestController {
      * filter on this column — open-ended values would shred grouping.
      */
     private static final Set<String> ALLOWED_SOURCES = Set.of(
-            "frontend", "middleware", "research-orch");
+            DEFAULT_SOURCE, "middleware", "research-orch");
 
     private final ErrorIngestService ingestService;
 

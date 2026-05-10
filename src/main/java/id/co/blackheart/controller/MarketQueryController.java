@@ -27,7 +27,6 @@ import java.math.RoundingMode;
 import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Slf4j
 @RestController
@@ -105,7 +104,7 @@ public class MarketQueryController {
                         .volume(m.getVolume())
                         .closeTime(toEpochMs(m.getEndTime()))
                         .build())
-                .collect(Collectors.toList());
+                .toList();
 
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -155,7 +154,7 @@ public class MarketQueryController {
 
         List<IndicatorDataResponse> result = rows.stream()
                 .map(this::toIndicatorResponse)
-                .collect(Collectors.toList());
+                .toList();
 
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())

@@ -7,9 +7,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Locks in the id-keyed equality contract for {@link HistoricalBackfillJob}.
@@ -99,19 +97,19 @@ class HistoricalBackfillJobEqualityTest {
         HistoricalBackfillJob a = HistoricalBackfillJob.builder().build();
         HistoricalBackfillJob b = HistoricalBackfillJob.builder().build();
 
-        assertFalse(a.equals(b));
+        assertNotEquals(a, b);
     }
 
     @Test
     void notEquals_toUnrelatedType() {
         HistoricalBackfillJob a = job(UUID.randomUUID(), JobStatus.PENDING);
-        assertNotEquals(a, "not a job");
-        assertNotEquals(a, null);
+        assertNotEquals("not a job", a);
+        assertNotEquals(null, a);
     }
 
     @Test
     void equals_isReflexive() {
         HistoricalBackfillJob a = job(UUID.randomUUID(), JobStatus.PENDING);
-        assertTrue(a.equals(a));
+        assertEquals(a, a);
     }
 }

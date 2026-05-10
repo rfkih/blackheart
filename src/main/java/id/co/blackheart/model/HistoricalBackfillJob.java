@@ -32,8 +32,7 @@ import java.util.UUID;
  * <p>JSONB columns ({@code params}, {@code result}) use
  * {@link JdbcTypeCode}{@code (SqlTypes.JSON)} — the project rule is to never
  * use {@code AttributeConverter} for JSONB.
- */
-/**
+ *
  * <p><b>Equality</b>: keyed on {@code jobId}, not all fields. Lombok's
  * {@code @Data} would equal-and-hash over every column (including JSONB
  * params + result), which is both expensive and incorrect for JPA managed

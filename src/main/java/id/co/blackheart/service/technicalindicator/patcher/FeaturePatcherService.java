@@ -6,9 +6,7 @@ import id.co.blackheart.service.marketdata.job.JobContext;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Query;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,7 +33,6 @@ import java.util.Map;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class FeaturePatcherService {
 
     /** Size of save-buffer flushes. Bounds Hibernate L1 cache memory under wide patches. */
@@ -46,9 +43,6 @@ public class FeaturePatcherService {
 
     private final FeatureStoreRepository featureStoreRepository;
 
-    @PersistenceContext
-    private EntityManager entityManager;
-
     /**
      * Self-reference routed through the Spring proxy so the {@code @Transactional}
      * annotations on {@link #patchWindow}, {@link #findNullBounds} and
@@ -58,11 +52,20 @@ public class FeaturePatcherService {
      * transaction would never start — entities loaded via
      * {@link #findNullRowsInWindow} would be detached, forcing
      * {@code saveAll(buffer)} into a per-row merge with an extra SELECT each.
-     * {@code @Lazy} sidesteps the construction-time circular-reference check.
+     * {@code @Lazy} sidesteps the construction-time circular-reference check
+     * and is required for constructor injection of a self-reference.
      */
-    @Autowired
-    @Lazy
-    private FeaturePatcherService self;
+    private final FeaturePatcherService self;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    public FeaturePatcherService(
+            FeatureStoreRepository featureStoreRepository,
+            @Lazy FeaturePatcherService self) {
+        this.featureStoreRepository = featureStoreRepository;
+        this.self = self;
+    }
 
     /**
      * Auto-discover all distinct (symbol, interval) pairs where at least one
@@ -127,11 +130,18 @@ public class FeaturePatcherService {
                                   LocalDateTime from, LocalDateTime to, JobContext ctx) {
         if (from == null || to == null) {
             LocalDateTime[] bounds = self.findNullBounds(patcher.primaryColumn(), symbol, interval);
-            if (bounds == null) return PatchSummary.zero();
+            if (bounds.length == 0) return PatchSummary.zero();
             if (from == null) from = bounds[0];
             if (to == null) to = bounds[1];
         }
 
+        PatchSummary total = walkWindows(patcher, symbol, interval, from, to, ctx);
+        logPatchPairOutcome(patcher, symbol, interval, total);
+        return total;
+    }
+
+    private PatchSummary walkWindows(FeaturePatcher<?> patcher, String symbol, String interval,
+                                     LocalDateTime from, LocalDateTime to, JobContext ctx) {
         PatchSummary total = PatchSummary.zero();
         LocalDateTime windowStart = from;
         while (!windowStart.isAfter(to)) {
@@ -141,7 +151,11 @@ public class FeaturePatcherService {
             total = total.plus(self.patchWindow(patcher, symbol, interval, windowStart, windowEnd));
             windowStart = windowEnd.plusNanos(1);
         }
+        return total;
+    }
 
+    private static void logPatchPairOutcome(
+            FeaturePatcher<?> patcher, String symbol, String interval, PatchSummary total) {
         log.info("Patcher {} for {}/{}: filled={} skipped_no_source={} skipped_no_change={}",
                 patcher.primaryColumn(), symbol, interval,
                 total.patched(), total.skippedNoSource(), total.skippedNoChange());
@@ -152,7 +166,6 @@ public class FeaturePatcherService {
                     total.skippedNoSource() + total.skippedNoChange(),
                     total.skippedNoSource(), total.skippedNoChange());
         }
-        return total;
     }
 
     @Transactional
@@ -210,7 +223,9 @@ public class FeaturePatcherService {
 
     /**
      * Find earliest + latest start_time of rows where {@code column} IS NULL
-     * for the given pair. Returns null if no NULL rows exist.
+     * for the given pair. Returns an empty array when no NULL rows exist;
+     * callers should check {@code result.length == 0} as the "no work"
+     * sentinel rather than null.
      */
     @Transactional(readOnly = true)
     public LocalDateTime[] findNullBounds(String column, String symbol, String interval) {
@@ -223,7 +238,7 @@ public class FeaturePatcherService {
         Object[] row = (Object[]) q.getSingleResult();
         Timestamp min = (Timestamp) row[0];
         Timestamp max = (Timestamp) row[1];
-        if (min == null || max == null) return null;
+        if (min == null || max == null) return new LocalDateTime[0];
         return new LocalDateTime[] { min.toLocalDateTime(), max.toLocalDateTime() };
     }
 
@@ -246,7 +261,7 @@ public class FeaturePatcherService {
         q.setParameter("interval", interval);
         q.setParameter("startTime", windowStart);
         q.setParameter("endTime", windowEnd);
-        List<FeatureStore> rows = (List<FeatureStore>) q.getResultList();
+        List<FeatureStore> rows = q.getResultList();
         rows.sort(Comparator.comparing(FeatureStore::getStartTime));
         return rows;
     }

@@ -69,15 +69,27 @@ public class MarketDataIntegrityService {
     private static List<String> discoverFeatureColumns() {
         List<String> cols = new ArrayList<>();
         for (Field field : FeatureStore.class.getDeclaredFields()) {
-            if (field.isAnnotationPresent(Id.class)) continue;
-            Column column = field.getAnnotation(Column.class);
-            if (column == null) continue;
-            String name = column.name();
-            if (!StringUtils.hasText(name)) continue;
-            if (NON_INDICATOR_COLUMNS.contains(name)) continue;
-            cols.add(name);
+            String name = indicatorColumnName(field);
+            if (name != null) cols.add(name);
         }
         return List.copyOf(cols);
+    }
+
+    /**
+     * Returns the {@code @Column.name()} of {@code field} when it represents an
+     * indicator output, or null when it is the row id, lacks a column
+     * annotation, has a blank name, or is on the {@link #NON_INDICATOR_COLUMNS}
+     * blacklist. Pulled out so {@link #discoverFeatureColumns} can iterate
+     * without the four-{@code continue} chain Sonar S135 rejects.
+     */
+    private static String indicatorColumnName(Field field) {
+        if (field.isAnnotationPresent(Id.class)) return null;
+        Column column = field.getAnnotation(Column.class);
+        if (column == null) return null;
+        String name = column.name();
+        if (!StringUtils.hasText(name)) return null;
+        if (NON_INDICATOR_COLUMNS.contains(name)) return null;
+        return name;
     }
 
     private final MarketDataRepository marketDataRepository;

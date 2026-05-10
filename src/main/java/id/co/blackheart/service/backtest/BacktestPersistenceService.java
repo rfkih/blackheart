@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
 @Service
 @RequiredArgsConstructor
 public class BacktestPersistenceService {
@@ -82,9 +85,9 @@ public class BacktestPersistenceService {
      * explicit service-layer population per BaseEntity's contract.
      */
     private void stampActor(
-            java.util.function.Supplier<String> getCreatedBy,
-            java.util.function.Consumer<String> setCreatedBy,
-            java.util.function.Consumer<String> setUpdatedBy,
+            Supplier<String> getCreatedBy,
+            Consumer<String> setCreatedBy,
+            Consumer<String> setUpdatedBy,
             String actor
     ) {
         if (getCreatedBy.get() == null) setCreatedBy.accept(actor);
@@ -94,17 +97,9 @@ public class BacktestPersistenceService {
     private void applySummary(BacktestRun backtestRun, BacktestExecutionSummary summary) {
         backtestRun.setStatus("COMPLETED");
 
-        if (summary.getFinalCapital() != null) {
-            backtestRun.setEndingBalance(summary.getFinalCapital());
-        }
-
-        if (summary.getGrossProfit() != null) {
-            backtestRun.setGrossProfit(summary.getGrossProfit());
-        }
-
-        if (summary.getGrossLoss() != null) {
-            backtestRun.setGrossLoss(summary.getGrossLoss());
-        }
+        copyIfPresent(summary::getFinalCapital, backtestRun::setEndingBalance);
+        copyIfPresent(summary::getGrossProfit, backtestRun::setGrossProfit);
+        copyIfPresent(summary::getGrossLoss, backtestRun::setGrossLoss);
 
         if (summary.getNetProfit() != null) {
             backtestRun.setNetProfit(summary.getNetProfit());
@@ -112,60 +107,26 @@ public class BacktestPersistenceService {
             backtestRun.setNetProfit(summary.getFinalCapital().subtract(backtestRun.getInitialCapital()));
         }
 
-        if (summary.getTotalTrades() != null) {
-            backtestRun.setTotalTrades(summary.getTotalTrades());
-        }
+        copyIfPresent(summary::getTotalTrades, backtestRun::setTotalTrades);
+        copyIfPresent(summary::getWinningTrades, backtestRun::setTotalWins);
+        copyIfPresent(summary::getLosingTrades, backtestRun::setTotalLosses);
+        copyIfPresent(summary::getWinRate, backtestRun::setWinRate);
+        copyIfPresent(summary::getProfitFactor, backtestRun::setProfitFactor);
+        copyIfPresent(summary::getMaxDrawdownPercent, backtestRun::setMaxDrawdownPct);
+        copyIfPresent(summary::getTotalReturnPercent, backtestRun::setReturnPct);
+        copyIfPresent(summary::getSharpeRatio, backtestRun::setSharpeRatio);
+        copyIfPresent(summary::getSortinoRatio, backtestRun::setSortinoRatio);
+        copyIfPresent(summary::getPsr, backtestRun::setPsr);
+        copyIfPresent(summary::getAvgWin, backtestRun::setAvgWin);
+        copyIfPresent(summary::getAvgLoss, backtestRun::setAvgLoss);
+        copyIfPresent(summary::getMaxDrawdownAmount, backtestRun::setMaxDrawdownAmount);
+        copyIfPresent(summary::getExpectancy, backtestRun::setExpectancy);
+    }
 
-        if (summary.getWinningTrades() != null) {
-            backtestRun.setTotalWins(summary.getWinningTrades());
-        }
-
-        if (summary.getLosingTrades() != null) {
-            backtestRun.setTotalLosses(summary.getLosingTrades());
-        }
-
-        if (summary.getWinRate() != null) {
-            backtestRun.setWinRate(summary.getWinRate());
-        }
-
-        if (summary.getProfitFactor() != null) {
-            backtestRun.setProfitFactor(summary.getProfitFactor());
-        }
-
-        if (summary.getMaxDrawdownPercent() != null) {
-            backtestRun.setMaxDrawdownPct(summary.getMaxDrawdownPercent());
-        }
-
-        if (summary.getTotalReturnPercent() != null) {
-            backtestRun.setReturnPct(summary.getTotalReturnPercent());
-        }
-
-        if (summary.getSharpeRatio() != null) {
-            backtestRun.setSharpeRatio(summary.getSharpeRatio());
-        }
-
-        if (summary.getSortinoRatio() != null) {
-            backtestRun.setSortinoRatio(summary.getSortinoRatio());
-        }
-
-        if (summary.getPsr() != null) {
-            backtestRun.setPsr(summary.getPsr());
-        }
-
-        if (summary.getAvgWin() != null) {
-            backtestRun.setAvgWin(summary.getAvgWin());
-        }
-
-        if (summary.getAvgLoss() != null) {
-            backtestRun.setAvgLoss(summary.getAvgLoss());
-        }
-
-        if (summary.getMaxDrawdownAmount() != null) {
-            backtestRun.setMaxDrawdownAmount(summary.getMaxDrawdownAmount());
-        }
-
-        if (summary.getExpectancy() != null) {
-            backtestRun.setExpectancy(summary.getExpectancy());
+    private static <T> void copyIfPresent(Supplier<T> getter, Consumer<T> setter) {
+        T value = getter.get();
+        if (value != null) {
+            setter.accept(value);
         }
     }
 }

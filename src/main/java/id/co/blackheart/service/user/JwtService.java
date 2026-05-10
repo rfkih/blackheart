@@ -37,17 +37,18 @@ import java.util.function.Function;
 public class JwtService {
 
     /**
-     * Sentinel that matches the dev-only default in application.properties. If
-     * the process starts with this value AND the active profile isn't `dev`
+     * Sentinel that matches the dev-only default in application.properties byte-for-byte.
+     * If the process starts with this value AND the active profile isn't {@code dev}
      * we refuse to boot — otherwise a forgotten JWT_SECRET override silently
      * ships a publicly-known signing key to production.
      */
-    /** Matches the dev-only default in application.properties byte-for-byte. */
-    private static final String DEV_ONLY_SECRET_SENTINEL =
+    private static final String DEV_ONLY_SIGNING_SENTINEL =
             "ZGV2LW9ubHktaW5zZWN1cmUta2V5LWNoYW5nZS1tZS12aWEtSldUX1NFQ1JFVC1lbnY=";
 
+    private static final String CLAIM_USER_ID = "userId";
+
     @Value("${app.jwt.secret}")
-    private String jwtSecret;
+    private String jwtSigningKey;
 
     @Value("${app.jwt.expiration-ms:86400000}")
     private long jwtExpirationMs;
@@ -71,12 +72,12 @@ public class JwtService {
 
     @PostConstruct
     void validateSecretOnStartup() {
-        if (!StringUtils.hasText(jwtSecret)) {
+        if (!StringUtils.hasText(jwtSigningKey)) {
             throw new IllegalStateException(
                     "app.jwt.secret is not configured — set the JWT_SECRET env var to a Base64-encoded 256-bit key"
             );
         }
-        if (DEV_ONLY_SECRET_SENTINEL.equals(jwtSecret)) {
+        if (DEV_ONLY_SIGNING_SENTINEL.equals(jwtSigningKey)) {
             boolean devSafe = Arrays.stream(environment.getActiveProfiles())
                     .map(String::toLowerCase)
                     .anyMatch(DEV_SAFE_PROFILES::contains);
@@ -88,13 +89,12 @@ public class JwtService {
                                 + "that this environment is non-production."
                 );
             }
-            log.warn(
-                    "===== SECURITY WARNING =====\n"
-                            + "Starting with the INSECURE dev-only JWT secret. This key is committed to the\n"
-                            + "repo and anyone can mint tokens against this instance. Acceptable for local\n"
-                            + "development only — set the JWT_SECRET env var before exposing this process\n"
-                            + "on any network other than localhost."
-            );
+            log.warn("""
+                    ===== SECURITY WARNING =====
+                    Starting with the INSECURE dev-only JWT signing key. This key is committed to the
+                    repo and anyone can mint tokens against this instance. Acceptable for local
+                    development only — set the JWT_SECRET env var before exposing this process
+                    on any network other than localhost.""");
         }
     }
 
@@ -102,7 +102,7 @@ public class JwtService {
 
     public String generateToken(User user) {
         Map<String, Object> claims = new HashMap<>();
-        claims.put("userId", user.getUserId().toString());
+        claims.put(CLAIM_USER_ID, user.getUserId().toString());
         claims.put("role", user.getRole());
         return buildToken(claims, user.getEmail(), jwtExpirationMs);
     }
@@ -115,7 +115,7 @@ public class JwtService {
      */
     public String generateShortLivedTicket(String email, UUID userId, String role) {
         Map<String, Object> claims = new HashMap<>();
-        claims.put("userId", userId.toString());
+        claims.put(CLAIM_USER_ID, userId.toString());
         claims.put("role", role);
         return buildToken(claims, email, 60_000L);
     }
@@ -149,11 +149,11 @@ public class JwtService {
     }
 
     public UUID extractUserId(String token) {
-        String userId = extractClaim(token, claims -> claims.get("userId", String.class));
-        if (userId == null) {
+        String rawId = extractClaim(token, claims -> claims.get(CLAIM_USER_ID, String.class));
+        if (rawId == null) {
             throw new JwtException("Missing userId claim in token");
         }
-        return UUID.fromString(userId);
+        return UUID.fromString(rawId);
     }
 
     public String extractRole(String token) {
@@ -188,7 +188,7 @@ public class JwtService {
     }
 
     private SecretKey getSignKey() {
-        byte[] keyBytes = Decoders.BASE64.decode(jwtSecret);
+        byte[] keyBytes = Decoders.BASE64.decode(jwtSigningKey);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 

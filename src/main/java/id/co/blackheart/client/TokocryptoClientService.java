@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.request.MarketOrderRequest;
 import id.co.blackheart.dto.request.OrderDetailRequest;
 import id.co.blackheart.dto.response.TokocryptoResponse;
+import id.co.blackheart.exception.InvalidResponseException;
+import id.co.blackheart.exception.ServiceUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -89,7 +91,7 @@ public class TokocryptoClientService {
 
             return decodeResponse(response);
         } catch (Exception e) {
-            throw new RuntimeException("❌ Error fetching order details: " + e.getMessage(), e);
+            throw new ServiceUnavailableException("❌ Error fetching order details: " + e.getMessage(), e);
         }
     }
 
@@ -104,7 +106,7 @@ public class TokocryptoClientService {
             return responseService;
         } catch (IOException e) {
             log.warn("Error decoding response: {}", e.getMessage());
-            throw new RuntimeException("Failed to decode response", e);
+            throw new InvalidResponseException("Failed to decode response", e);
         }
     }
 }

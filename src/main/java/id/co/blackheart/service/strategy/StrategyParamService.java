@@ -7,6 +7,8 @@ import id.co.blackheart.repository.TradesRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,10 +51,25 @@ public class StrategyParamService {
 
     static final String ACTIVE_CACHE_KEY_PREFIX = "strategy:param:active:";
     private static final Duration CACHE_TTL = Duration.ofHours(1);
+    private static final String NO_PARAM_MSG_PREFIX = "No strategy_param with paramId=";
 
     private final StrategyParamRepository repository;
     private final TradesRepository tradesRepository;
     private final RedisTemplate<String, Object> redisTemplate;
+
+    /**
+     * Self-reference used to route internal @Transactional calls through the
+     * Spring proxy. {@link #upsertActiveOverrides} delegates to
+     * {@link #create} (also @Transactional) — a direct {@code this} call
+     * bypasses the proxy and silences the inner method's transactional advice.
+     * Defaults to {@code this} so unit tests work without a Spring context.
+     */
+    private StrategyParamService self = this;
+
+    @Autowired
+    public void setSelf(@Lazy StrategyParamService self) {
+        this.self = self;
+    }
 
     // ── Hot-path read (live executor) ────────────────────────────────────────────
 
@@ -151,7 +168,7 @@ public class StrategyParamService {
             evictActiveCacheAfterCommit(accountStrategyId);
             return saved;
         }
-        return create(accountStrategyId, "default", resolved, /*activate=*/true, /*sourceBacktestRunId=*/null, updatedBy);
+        return self.create(accountStrategyId, "default", resolved, /*activate=*/true, /*sourceBacktestRunId=*/null, updatedBy);
     }
 
     // ── CRUD (controllers / admin) ───────────────────────────────────────────────
@@ -240,7 +257,7 @@ public class StrategyParamService {
                                 String updatedBy) {
         StrategyParam entity = repository.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         if (entity.isDeleted()) {
             throw new IllegalStateException("Cannot update soft-deleted preset paramId=" + paramId);
         }
@@ -275,7 +292,7 @@ public class StrategyParamService {
     public StrategyParam activate(UUID paramId, String updatedBy) {
         StrategyParam entity = repository.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         if (entity.isDeleted()) {
             throw new IllegalStateException(
                     "Cannot activate soft-deleted preset paramId=" + paramId);
@@ -310,7 +327,7 @@ public class StrategyParamService {
     public StrategyParam deactivate(UUID paramId, String updatedBy) {
         StrategyParam entity = repository.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         if (!entity.isActive()) {
             return entity;
         }
@@ -333,7 +350,7 @@ public class StrategyParamService {
     public void softDelete(UUID paramId, String updatedBy) {
         StrategyParam entity = repository.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         if (entity.isDeleted()) return;
 
         boolean wasActive = entity.isActive();

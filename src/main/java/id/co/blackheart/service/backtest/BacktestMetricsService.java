@@ -146,7 +146,7 @@ public class BacktestMetricsService {
         BigDecimal variance = dailyReturns.stream()
                 .map(r -> r.subtract(mean).pow(2))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(dailyReturns.size() - 1), 10, RoundingMode.HALF_UP);
+                .divide(BigDecimal.valueOf((long) dailyReturns.size() - 1), 10, RoundingMode.HALF_UP);
 
         if (variance.compareTo(BigDecimal.ZERO) == 0) {
             return BigDecimal.ZERO;

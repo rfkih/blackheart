@@ -46,6 +46,8 @@ import java.util.UUID;
 @Tag(name = "UserController", description = "User registration, authentication, and profile management")
 public class UserController {
 
+    private static final String MESSAGE_KEY = "message";
+
     private final UserService userService;
     private final JwtService jwtService;
     private final JwtCookieService jwtCookieService;
@@ -80,7 +82,7 @@ public class UserController {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(java.util.Map.of(
-                        "message", "If an account exists with that email, reset instructions have been issued."
+                        MESSAGE_KEY, "If an account exists with that email, reset instructions have been issued."
                 ))
                 .build());
     }
@@ -96,12 +98,12 @@ public class UserController {
             passwordResetService.confirmReset(request.getToken(), request.getNewPassword());
             return ResponseEntity.ok(ResponseDto.builder()
                     .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                    .data(java.util.Map.of("message", "Password updated. You can now log in."))
+                    .data(java.util.Map.of(MESSAGE_KEY, "Password updated. You can now log in."))
                     .build());
         } catch (id.co.blackheart.service.user.PasswordResetService.ExpiredResetTokenException e) {
             return ResponseEntity.status(HttpStatus.GONE).body(ResponseDto.builder()
                     .responseCode(HttpStatus.GONE.value() + ResponseCode.CUSTOM_ERROR.getCode())
-                    .data(java.util.Map.of("message", e.getMessage()))
+                    .data(java.util.Map.of(MESSAGE_KEY, e.getMessage()))
                     .build());
         }
     }
@@ -117,12 +119,12 @@ public class UserController {
             emailVerificationService.confirm(request.getToken());
             return ResponseEntity.ok(ResponseDto.builder()
                     .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                    .data(java.util.Map.of("message", "Email verified."))
+                    .data(java.util.Map.of(MESSAGE_KEY, "Email verified."))
                     .build());
         } catch (id.co.blackheart.service.user.EmailVerificationService.ExpiredVerificationTokenException e) {
             return ResponseEntity.status(HttpStatus.GONE).body(ResponseDto.builder()
                     .responseCode(HttpStatus.GONE.value() + ResponseCode.CUSTOM_ERROR.getCode())
-                    .data(java.util.Map.of("message", e.getMessage()))
+                    .data(java.util.Map.of(MESSAGE_KEY, e.getMessage()))
                     .build());
         }
     }
@@ -139,7 +141,7 @@ public class UserController {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(java.util.Map.of(
-                        "message", "Verification instructions issued."
+                        MESSAGE_KEY, "Verification instructions issued."
                 ))
                 .build());
     }

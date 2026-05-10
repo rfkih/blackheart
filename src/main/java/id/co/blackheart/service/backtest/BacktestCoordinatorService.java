@@ -192,7 +192,7 @@ public class BacktestCoordinatorService {
             backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getLowPrice());
             backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getHighPrice());
             backtestStateService.updateEquityAndDrawdown(state, monitorCandle.getClosePrice());
-            backtestEquityPointRecorder.record(state, backtestRun, monitorCandle);
+            backtestEquityPointRecorder.recordPoint(state, backtestRun, monitorCandle);
 
             processed++;
             if (processed % PROGRESS_TICK_EVERY == 0) {
@@ -238,72 +238,90 @@ public class BacktestCoordinatorService {
         // stop-loss / TP checks regardless of which strategy owns it. Falls
         // back to the legacy single-slot iteration when no multi-trade state
         // has been registered.
-        java.util.List<BacktestTradePosition> allActivePositions = new java.util.ArrayList<>();
-        if (state.getActiveTradePositionsByStrategy() != null
-                && !CollectionUtils.isEmpty(state.getActiveTradePositionsByStrategy())) {
-            for (java.util.List<BacktestTradePosition> perStrategy
-                    : state.getActiveTradePositionsByStrategy().values()) {
-                if (perStrategy != null) allActivePositions.addAll(perStrategy);
-            }
-        } else if (state.getActiveTradePositions() != null) {
-            allActivePositions.addAll(state.getActiveTradePositions());
-        }
+        List<BacktestTradePosition> allActivePositions = collectAllActivePositions(state);
         if (allActivePositions.isEmpty()) {
             return;
         }
 
         for (BacktestTradePosition position : allActivePositions) {
-            if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
-                continue;
-            }
-
-            updatePriceExtremes(position, monitorCandle);
-            updateTrailingStop(position);
-
-            PositionSnapshot snapshot = backtestPositionSnapshotMapper.toSnapshot(position);
-
-            ListenerContext listenerContext = ListenerContext.builder()
-                    .asset(backtestRun.getAsset())
-                    .interval(MONITOR_INTERVAL)
-                    .positionSnapshot(snapshot)
-                    .latestPrice(monitorCandle.getClosePrice())
-                    .candleOpen(monitorCandle.getOpenPrice())
-                    .candleHigh(monitorCandle.getHighPrice())
-                    .candleLow(monitorCandle.getLowPrice())
-                    .build();
-
-            ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
-
-            if (!listenerDecision.isTriggered()) {
-                continue;
-            }
-
-            backtestTradeExecutorService.closeSinglePositionFromListener(
-                    backtestRun,
-                    state,
-                    position,
-                    listenerDecision.getExitPrice(),
-                    listenerDecision.getExitReason(),
-                    monitorCandle.getEndTime()
-            );
+            evaluateListenerForPosition(backtestRun, state, monitorCandle, position);
         }
     }
 
+    private List<BacktestTradePosition> collectAllActivePositions(BacktestState state) {
+        List<BacktestTradePosition> all = new ArrayList<>();
+        if (state.getActiveTradePositionsByStrategy() != null
+                && !CollectionUtils.isEmpty(state.getActiveTradePositionsByStrategy())) {
+            for (List<BacktestTradePosition> perStrategy
+                    : state.getActiveTradePositionsByStrategy().values()) {
+                if (perStrategy != null) all.addAll(perStrategy);
+            }
+        } else if (state.getActiveTradePositions() != null) {
+            all.addAll(state.getActiveTradePositions());
+        }
+        return all;
+    }
+
+    private void evaluateListenerForPosition(
+            BacktestRun backtestRun,
+            BacktestState state,
+            MarketData monitorCandle,
+            BacktestTradePosition position
+    ) {
+        if (!"OPEN".equalsIgnoreCase(position.getStatus())) {
+            return;
+        }
+
+        updatePriceExtremes(position, monitorCandle);
+        updateTrailingStop(position);
+
+        PositionSnapshot snapshot = backtestPositionSnapshotMapper.toSnapshot(position);
+
+        ListenerContext listenerContext = ListenerContext.builder()
+                .asset(backtestRun.getAsset())
+                .interval(MONITOR_INTERVAL)
+                .positionSnapshot(snapshot)
+                .latestPrice(monitorCandle.getClosePrice())
+                .candleOpen(monitorCandle.getOpenPrice())
+                .candleHigh(monitorCandle.getHighPrice())
+                .candleLow(monitorCandle.getLowPrice())
+                .build();
+
+        ListenerDecision listenerDecision = tradeListenerService.evaluate(listenerContext);
+
+        if (!listenerDecision.isTriggered()) {
+            return;
+        }
+
+        backtestTradeExecutorService.closeSinglePositionFromListener(
+                backtestRun,
+                state,
+                position,
+                listenerDecision.getExitPrice(),
+                listenerDecision.getExitReason(),
+                monitorCandle.getEndTime()
+        );
+    }
+
     /**
-     * Multi-strategy orchestration on every monitor tick. The two phases
-     * (existing-owners management, then per-interval entry fan-out) need to
-     * share the same per-strategy state (snapshot, count, executionMetadata,
-     * resolved interval context) and run in lock-step within one tick —
-     * that's what makes this method long. Splitting it further pushes the
-     * shared state into helper-method parameter lists, trading one Sonar
-     * smell (S138 method length) for another (S107 too many parameters).
-     * The single-strategy fast path is already extracted into
-     * {@link #handleSingleStrategyStep}; the per-strategy helpers
-     * ({@code buildPositionSnapshotFor}, {@code intervalGroupBusy},
-     * {@code biasFor}, {@code buildSyntheticAccountStrategy}) keep the
-     * remaining body declarative.
+     * Multi-strategy orchestration on every monitor tick. Two phases run in
+     * lock-step within one tick: existing owners manage their trades, then
+     * strategies without a trade fan out entries gated by the per-interval
+     * cap. Each per-strategy iteration is delegated to a helper so the
+     * orchestrator method itself stays declarative.
+     *
+     * <p>Cap semantics match LiveOrchestratorCoordinatorService: at most one
+     * active trade (or queued pending entry) per (account, interval) tuple.
+     * Live enforces this implicitly by stopping fan-out at the first opener
+     * within an interval-group; backtest enforces it via
+     * {@link #intervalGroupBusy} in the entry loop. The legacy
+     * {@code backtestRun.maxConcurrentStrategies} field is no longer
+     * consulted — kept on the entity for backwards-compat with persisted
+     * runs, but ineffective. Per-interval routing yields up to N concurrent
+     * trades naturally (where N = number of distinct intervals in use),
+     * matching live engine behaviour.
      */
-    @SuppressWarnings({"java:S138", "java:S107"})
+    @SuppressWarnings("java:S107")
     private void handleStrategyStep(
             BacktestRun backtestRun,
             BacktestState state,
@@ -314,12 +332,6 @@ public class BacktestCoordinatorService {
             Map<String, IntervalContext> perStrategyContext,
             Map<String, BigDecimal> allocationByStrategy
     ) {
-        // Each strategy sees only its own positions, so snapshot/count/
-        // hasOpenTrade are per-strategy. Each loop iteration builds a FRESH
-        // executionMetadata map — sharing one across strategies leaks the
-        // previous strategy's hasOpenTrade flag if any downstream code
-        // stashes the map for later use.
-
         if (executors.size() == 1) {
             handleSingleStrategyStep(backtestRun, state, monitorCandle,
                     executors.getFirst(), requirements,
@@ -327,109 +339,121 @@ public class BacktestCoordinatorService {
             return;
         }
 
-        // ── Multi-strategy orchestrator ─────────────────────────────────
-        //
-        // Cap semantics match LiveOrchestratorCoordinatorService: at most one
-        // active trade (or queued pending entry) per (account, interval)
-        // tuple. Live enforces this implicitly by stopping fan-out at the
-        // first opener within an interval-group; backtest enforces it via
-        // the intervalGroupBusy() check in the entry loop below.
-        //
-        // The legacy backtestRun.maxConcurrentStrategies field is no longer
-        // consulted — kept on the entity for backwards-compat with persisted
-        // runs, but ineffective. Per-interval routing yields up to N
-        // concurrent trades naturally (where N = number of distinct
-        // intervals in use), matching how the live engine behaves.
-
         // (1) Existing owners manage their trades — but ONLY when this
         // monitor tick aligns with the owner's strategy interval.
-        java.util.Set<String> ownersAtTickStart = state.getActiveTradesByStrategy() == null
-                ? java.util.Collections.emptySet()
-                : new java.util.HashSet<>(state.getActiveTradesByStrategy().keySet());
+        Set<String> ownersAtTickStart = state.getActiveTradesByStrategy() == null
+                ? Collections.emptySet()
+                : new HashSet<>(state.getActiveTradesByStrategy().keySet());
         for (String ownerCode : ownersAtTickStart) {
-            StrategyExecutorEntry ownerEntry = findExecutorByCode(executors, ownerCode);
-            if (ownerEntry == null) continue;
-            IntervalContext ic = perStrategyContext.get(ownerCode);
-            if (ic == null) continue;
-            MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
-            if (strategyCandle == null) continue;  // owner's bar isn't closing yet
-            FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
-            if (strategyFeature == null) continue;
-
-            PositionSnapshot ownerSnapshot = buildPositionSnapshotFor(state, ownerEntry.code());
-            int ownerOpenCount = countOpenPositionsFor(state, ownerEntry.code());
-
-            AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, ownerEntry.code(), ic.interval(), allocationByStrategy);
-            StrategyRequirements ownerRequirements = ownerEntry.executor().getRequirements();
-            BiasData ownerBias = biasFor(biasByStrategy, ownerEntry.code());
-            EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
-                    backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
-                    ownerSnapshot, ownerOpenCount, true,
-                    buildExecutionMetadata(backtestRun, true),
-                    syntheticAs, ownerRequirements, ownerBias, ic.sortedFeatures(), monitorCandle);
-
-            StrategyDecision decision = ownerEntry.executor().execute(enrichedContext);
-            log.debug("Orchestrator active-trade | owner={} interval={} reason={}",
-                    ownerEntry.code(), ic.interval(), decision.getReason());
-            backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+            manageOwnerActiveTrade(backtestRun, state, monitorCandle, ownerCode,
+                    executors, biasByStrategy, perStrategyContext, allocationByStrategy);
         }
 
         // (2) Strategies without a trade can fire entries — gated by the
         // per-interval-group cap (live parity) AND by whether their own
         // timeframe has a bar closing at this tick.
         for (StrategyExecutorEntry entry : executors) {
-            if (state.hasActiveTradeFor(entry.code())) continue;
-            // Skip strategies that already have a pending entry queued —
-            // storePendingEntry would silently reject anyway, but filtering
-            // here avoids running the strategy executor for nothing.
-            if (state.hasPendingEntryFor(entry.code())) continue;
-
-            IntervalContext ic = perStrategyContext.get(entry.code());
-            if (ic == null) continue;
-
-            // Per-interval-group cap (matches live's
-            // LiveOrchestratorCoordinatorService.fanOutForEntry semantic):
-            // skip if any other strategy on THIS interval already holds an
-            // active trade or pending entry. With sequential iteration, the
-            // first strategy in declaration order to fire an entry on this
-            // interval claims the slot — subsequent strategies on the same
-            // interval are skipped this tick.
-            if (intervalGroupBusy(state, executors, ic.interval(), perStrategyContext)) {
-                log.debug("Orchestrator entry skipped | strategy={} reason=interval-group-busy interval={}",
-                        entry.code(), ic.interval());
-                continue;
-            }
-
-            MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
-            if (strategyCandle == null) continue;
-            FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
-            if (strategyFeature == null) continue;
-
-            // Entry path: this strategy has no trade by construction (filtered
-            // above). Snapshot/count/hasOpenTrade reflect THIS strategy's
-            // empty state, not "any strategy in the cap".
-            PositionSnapshot entrySnapshot = PositionSnapshot.builder().hasOpenPosition(false).build();
-
-            AccountStrategy syntheticAs = buildSyntheticAccountStrategy(backtestRun, entry.code(), ic.interval(), allocationByStrategy);
-            StrategyRequirements entryRequirements = entry.executor().getRequirements();
-            BiasData entryBias = biasFor(biasByStrategy, entry.code());
-            EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
-                    backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
-                    entrySnapshot, 0, false,
-                    buildExecutionMetadata(backtestRun, false),
-                    syntheticAs, entryRequirements, entryBias,
-                    ic.sortedFeatures(), monitorCandle);
-
-            StrategyDecision decision = entry.executor().execute(enrichedContext);
-            if (isEntryDecision(decision)) {
-                if (!StringUtils.hasText(decision.getStrategyCode())) {
-                    decision.setStrategyCode(entry.code());
-                }
-                log.debug("Orchestrator entry | strategy={} interval={} side={}",
-                        entry.code(), ic.interval(), decision.getSide());
-                backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
-            }
+            tryFireEntry(backtestRun, state, monitorCandle, entry,
+                    executors, biasByStrategy, perStrategyContext, allocationByStrategy);
         }
+    }
+
+    @SuppressWarnings("java:S107")
+    private void manageOwnerActiveTrade(
+            BacktestRun backtestRun,
+            BacktestState state,
+            MarketData monitorCandle,
+            String ownerCode,
+            List<StrategyExecutorEntry> executors,
+            Map<String, BiasData> biasByStrategy,
+            Map<String, IntervalContext> perStrategyContext,
+            Map<String, BigDecimal> allocationByStrategy
+    ) {
+        StrategyExecutorEntry ownerEntry = findExecutorByCode(executors, ownerCode);
+        if (ownerEntry == null) return;
+        IntervalContext ic = perStrategyContext.get(ownerCode);
+        if (ic == null) return;
+        MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
+        if (strategyCandle == null) return;  // owner's bar isn't closing yet
+        FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
+        if (strategyFeature == null) return;
+
+        PositionSnapshot ownerSnapshot = buildPositionSnapshotFor(state, ownerEntry.code());
+        int ownerOpenCount = countOpenPositionsFor(state, ownerEntry.code());
+
+        AccountStrategy syntheticAs = buildSyntheticAccountStrategy(
+                backtestRun, ownerEntry.code(), ic.interval(), allocationByStrategy);
+        StrategyRequirements ownerRequirements = ownerEntry.executor().getRequirements();
+        BiasData ownerBias = biasFor(biasByStrategy, ownerEntry.code());
+        EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
+                backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
+                ownerSnapshot, ownerOpenCount, true,
+                buildExecutionMetadata(backtestRun, true),
+                syntheticAs, ownerRequirements, ownerBias, ic.sortedFeatures(), monitorCandle);
+
+        StrategyDecision decision = ownerEntry.executor().execute(enrichedContext);
+        log.debug("Orchestrator active-trade | owner={} interval={} reason={}",
+                ownerEntry.code(), ic.interval(), decision.getReason());
+        backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+    }
+
+    @SuppressWarnings("java:S107")
+    private void tryFireEntry(
+            BacktestRun backtestRun,
+            BacktestState state,
+            MarketData monitorCandle,
+            StrategyExecutorEntry entry,
+            List<StrategyExecutorEntry> executors,
+            Map<String, BiasData> biasByStrategy,
+            Map<String, IntervalContext> perStrategyContext,
+            Map<String, BigDecimal> allocationByStrategy
+    ) {
+        // Skip strategies that already hold a trade or have a pending entry
+        // queued — storePendingEntry would silently reject the latter anyway.
+        if (state.hasActiveTradeFor(entry.code()) || state.hasPendingEntryFor(entry.code())) return;
+
+        IntervalContext ic = perStrategyContext.get(entry.code());
+        if (ic == null) return;
+
+        // Per-interval-group cap (matches live's
+        // LiveOrchestratorCoordinatorService.fanOutForEntry semantic):
+        // first strategy in declaration order on this interval claims the
+        // slot — subsequent strategies on the same interval are skipped.
+        if (intervalGroupBusy(state, executors, ic.interval(), perStrategyContext)) {
+            log.debug("Orchestrator entry skipped | strategy={} reason=interval-group-busy interval={}",
+                    entry.code(), ic.interval());
+            return;
+        }
+
+        MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
+        if (strategyCandle == null) return;
+        FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
+        if (strategyFeature == null) return;
+
+        // Entry path: this strategy has no trade by construction (filtered
+        // above). Snapshot/count/hasOpenTrade reflect THIS strategy's empty
+        // state, not "any strategy in the cap".
+        PositionSnapshot entrySnapshot = PositionSnapshot.builder().hasOpenPosition(false).build();
+
+        AccountStrategy syntheticAs = buildSyntheticAccountStrategy(
+                backtestRun, entry.code(), ic.interval(), allocationByStrategy);
+        StrategyRequirements entryRequirements = entry.executor().getRequirements();
+        BiasData entryBias = biasFor(biasByStrategy, entry.code());
+        EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
+                backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
+                entrySnapshot, 0, false,
+                buildExecutionMetadata(backtestRun, false),
+                syntheticAs, entryRequirements, entryBias,
+                ic.sortedFeatures(), monitorCandle);
+
+        StrategyDecision decision = entry.executor().execute(enrichedContext);
+        if (!isEntryDecision(decision)) return;
+        if (!StringUtils.hasText(decision.getStrategyCode())) {
+            decision.setStrategyCode(entry.code());
+        }
+        log.debug("Orchestrator entry | strategy={} interval={} side={}",
+                entry.code(), ic.interval(), decision.getSide());
+        backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
     }
 
     /**
@@ -482,8 +506,9 @@ public class BacktestCoordinatorService {
      * interval, every strategy's IntervalContext points at the same maps
      * (no extra DB load). When {@code strategyIntervals} is set, each
      * unique interval gets its own load + maps.
+     *
+     * <p>Package-private for focused tests.
      */
-    /** Package-private for focused tests. */
     record IntervalContext(
             String interval,
             Map<LocalDateTime, MarketData> candleByEndTime,
@@ -669,8 +694,9 @@ public class BacktestCoordinatorService {
      * <p>
      * Loads are cached by biasInterval — two strategies that want the same
      * bias timeframe share a single DB query.
+     *
+     * <p>Package-private for focused tests.
      */
-    /** Package-private for focused tests. */
     Map<String, BiasData> preloadBiasDataPerStrategy(
             BacktestRun backtestRun, List<StrategyExecutorEntry> executors
     ) {
@@ -732,47 +758,6 @@ public class BacktestCoordinatorService {
         return new BiasData(sortedBiasCandles, biasFeatureByStartTime);
     }
 
-    private BiasData preloadBiasData(BacktestRun backtestRun, StrategyRequirements requirements) {
-        if (requirements == null
-                || !requirements.isRequireBiasTimeframe()
-                || !StringUtils.hasText(requirements.getBiasInterval())) {
-            return new BiasData(List.of(), Map.of());
-        }
-
-        List<MarketData> biasCandles = marketDataRepository.findBySymbolIntervalAndRange(
-                backtestRun.getAsset(),
-                requirements.getBiasInterval(),
-                backtestRun.getStartTime(),
-                backtestRun.getEndTime()
-        );
-
-        List<FeatureStore> biasFeatures = featureStoreRepository.findBySymbolIntervalAndRange(
-                backtestRun.getAsset(),
-                requirements.getBiasInterval(),
-                backtestRun.getStartTime(),
-                backtestRun.getEndTime()
-        );
-
-        Map<LocalDateTime, FeatureStore> biasFeatureByStartTime = biasFeatures == null
-                ? Map.of()
-                : biasFeatures.stream()
-                .filter(Objects::nonNull)
-                .collect(Collectors.toMap(
-                        FeatureStore::getStartTime,
-                        Function.identity(),
-                        (existing, replacement) -> existing
-                ));
-
-        List<MarketData> sortedBiasCandles = biasCandles == null
-                ? List.of()
-                : biasCandles.stream()
-                .filter(Objects::nonNull)
-                .sorted(Comparator.comparing(MarketData::getEndTime))
-                .toList();
-
-        return new BiasData(sortedBiasCandles, biasFeatureByStartTime);
-    }
-
     private FeatureStore resolvePreviousFeatureStore(
             List<FeatureStore> sortedFeatures,
             LocalDateTime currentStartTime
@@ -811,7 +796,7 @@ public class BacktestCoordinatorService {
      * see another strategy's hasOpenTrade flag bleed through (Fix H).
      */
     private Map<String, Object> buildExecutionMetadata(BacktestRun backtestRun, boolean hasOpenTrade) {
-        Map<String, Object> meta = new HashMap<>(3);
+        Map<String, Object> meta = HashMap.newHashMap(3);
         meta.put("source", EXECUTION_SOURCE);
         meta.put("backtestRunId", backtestRun.getBacktestRunId());
         meta.put("hasOpenTrade", hasOpenTrade);
@@ -882,15 +867,15 @@ public class BacktestCoordinatorService {
     }
 
     private List<BacktestTradePosition> strategyPositions(BacktestState state, String strategyCode) {
-        if (state == null) return null;
+        if (state == null) return List.of();
         Map<String, List<BacktestTradePosition>> byStrategy = state.getActiveTradePositionsByStrategy();
         if (!CollectionUtils.isEmpty(byStrategy)) {
             // See strategyTrade — same rule applies to positions.
-            if (strategyCode == null) return null;
-            List<BacktestTradePosition> p = state.getActivePositionsFor(strategyCode);
-            return p.isEmpty() ? null : p;
+            if (strategyCode == null) return List.of();
+            return state.getActivePositionsFor(strategyCode);
         }
-        return state.getActiveTradePositions();
+        List<BacktestTradePosition> legacy = state.getActiveTradePositions();
+        return legacy == null ? List.of() : legacy;
     }
 
     private String resolveStrategyLookupCode(BacktestRun backtestRun) {
@@ -923,8 +908,9 @@ public class BacktestCoordinatorService {
      * ordering. Strategies without a resolvable persistent AS (or with no
      * priority value) sort to the end with a neutral default; ties fall
      * back to declaration order via {@link Comparator#thenComparingInt}.
+     *
+     * <p>Package-private for focused tests.
      */
-    /** Package-private for focused tests. */
     List<StrategyExecutorEntry> resolveStrategyExecutors(BacktestRun backtestRun) {
         List<String> codes = resolveStrategyCodeList(backtestRun);
         Map<String, Integer> priorityByCode = resolvePriorityOrders(backtestRun, codes);
@@ -954,8 +940,9 @@ public class BacktestCoordinatorService {
      * if/when the two paths get unified, this becomes a free lookup).
      * Strategies with no resolvable AS or null priority map to MAX_VALUE
      * (sort to end).
+     *
+     * <p>Package-private for focused tests.
      */
-    /** Package-private for focused tests. */
     Map<String, Integer> resolvePriorityOrders(BacktestRun backtestRun, List<String> codes) {
         Map<String, Integer> out = new HashMap<>();
         Map<String, UUID> idMap = backtestRun.getStrategyAccountStrategyIds();
@@ -1029,8 +1016,9 @@ public class BacktestCoordinatorService {
      * a new trade until the slot frees up. Mirrors
      * {@link id.co.blackheart.service.live.LiveOrchestratorCoordinatorService}'s
      * fan-out-stops-at-first-opener pattern.
+     *
+     * <p>Package-private for focused tests.
      */
-    /** Package-private for focused tests. */
     boolean intervalGroupBusy(
             BacktestState state,
             List<StrategyExecutorEntry> executors,
@@ -1040,10 +1028,10 @@ public class BacktestCoordinatorService {
         if (interval == null) return false;
         for (StrategyExecutorEntry entry : executors) {
             IntervalContext ic = perStrategyContext.get(entry.code());
-            if (ic == null) continue;
-            if (!interval.equals(ic.interval())) continue;
-            if (state.hasActiveTradeFor(entry.code())) return true;
-            if (state.hasPendingEntryFor(entry.code())) return true;
+            if (ic == null || !interval.equals(ic.interval())) continue;
+            if (state.hasActiveTradeFor(entry.code()) || state.hasPendingEntryFor(entry.code())) {
+                return true;
+            }
         }
         return false;
     }
@@ -1117,8 +1105,9 @@ public class BacktestCoordinatorService {
      * <p>
      * Strategy code matching is case-insensitive against the canonicalised
      * uppercase keys persisted by {@code BacktestService.canonicaliseAllocations}.
+     *
+     * <p>Package-private for focused unit tests; see BacktestAllocationResolutionTest.
      */
-    /** Package-private for focused unit tests; see BacktestAllocationResolutionTest. */
     Map<String, BigDecimal> resolveAllocationsForRun(
             BacktestRun backtestRun, List<StrategyExecutorEntry> executors
     ) {
@@ -1128,38 +1117,43 @@ public class BacktestCoordinatorService {
 
         for (StrategyExecutorEntry entry : executors) {
             String code = entry.code();
-            BigDecimal value = null;
-
-            if (wizardOverrides != null && code != null) {
-                BigDecimal override = wizardOverrides.get(code.toUpperCase());
-                if (override != null && override.signum() > 0) {
-                    value = override;
-                }
-            }
-
-            if (value == null) {
-                UUID resolvedId = (idMap != null && code != null && idMap.containsKey(code))
-                        ? idMap.get(code)
-                        : backtestRun.getAccountStrategyId();
-                if (resolvedId != null) {
-                    AccountStrategy persisted = accountStrategyRepository.findById(resolvedId).orElse(null);
-                    if (persisted != null && persisted.getCapitalAllocationPct() != null) {
-                        // Fix G — respect explicit zero. Only fall through
-                        // when the column is null (never set), not when the
-                        // user deliberately set 0.
-                        value = persisted.getCapitalAllocationPct();
-                    }
-                }
-            }
-
-            if (value == null) {
-                value = new BigDecimal("100");
-            }
-
+            BigDecimal value = resolveAllocationForCode(code, wizardOverrides, idMap, backtestRun);
             out.put(code, value);
             log.debug("Resolved capital allocation | strategy={} pct={}", code, value);
         }
         return out;
+    }
+
+    private BigDecimal resolveAllocationForCode(
+            String code,
+            Map<String, BigDecimal> wizardOverrides,
+            Map<String, UUID> idMap,
+            BacktestRun backtestRun
+    ) {
+        BigDecimal override = resolveWizardOverride(wizardOverrides, code);
+        if (override != null) return override;
+        BigDecimal persisted = resolvePersistedAllocation(idMap, code, backtestRun);
+        if (persisted != null) return persisted;
+        return new BigDecimal("100");
+    }
+
+    private BigDecimal resolveWizardOverride(Map<String, BigDecimal> wizardOverrides, String code) {
+        if (wizardOverrides == null || code == null) return null;
+        BigDecimal override = wizardOverrides.get(code.toUpperCase());
+        return (override != null && override.signum() > 0) ? override : null;
+    }
+
+    private BigDecimal resolvePersistedAllocation(
+            Map<String, UUID> idMap, String code, BacktestRun backtestRun
+    ) {
+        UUID resolvedId = (idMap != null && code != null && idMap.containsKey(code))
+                ? idMap.get(code)
+                : backtestRun.getAccountStrategyId();
+        if (resolvedId == null) return null;
+        AccountStrategy persisted = accountStrategyRepository.findById(resolvedId).orElse(null);
+        // Fix G — respect explicit zero. Returns null only when the column was
+        // never set, not when the user deliberately set 0.
+        return (persisted == null) ? null : persisted.getCapitalAllocationPct();
     }
 
     private void forceCloseRemainingOpenTrade(
@@ -1260,60 +1254,60 @@ public class BacktestCoordinatorService {
                 || position.getEntryPrice() == null) {
             return;
         }
-
         if ("LONG".equalsIgnoreCase(position.getSide())) {
-            BigDecimal highestPrice = position.getHighestPriceSinceEntry();
-            if (highestPrice == null) {
-                return;
-            }
-            BigDecimal offset = position.getEntryPrice().subtract(position.getInitialTrailingStopPrice());
-            if (offset.compareTo(BigDecimal.ZERO) <= 0) {
-                return;
-            }
-            BigDecimal newTrailing = highestPrice.subtract(offset);
-            if (newTrailing.compareTo(position.getTrailingStopPrice()) > 0) {
-                position.setTrailingStopPrice(newTrailing);
-            }
+            updateLongTrailingStop(position);
         } else if ("SHORT".equalsIgnoreCase(position.getSide())) {
-            BigDecimal lowestPrice = position.getLowestPriceSinceEntry();
-            if (lowestPrice == null) {
-                return;
-            }
-            BigDecimal offset = position.getInitialTrailingStopPrice().subtract(position.getEntryPrice());
-            if (offset.compareTo(BigDecimal.ZERO) <= 0) {
-                return;
-            }
-            BigDecimal newTrailing = lowestPrice.add(offset);
-            if (newTrailing.compareTo(position.getTrailingStopPrice()) < 0) {
-                position.setTrailingStopPrice(newTrailing);
-            }
+            updateShortTrailingStop(position);
+        }
+    }
+
+    private void updateLongTrailingStop(BacktestTradePosition position) {
+        BigDecimal highestPrice = position.getHighestPriceSinceEntry();
+        if (highestPrice == null) return;
+        BigDecimal offset = position.getEntryPrice().subtract(position.getInitialTrailingStopPrice());
+        if (offset.compareTo(BigDecimal.ZERO) <= 0) return;
+        BigDecimal newTrailing = highestPrice.subtract(offset);
+        if (newTrailing.compareTo(position.getTrailingStopPrice()) > 0) {
+            position.setTrailingStopPrice(newTrailing);
+        }
+    }
+
+    private void updateShortTrailingStop(BacktestTradePosition position) {
+        BigDecimal lowestPrice = position.getLowestPriceSinceEntry();
+        if (lowestPrice == null) return;
+        BigDecimal offset = position.getInitialTrailingStopPrice().subtract(position.getEntryPrice());
+        if (offset.compareTo(BigDecimal.ZERO) <= 0) return;
+        BigDecimal newTrailing = lowestPrice.add(offset);
+        if (newTrailing.compareTo(position.getTrailingStopPrice()) < 0) {
+            position.setTrailingStopPrice(newTrailing);
         }
     }
 
     private void updatePriceExtremes(BacktestTradePosition position, MarketData candle) {
-        if ("LONG".equalsIgnoreCase(position.getSide())) {
-            // Track both best (for trailing/BE) and worst (for MAE) intrabar prices
-            if (candle.getHighPrice() != null
-                    && (position.getHighestPriceSinceEntry() == null
-                    || candle.getHighPrice().compareTo(position.getHighestPriceSinceEntry()) > 0)) {
-                position.setHighestPriceSinceEntry(candle.getHighPrice());
-            }
-            if (candle.getLowPrice() != null
-                    && (position.getLowestPriceSinceEntry() == null
-                    || candle.getLowPrice().compareTo(position.getLowestPriceSinceEntry()) < 0)) {
-                position.setLowestPriceSinceEntry(candle.getLowPrice());
-            }
-        } else if ("SHORT".equalsIgnoreCase(position.getSide())) {
-            if (candle.getLowPrice() != null
-                    && (position.getLowestPriceSinceEntry() == null
-                    || candle.getLowPrice().compareTo(position.getLowestPriceSinceEntry()) < 0)) {
-                position.setLowestPriceSinceEntry(candle.getLowPrice());
-            }
-            if (candle.getHighPrice() != null
-                    && (position.getHighestPriceSinceEntry() == null
-                    || candle.getHighPrice().compareTo(position.getHighestPriceSinceEntry()) > 0)) {
-                position.setHighestPriceSinceEntry(candle.getHighPrice());
-            }
+        // LONG and SHORT both track best + worst intrabar prices (best for
+        // trailing/BE, worst for MAE) — branching only guards against
+        // mis-labelled positions where side ≠ LONG/SHORT.
+        if (!"LONG".equalsIgnoreCase(position.getSide())
+                && !"SHORT".equalsIgnoreCase(position.getSide())) {
+            return;
+        }
+        updateHighestPrice(position, candle.getHighPrice());
+        updateLowestPrice(position, candle.getLowPrice());
+    }
+
+    private void updateHighestPrice(BacktestTradePosition position, BigDecimal price) {
+        if (price != null
+                && (position.getHighestPriceSinceEntry() == null
+                || price.compareTo(position.getHighestPriceSinceEntry()) > 0)) {
+            position.setHighestPriceSinceEntry(price);
+        }
+    }
+
+    private void updateLowestPrice(BacktestTradePosition position, BigDecimal price) {
+        if (price != null
+                && (position.getLowestPriceSinceEntry() == null
+                || price.compareTo(position.getLowestPriceSinceEntry()) < 0)) {
+            position.setLowestPriceSinceEntry(price);
         }
     }
 

@@ -113,11 +113,75 @@ public class MonteCarloEngine {
         }
 
         int n = request.getNumberOfSimulations();
+        BigDecimal ruinFloor = computeRuinFloor(initialCapital, request);
 
-        BigDecimal ruinFloor = initialCapital
+        List<PathResult> results = simulateAllPaths(samples, request, initialCapital, ruinFloor, effectiveSeed, n);
+        List<PathResult> byEquity = results.stream()
+                .sorted(Comparator.comparing(PathResult::finalEquity))
+                .toList();
+
+        MonteCarloPathSummary worstPath  = replayWithCurve("WORST",  byEquity.getFirst(),  samples, request, initialCapital, ruinFloor);
+        MonteCarloPathSummary medianPath = replayWithCurve("MEDIAN", byEquity.get(n / 2),  samples, request, initialCapital, ruinFloor);
+        MonteCarloPathSummary bestPath   = replayWithCurve("BEST",   byEquity.get(n - 1),  samples, request, initialCapital, ruinFloor);
+
+        List<BigDecimal> sortedEquities  = byEquity.stream().map(PathResult::finalEquity).toList();
+        List<BigDecimal> sortedReturns   = results.stream().map(PathResult::totalReturnPct).sorted().toList();
+        List<BigDecimal> sortedDrawdowns = results.stream().map(PathResult::maxDrawdownPct).sorted().toList();
+
+        BreachCounts counts = countBreaches(results, initialCapital);
+        SourceStats source  = computeSourceStats(samples, backtestInitialCapital);
+
+        BigDecimal nd = BigDecimal.valueOf(n);
+        Map<String, BigDecimal> percentileMap = buildPercentileMap(sortedEquities, request.getConfidenceLevels());
+
+        return MonteCarloResponse.builder()
+                .monteCarloRunId(monteCarloRunId)
+                .backtestRunId(backtestRunId)
+                .simulationMode(request.getSimulationMode())
+                .numberOfSimulations(n)
+                .tradesUsed(samples.size())
+                .initialCapital(initialCapital)
+                .ruinThresholdPct(request.getRuinThresholdPct())
+                .maxAcceptableDrawdownPct(request.getMaxAcceptableDrawdownPct())
+                .effectiveSeed(effectiveSeed)
+                .sourceMeanTradePnl(source.mean())
+                .sourceMedianTradePnl(source.median())
+                .sourceStdDevTradePnl(source.stdDev())
+                .sourceWinRate(source.winRate())
+                .meanFinalEquity(mean(sortedEquities))
+                .medianFinalEquity(percentile(sortedEquities, 0.50))
+                .minFinalEquity(sortedEquities.getFirst())
+                .maxFinalEquity(sortedEquities.get(n - 1))
+                .finalEquityPercentiles(percentileMap)
+                .meanTotalReturnPct(mean(sortedReturns))
+                .medianTotalReturnPct(percentile(sortedReturns, 0.50))
+                .minTotalReturnPct(sortedReturns.getFirst())
+                .maxTotalReturnPct(sortedReturns.get(n - 1))
+                .meanMaxDrawdownPct(mean(sortedDrawdowns))
+                .medianMaxDrawdownPct(percentile(sortedDrawdowns, 0.50))
+                .worstMaxDrawdownPct(sortedDrawdowns.get(n - 1))
+                .probabilityOfRuin(BigDecimal.valueOf(counts.ruin()).divide(nd, 6, RoundingMode.HALF_UP))
+                .probabilityOfDrawdownBreach(BigDecimal.valueOf(counts.drawdown()).divide(nd, 6, RoundingMode.HALF_UP))
+                .probabilityOfProfit(BigDecimal.valueOf(counts.profit()).divide(nd, 6, RoundingMode.HALF_UP))
+                .bestPath(bestPath)
+                .medianPath(medianPath)
+                .worstPath(worstPath)
+                .build();
+    }
+
+    private BigDecimal computeRuinFloor(BigDecimal initialCapital, MonteCarloRequest request) {
+        return initialCapital
                 .multiply(ONE.subtract(request.getRuinThresholdPct().divide(HUNDRED, 12, RoundingMode.HALF_UP)))
                 .setScale(SCALE, RoundingMode.HALF_UP);
+    }
 
+    private List<PathResult> simulateAllPaths(
+            List<TradeReturnSample> samples,
+            MonteCarloRequest request,
+            BigDecimal initialCapital,
+            BigDecimal ruinFloor,
+            long effectiveSeed,
+            int n) {
         SplittableRandom seeder = new SplittableRandom(effectiveSeed);
         long[] pathSeeds = new long[n];
         for (int i = 0; i < n; i++) {
@@ -131,92 +195,40 @@ public class MonteCarloEngine {
             results.add(simulatePath(i, pathSeeds[i], sample, initialCapital, ruinFloor,
                     request.getMaxAcceptableDrawdownPct(), false));
         }
+        return results;
+    }
 
-        List<PathResult> byEquity = results.stream()
-                .sorted(Comparator.comparing(PathResult::finalEquity))
-                .toList();
+    /** Path-outcome breach tallies — ruin / drawdown-threshold / profitable. */
+    private record BreachCounts(long ruin, long drawdown, long profit) {}
 
-        PathResult worstResult  = byEquity.getFirst();
-        PathResult medianResult = byEquity.get(n / 2);
-        PathResult bestResult   = byEquity.get(n - 1);
-
-        MonteCarloPathSummary worstPath  = replayWithCurve("WORST",  worstResult,  samples, request, initialCapital, ruinFloor);
-        MonteCarloPathSummary medianPath = replayWithCurve("MEDIAN", medianResult, samples, request, initialCapital, ruinFloor);
-        MonteCarloPathSummary bestPath   = replayWithCurve("BEST",   bestResult,   samples, request, initialCapital, ruinFloor);
-
-        List<BigDecimal> sortedEquities = byEquity.stream().map(PathResult::finalEquity).toList();
-
-        List<BigDecimal> sortedReturns = results.stream()
-                .map(PathResult::totalReturnPct)
-                .sorted()
-                .toList();
-
-        List<BigDecimal> sortedDrawdowns = results.stream()
-                .map(PathResult::maxDrawdownPct)
-                .sorted()
-                .toList();
-
-        long ruinCount           = results.stream().filter(PathResult::ruinBreached).count();
-        long drawdownBreachCount = results.stream().filter(PathResult::drawdownThresholdBreached).count();
-        long profitCount         = results.stream()
+    private static BreachCounts countBreaches(List<PathResult> results, BigDecimal initialCapital) {
+        long ruin = results.stream().filter(PathResult::ruinBreached).count();
+        long drawdown = results.stream().filter(PathResult::drawdownThresholdBreached).count();
+        long profit = results.stream()
                 .filter(r -> r.finalEquity().compareTo(initialCapital) > 0)
                 .count();
+        return new BreachCounts(ruin, drawdown, profit);
+    }
 
-        BigDecimal nd = BigDecimal.valueOf(n);
+    /** Distributional stats of the source (historical) trade PnLs in absolute units. */
+    private record SourceStats(BigDecimal mean, BigDecimal median, BigDecimal stdDev, BigDecimal winRate) {}
 
+    private SourceStats computeSourceStats(List<TradeReturnSample> samples, BigDecimal backtestInitialCapital) {
         List<BigDecimal> absReturns = samples.stream()
                 .map(s -> s.normalizedReturn().multiply(backtestInitialCapital).setScale(SCALE, RoundingMode.HALF_UP))
                 .sorted()
                 .toList();
 
-        BigDecimal sourceMean   = mean(absReturns);
-        BigDecimal sourceMedian = percentile(absReturns, 0.50);
-        BigDecimal sourceStdDev = stdDev(absReturns, sourceMean);
+        BigDecimal m   = mean(absReturns);
+        BigDecimal med = percentile(absReturns, 0.50);
+        BigDecimal sd  = stdDev(absReturns, m);
 
         long wins = samples.stream().filter(TradeReturnSample::win).count();
-        BigDecimal sourceWinRate = samples.isEmpty() ? ZERO
+        BigDecimal winRate = samples.isEmpty() ? ZERO
                 : BigDecimal.valueOf(wins)
                         .divide(BigDecimal.valueOf(samples.size()), 6, RoundingMode.HALF_UP)
                         .multiply(HUNDRED);
-
-        Map<String, BigDecimal> percentileMap = buildPercentileMap(sortedEquities, request.getConfidenceLevels());
-
-        return MonteCarloResponse.builder()
-                .monteCarloRunId(monteCarloRunId)
-                .backtestRunId(backtestRunId)
-                .simulationMode(request.getSimulationMode())
-                .numberOfSimulations(n)
-                .tradesUsed(samples.size())
-                .initialCapital(initialCapital)
-                .ruinThresholdPct(request.getRuinThresholdPct())
-                .maxAcceptableDrawdownPct(request.getMaxAcceptableDrawdownPct())
-                .effectiveSeed(effectiveSeed)
-                .sourceMeanTradePnl(sourceMean)
-                .sourceMedianTradePnl(sourceMedian)
-                .sourceStdDevTradePnl(sourceStdDev)
-                .sourceWinRate(sourceWinRate)
-                .meanFinalEquity(mean(sortedEquities))
-                .medianFinalEquity(percentile(sortedEquities, 0.50))
-                .minFinalEquity(sortedEquities.getFirst())
-                .maxFinalEquity(sortedEquities.get(n - 1))
-                .finalEquityPercentiles(percentileMap)
-                .meanTotalReturnPct(mean(sortedReturns))
-                .medianTotalReturnPct(percentile(sortedReturns, 0.50))
-                .minTotalReturnPct(sortedReturns.getFirst())
-                .maxTotalReturnPct(sortedReturns.get(n - 1))
-                .meanMaxDrawdownPct(mean(sortedDrawdowns))
-                .medianMaxDrawdownPct(percentile(sortedDrawdowns, 0.50))
-                .worstMaxDrawdownPct(sortedDrawdowns.get(n - 1))
-                .probabilityOfRuin(
-                        BigDecimal.valueOf(ruinCount).divide(nd, 6, RoundingMode.HALF_UP))
-                .probabilityOfDrawdownBreach(
-                        BigDecimal.valueOf(drawdownBreachCount).divide(nd, 6, RoundingMode.HALF_UP))
-                .probabilityOfProfit(
-                        BigDecimal.valueOf(profitCount).divide(nd, 6, RoundingMode.HALF_UP))
-                .bestPath(bestPath)
-                .medianPath(medianPath)
-                .worstPath(worstPath)
-                .build();
+        return new SourceStats(m, med, sd, winRate);
     }
 
 
@@ -274,53 +286,67 @@ public class MonteCarloEngine {
         boolean drawdownBreached  = false;
 
         List<BigDecimal> curve = captureEquityCurve ? new ArrayList<>() : null;
-        if (captureEquityCurve) curve.add(equity);
+        appendIfCapturing(curve, equity);
 
         for (TradeReturnSample trade : trades) {
-            equity = equity
-                    .multiply(ONE.add(trade.normalizedReturn()))
-                    .max(ZERO)
-                    .setScale(SCALE, RoundingMode.HALF_UP);
+            equity = applyTrade(equity, trade.normalizedReturn());
 
             if (equity.compareTo(ZERO) == 0) {
                 ruinBreached = true;
                 maxDrawdownPct = HUNDRED;
-                if (captureEquityCurve) curve.add(equity);
+                appendIfCapturing(curve, equity);
                 break;
             }
 
-            if (equity.compareTo(peakEquity) > 0) {
-                peakEquity = equity;
-            }
-
-            if (peakEquity.compareTo(ZERO) > 0) {
-                BigDecimal dd = peakEquity.subtract(equity)
-                        .divide(peakEquity, SCALE, RoundingMode.HALF_UP)
-                        .multiply(HUNDRED);
-
-                if (dd.compareTo(maxDrawdownPct) > 0) {
-                    maxDrawdownPct = dd;
-                }
-                if (!drawdownBreached && dd.compareTo(maxDrawdownThreshold) >= 0) {
-                    drawdownBreached = true;
-                }
-            }
+            DrawdownUpdate ddu = updateDrawdownAndPeak(
+                    equity, peakEquity, maxDrawdownPct, drawdownBreached, maxDrawdownThreshold);
+            peakEquity = ddu.peakEquity();
+            maxDrawdownPct = ddu.maxDrawdownPct();
+            drawdownBreached = ddu.drawdownBreached();
 
             if (!ruinBreached && equity.compareTo(ruinFloor) <= 0) {
                 ruinBreached = true;
             }
-
-            if (captureEquityCurve) curve.add(equity);
+            appendIfCapturing(curve, equity);
         }
 
-        BigDecimal totalReturnPct = initialCapital.compareTo(ZERO) > 0
-                ? equity.subtract(initialCapital)
-                        .divide(initialCapital, SCALE, RoundingMode.HALF_UP)
-                        .multiply(HUNDRED)
-                : ZERO;
-
+        BigDecimal totalReturnPct = computeReturnPct(equity, initialCapital);
         return new PathResult(index, seed, equity, maxDrawdownPct, totalReturnPct,
                 ruinBreached, drawdownBreached, curve);
+    }
+
+    private static BigDecimal applyTrade(BigDecimal equity, BigDecimal normalizedReturn) {
+        return equity.multiply(ONE.add(normalizedReturn))
+                .max(ZERO)
+                .setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    private static void appendIfCapturing(List<BigDecimal> curve, BigDecimal equity) {
+        if (curve != null) curve.add(equity);
+    }
+
+    private record DrawdownUpdate(BigDecimal peakEquity, BigDecimal maxDrawdownPct, boolean drawdownBreached) {}
+
+    private static DrawdownUpdate updateDrawdownAndPeak(BigDecimal equity, BigDecimal peakEquity,
+                                                        BigDecimal currentMaxDD, boolean ddBreached,
+                                                        BigDecimal ddThreshold) {
+        BigDecimal newPeak = equity.compareTo(peakEquity) > 0 ? equity : peakEquity;
+        if (newPeak.compareTo(ZERO) <= 0) {
+            return new DrawdownUpdate(newPeak, currentMaxDD, ddBreached);
+        }
+        BigDecimal dd = newPeak.subtract(equity)
+                .divide(newPeak, SCALE, RoundingMode.HALF_UP)
+                .multiply(HUNDRED);
+        BigDecimal newMaxDD = dd.compareTo(currentMaxDD) > 0 ? dd : currentMaxDD;
+        boolean newDdBreached = ddBreached || dd.compareTo(ddThreshold) >= 0;
+        return new DrawdownUpdate(newPeak, newMaxDD, newDdBreached);
+    }
+
+    private static BigDecimal computeReturnPct(BigDecimal equity, BigDecimal initialCapital) {
+        if (initialCapital.compareTo(ZERO) <= 0) return ZERO;
+        return equity.subtract(initialCapital)
+                .divide(initialCapital, SCALE, RoundingMode.HALF_UP)
+                .multiply(HUNDRED);
     }
 
 
@@ -428,7 +454,7 @@ public class MonteCarloEngine {
         BigDecimal variance = values.stream()
                 .map(v -> v.subtract(mean).pow(2))
                 .reduce(ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(values.size() - 1), SCALE + 2, RoundingMode.HALF_UP);
+                .divide(BigDecimal.valueOf((long) values.size() - 1), SCALE + 2, RoundingMode.HALF_UP);
         return variance.sqrt(new MathContext(SCALE + 2, RoundingMode.HALF_UP))
                 .setScale(SCALE, RoundingMode.HALF_UP);
     }

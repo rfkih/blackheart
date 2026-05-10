@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Bridges Logback ERROR events to {@link ErrorIngestService}. Logback
@@ -39,7 +40,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class DbErrorAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
 
-    private static volatile ErrorIngestService INGEST;
+    private static final AtomicReference<ErrorIngestService> INGEST = new AtomicReference<>();
 
     private static final int QUEUE_CAPACITY = 1000;
     private static final int STACK_FRAME_LIMIT = 5;
@@ -47,7 +48,7 @@ public class DbErrorAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
 
     private final BlockingQueue<ErrorEvent> buffer = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
     private final AtomicLong dropped = new AtomicLong();
-    private volatile Thread worker;
+    private final AtomicReference<Thread> worker = new AtomicReference<>();
     private volatile boolean running;
 
     /**
@@ -56,7 +57,7 @@ public class DbErrorAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
      * service appears.
      */
     public static void setIngestService(ErrorIngestService service) {
-        INGEST = service;
+        INGEST.set(service);
     }
 
     @Override
@@ -68,16 +69,16 @@ public class DbErrorAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
     @Override
     public void stop() {
         running = false;
-        if (worker != null) worker.interrupt();
+        Thread w = worker.get();
+        if (w != null) w.interrupt();
         super.stop();
     }
 
     @Override
     protected void append(ILoggingEvent event) {
         if (event == null) return;
-        if (worker == null) startWorker();
+        if (worker.get() == null) startWorker();
         ErrorEvent built = build(event);
-        if (built == null) return;
         if (!buffer.offer(built)) {
             long n = dropped.incrementAndGet();
             // Guarded warn so an overflowing queue doesn't itself spam.
@@ -88,39 +89,69 @@ public class DbErrorAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
     }
 
     private synchronized void startWorker() {
-        if (worker != null) return;
+        if (worker.get() != null) return;
         running = true;
-        worker = new Thread(this::runLoop, "ErrorAppender");
-        worker.setDaemon(true);
-        worker.start();
+        Thread t = new Thread(this::runLoop, "ErrorAppender");
+        t.setDaemon(true);
+        worker.set(t);
+        t.start();
     }
 
     private void runLoop() {
         while (running) {
-            ErrorEvent ev;
-            try {
-                ev = buffer.take();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            ErrorIngestService svc = INGEST;
+            ErrorEvent ev = takeNext();
+            if (ev == null) return;                 // interrupted on take
+
+            ErrorIngestService svc = INGEST.get();
             if (svc == null) {
-                // Spring not up yet — re-queue and wait. Bootstrap-only path.
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-                buffer.offer(ev);
+                if (!sleepAndRequeue(ev)) return;   // interrupted on sleep
                 continue;
             }
-            try {
-                svc.ingest(ev);
-            } catch (Throwable t) {
-                addWarn("ingest failed: " + t.getClass().getSimpleName() + " " + t.getMessage());
-            }
+            dispatch(svc, ev);
+        }
+    }
+
+    /** Block on the queue until an event arrives. Returns null when the
+     *  worker was interrupted, signalling the caller to exit the loop. */
+    private ErrorEvent takeNext() {
+        try {
+            return buffer.take();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    /** Bootstrap-only path: sleep briefly, then re-queue {@code ev} so the
+     *  worker can retry once the Spring context wires the ingest service.
+     *  Returns false on interruption (caller exits the loop). */
+    private boolean sleepAndRequeue(ErrorEvent ev) {
+        try {
+            Thread.sleep(50);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        if (!buffer.offer(ev)) {
+            recordDrop("DbErrorAppender bootstrap requeue dropped — total dropped ");
+        }
+        return true;
+    }
+
+    private void dispatch(ErrorIngestService svc, ErrorEvent ev) {
+        try {
+            svc.ingest(ev);
+        } catch (Exception t) {
+            addWarn("ingest failed: " + t.getClass().getSimpleName() + " " + t.getMessage());
+        }
+    }
+
+    /** Increments the drop counter and emits a guarded warn so an overflowing
+     *  queue does not itself spam — first drop, then every 100th. */
+    private void recordDrop(String prefix) {
+        long n = dropped.incrementAndGet();
+        if (n == 1 || n % 100 == 0) {
+            addWarn(prefix + n);
         }
     }
 

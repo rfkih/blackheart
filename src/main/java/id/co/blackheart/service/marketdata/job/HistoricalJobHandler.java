@@ -27,5 +27,5 @@ public interface HistoricalJobHandler {
 
     JobType jobType();
 
-    void execute(HistoricalBackfillJob job, JobContext ctx) throws Exception;
+    void execute(HistoricalBackfillJob job, JobContext ctx);
 }

@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * Behavioural tests for {@link StrategyHelper#calculateRiskBasedNotional}.
@@ -208,7 +208,7 @@ class StrategyHelperRiskBasedSizingTest {
 
     private static void assertBdEq(String expected, BigDecimal actual) {
         BigDecimal exp = new BigDecimal(expected);
-        assertTrue(actual != null,
+        assertNotNull(actual,
                 () -> "expected " + expected + " but got null");
         assertEquals(0, exp.compareTo(actual),
                 () -> "expected " + expected + " but got " + actual);

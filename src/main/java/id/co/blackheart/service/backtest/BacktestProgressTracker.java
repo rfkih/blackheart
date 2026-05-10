@@ -85,7 +85,7 @@ public class BacktestProgressTracker {
      */
     public void report(UUID runId, double fraction) {
         if (runId == null) return;
-        int pct = (int) Math.max(0, Math.min(99, Math.round(fraction * 100)));
+        int pct = Math.clamp(Math.round(fraction * 100), 0, 99);
         flush(runId, pct, "RUNNING");
     }
 

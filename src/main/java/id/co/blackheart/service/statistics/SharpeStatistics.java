@@ -54,7 +54,7 @@ public final class SharpeStatistics {
         // (1 + sr^2/2) / (n-1), matching textbook Sharpe SE.
         double srVar = 1.0 - skewness * sr + (kurtosis - 1.0) / 4.0 * sr * sr;
         if (srVar <= 0.0) return Double.NaN;
-        double z = (sr - srBenchmark) * Math.sqrt(n - 1) / Math.sqrt(srVar);
+        double z = (sr - srBenchmark) * Math.sqrt((double) n - 1) / Math.sqrt(srVar);
         return StandardNormal.cdf(z);
     }
 

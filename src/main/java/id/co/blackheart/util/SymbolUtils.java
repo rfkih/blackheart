@@ -25,8 +25,7 @@ public final class SymbolUtils {
     private SymbolUtils() {}
 
     public static String quoteAsset(String symbol) {
-        String suffix = matchQuote(symbol);
-        return suffix;
+        return matchQuote(symbol);
     }
 
     public static String baseAsset(String symbol) {

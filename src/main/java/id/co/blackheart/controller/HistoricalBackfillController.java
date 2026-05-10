@@ -5,6 +5,7 @@ import id.co.blackheart.dto.response.CoverageReport;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.model.HistoricalBackfillJob;
 import id.co.blackheart.model.JobStatus;
+import id.co.blackheart.model.User;
 import id.co.blackheart.repository.UserRepository;
 import id.co.blackheart.service.marketdata.MarketDataIntegrityService;
 import id.co.blackheart.service.marketdata.job.HistoricalBackfillJobService;
@@ -61,7 +62,7 @@ public class HistoricalBackfillController {
         Object principal = auth.getPrincipal();
         String email = (principal instanceof UserDetails ud) ? ud.getUsername() : auth.getName();
         if (!StringUtils.hasText(email)) return null;
-        return userRepository.findByEmail(email).map(u -> u.getUserId()).orElse(null);
+        return userRepository.findByEmail(email).map(User::getUserId).orElse(null);
     }
 
     /**

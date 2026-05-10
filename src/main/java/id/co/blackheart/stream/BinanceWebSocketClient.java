@@ -68,7 +68,8 @@ public class BinanceWebSocketClient {
      * Trading pair this client subscribes to. Single-symbol today (BTCUSDT);
      * pulled out of a constant so adding ETHUSDT etc. is a config change
      * rather than a code edit. Multi-symbol routing is a separate, larger
-     * change to this class — see SymbolUtils + the data-plane TODO.
+     * change to this class — see SymbolUtils and the data-plane backlog
+     * note in CLAUDE.md ("Multi-symbol live needs trading-JVM restart").
      */
     @Value("${app.live.symbol:BTCUSDT}")
     private String symbol;

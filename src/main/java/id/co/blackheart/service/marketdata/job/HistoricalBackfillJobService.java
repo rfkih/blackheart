@@ -110,7 +110,9 @@ public class HistoricalBackfillJobService {
      */
     @Transactional
     public HistoricalBackfillJob requestCancel(UUID jobId) {
-        HistoricalBackfillJob job = get(jobId);
+        HistoricalBackfillJob job = repository.findById(jobId)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Historical backfill job not found: " + jobId));
         if (job.getStatus() == JobStatus.SUCCESS
                 || job.getStatus() == JobStatus.FAILED
                 || job.getStatus() == JobStatus.CANCELLED) {

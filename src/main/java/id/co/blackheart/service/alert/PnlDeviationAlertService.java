@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -91,7 +92,7 @@ public class PnlDeviationAlertService {
         // Cron is zoned UTC; compute "yesterday" in UTC too so the date math
         // can't drift by ±1 day relative to when the cron actually fires.
         LocalDate end = LocalDate.now(ZoneOffset.UTC).minusDays(1);
-        LocalDate start = end.minusDays(lookbackDays - 1);
+        LocalDate start = end.minusDays((long) lookbackDays - 1);
 
         List<StrategyDailyRealizedCurve> rows =
                 curveRepository.findByAccountStrategyIdAndCurveDateBetween(id, start, end);
@@ -101,8 +102,35 @@ public class PnlDeviationAlertService {
             return;
         }
 
-        LocalDate recentCutoff = end.minusDays(recentDays - 1);
+        ReturnSplit split = partitionReturns(rows, end);
+        if (split.baseline().length < minBaselineDays || split.recent().length < recentDays) return;
 
+        Double zScore = computeZScore(split);
+        if (zScore == null) return;
+        if (Math.abs(zScore) < zThreshold) return;
+
+        raiseAlert(s, id, end, split, zScore);
+    }
+
+    private record ReturnSplit(double[] baseline, double[] recent) {
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof ReturnSplit(double[] otherBaseline, double[] otherRecent))) return false;
+            return Arrays.equals(baseline, otherBaseline) && Arrays.equals(recent, otherRecent);
+        }
+        @Override
+        public int hashCode() {
+            return 31 * Arrays.hashCode(baseline) + Arrays.hashCode(recent);
+        }
+        @Override
+        public String toString() {
+            return "ReturnSplit[baseline=" + Arrays.toString(baseline) + ", recent=" + Arrays.toString(recent) + "]";
+        }
+    }
+
+    private ReturnSplit partitionReturns(List<StrategyDailyRealizedCurve> rows, LocalDate end) {
+        LocalDate recentCutoff = end.minusDays((long) recentDays - 1);
         // Partition by date, not by index: gaps in the curve (skipped day,
         // weekend) would otherwise spill recent rows into baseline. A null
         // pct is treated as "no data" and dropped — folding it as 0 would
@@ -119,22 +147,33 @@ public class PnlDeviationAlertService {
                 recentList.add(v);
             }
         }
-        if (baselineList.size() < minBaselineDays || recentList.size() < recentDays) return;
+        return new ReturnSplit(toArray(baselineList), toArray(recentList));
+    }
 
-        double[] baselineTrim = toArray(baselineList);
-        double[] recentTrim = toArray(recentList);
-
-        double mean = mean(baselineTrim);
-        double std = stddev(baselineTrim, mean);
+    /** Returns the z-score of the recent window relative to the baseline,
+     *  or {@code null} when the baseline is degenerate. */
+    private Double computeZScore(ReturnSplit split) {
+        double mean = mean(split.baseline());
+        double std = stddev(split.baseline(), mean);
         // Degenerate baseline (all-flat strategy) — z-score undefined. Skip.
-        if (std < 1e-9) return;
+        if (std < 1e-9) return null;
 
-        double recentSum = sum(recentTrim);
+        double recentSum = sum(split.recent());
+        double expectedStd = std * Math.sqrt(recentDays);
+        // Defensive: the std < 1e-9 short-circuit above already guards a
+        // positive std, but recentDays comes from config and could be
+        // misconfigured to 0 — verify expectedStd directly so the division
+        // can never run on zero (Sonar S3518).
+        if (expectedStd <= 0) return null;
+        return (recentSum - mean * recentDays) / expectedStd;
+    }
+
+    private void raiseAlert(AccountStrategy s, UUID id, LocalDate end, ReturnSplit split, double z) {
+        double mean = mean(split.baseline());
+        double std = stddev(split.baseline(), mean);
+        double recentSum = sum(split.recent());
         double expectedSum = mean * recentDays;
         double expectedStd = std * Math.sqrt(recentDays);
-        double z = (recentSum - expectedSum) / expectedStd;
-
-        if (Math.abs(z) < zThreshold) return;
 
         AlertSeverity severity = z < 0 ? AlertSeverity.CRITICAL : AlertSeverity.WARN;
         String direction = z < 0 ? "underperforming" : "overperforming";

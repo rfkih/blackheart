@@ -98,6 +98,7 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
               created_time DESC
             LIMIT :limitVal OFFSET :offsetVal
             """, nativeQuery = true)
+    @SuppressWarnings("java:S107") // Spring Data native query — each :name placeholder must bind to a distinct @Param
     List<BacktestRun> findFiltered(
             @Param("userId") UUID userId,
             @Param("triggeredBy") String triggeredBy,
@@ -124,6 +125,7 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
               AND (CAST(:fromDate AS TIMESTAMP) IS NULL OR created_time >= CAST(:fromDate AS TIMESTAMP))
               AND (CAST(:toDate AS TIMESTAMP) IS NULL OR created_time <= CAST(:toDate AS TIMESTAMP))
             """, nativeQuery = true)
+    @SuppressWarnings("java:S107") // Spring Data native query — each :name placeholder must bind to a distinct @Param
     long countFiltered(
             @Param("userId") UUID userId,
             @Param("triggeredBy") String triggeredBy,
@@ -201,6 +203,7 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
                    OR asset         ILIKE CONCAT('%', CAST(:search AS TEXT), '%'))
             """,
            nativeQuery = true)
+    @SuppressWarnings("java:S107") // Spring Data native query — each :name placeholder must bind to a distinct @Param
     Page<BacktestRun> findResearchLog(
             @Param("userId") UUID userId,
             @Param("strategyCode") String strategyCode,
@@ -226,16 +229,6 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
             @Param("id") UUID id,
             @Param("userId") UUID userId);
 
-    /**
-     * Targeted marker-only UPDATE for the holdout flag. Used by
-     * {@code ResearchSweepService.evaluateHoldout} to avoid clobbering the
-     * async worker's progress / status writes — a full {@code save(row)}
-     * would write back every field of a possibly-stale entity.
-     *
-     * <p>Returns the number of rows updated. The unique partial index
-     * {@code idx_backtest_run_holdout_per_sweep} additionally enforces
-     * "at most one holdout per sweep" at the DB level.
-     */
     /**
      * Recent completed runs for a strategy that have enough trades to be
      * statistically meaningful. Used by {@code KellySizingService} to compute
@@ -290,6 +283,16 @@ public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> 
                 accountStrategyId, accountStrategyId.toString(), minTrades, limitVal);
     }
 
+    /**
+     * Targeted marker-only UPDATE for the holdout flag. Used by
+     * {@code ResearchSweepService.evaluateHoldout} to avoid clobbering the
+     * async worker's progress / status writes — a full {@code save(row)}
+     * would write back every field of a possibly-stale entity.
+     *
+     * <p>Returns the number of rows updated. The unique partial index
+     * {@code idx_backtest_run_holdout_per_sweep} additionally enforces
+     * "at most one holdout per sweep" at the DB level.
+     */
     @Modifying
     @Transactional
     @Query(value = """

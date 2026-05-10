@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Manages per-account-strategy LSR parameter overrides.
@@ -154,67 +155,72 @@ public class LsrStrategyParamService {
         if (req == null) return m;
 
         // Regime
-        if (req.getAdxTrendingMin() != null)               m.put("adxTrendingMin", req.getAdxTrendingMin());
-        if (req.getAdxCompressionMax() != null)            m.put("adxCompressionMax", req.getAdxCompressionMax());
-        if (req.getAdxEntryMin() != null)                  m.put("adxEntryMin", req.getAdxEntryMin());
-        if (req.getAdxEntryMax() != null)                  m.put("adxEntryMax", req.getAdxEntryMax());
-        if (req.getAtrRatioExhaustion() != null)           m.put("atrRatioExhaustion", req.getAtrRatioExhaustion());
-        if (req.getAtrRatioChaotic() != null)              m.put("atrRatioChaotic", req.getAtrRatioChaotic());
-        if (req.getAtrRatioCompress() != null)             m.put("atrRatioCompress", req.getAtrRatioCompress());
+        putIfPresent(m, "adxTrendingMin",                  req::getAdxTrendingMin);
+        putIfPresent(m, "adxCompressionMax",               req::getAdxCompressionMax);
+        putIfPresent(m, "adxEntryMin",                     req::getAdxEntryMin);
+        putIfPresent(m, "adxEntryMax",                     req::getAdxEntryMax);
+        putIfPresent(m, "atrRatioExhaustion",              req::getAtrRatioExhaustion);
+        putIfPresent(m, "atrRatioChaotic",                 req::getAtrRatioChaotic);
+        putIfPresent(m, "atrRatioCompress",                req::getAtrRatioCompress);
 
         // Risk / exits
-        if (req.getStopAtrBuffer() != null)                m.put("stopAtrBuffer", req.getStopAtrBuffer());
-        if (req.getMaxRiskPct() != null)                   m.put("maxRiskPct", req.getMaxRiskPct());
-        if (req.getTp1RLongSweep() != null)                m.put("tp1RLongSweep", req.getTp1RLongSweep());
-        if (req.getTp1RLongContinuation() != null)         m.put("tp1RLongContinuation", req.getTp1RLongContinuation());
-        if (req.getTp1RShort() != null)                    m.put("tp1RShort", req.getTp1RShort());
-        if (req.getBeTriggerRLongSweep() != null)          m.put("beTriggerRLongSweep", req.getBeTriggerRLongSweep());
-        if (req.getBeTriggerRLongContinuation() != null)   m.put("beTriggerRLongContinuation", req.getBeTriggerRLongContinuation());
-        if (req.getBeTriggerRShort() != null)              m.put("beTriggerRShort", req.getBeTriggerRShort());
-        if (req.getBeFeeBufferR() != null)                 m.put("beFeeBufferR", req.getBeFeeBufferR());
-        if (req.getShortNotionalMultiplier() != null)      m.put("shortNotionalMultiplier", req.getShortNotionalMultiplier());
-        if (req.getLongContinuationNotionalMultiplier() != null) m.put("longContinuationNotionalMultiplier", req.getLongContinuationNotionalMultiplier());
+        putIfPresent(m, "stopAtrBuffer",                   req::getStopAtrBuffer);
+        putIfPresent(m, "maxRiskPct",                      req::getMaxRiskPct);
+        putIfPresent(m, "tp1RLongSweep",                   req::getTp1RLongSweep);
+        putIfPresent(m, "tp1RLongContinuation",            req::getTp1RLongContinuation);
+        putIfPresent(m, "tp1RShort",                       req::getTp1RShort);
+        putIfPresent(m, "beTriggerRLongSweep",             req::getBeTriggerRLongSweep);
+        putIfPresent(m, "beTriggerRLongContinuation",      req::getBeTriggerRLongContinuation);
+        putIfPresent(m, "beTriggerRShort",                 req::getBeTriggerRShort);
+        putIfPresent(m, "beFeeBufferR",                    req::getBeFeeBufferR);
+        putIfPresent(m, "shortNotionalMultiplier",         req::getShortNotionalMultiplier);
+        putIfPresent(m, "longContinuationNotionalMultiplier", req::getLongContinuationNotionalMultiplier);
 
         // Time-stop bars
-        if (req.getTimeStopBarsLongSweep() != null)        m.put("timeStopBarsLongSweep", req.getTimeStopBarsLongSweep());
-        if (req.getTimeStopBarsLongContinuation() != null) m.put("timeStopBarsLongContinuation", req.getTimeStopBarsLongContinuation());
-        if (req.getTimeStopBarsShort() != null)            m.put("timeStopBarsShort", req.getTimeStopBarsShort());
+        putIfPresent(m, "timeStopBarsLongSweep",           req::getTimeStopBarsLongSweep);
+        putIfPresent(m, "timeStopBarsLongContinuation",    req::getTimeStopBarsLongContinuation);
+        putIfPresent(m, "timeStopBarsShort",               req::getTimeStopBarsShort);
 
         // Time-stop min R
-        if (req.getTimeStopMinRLongSweep() != null)        m.put("timeStopMinRLongSweep", req.getTimeStopMinRLongSweep());
-        if (req.getTimeStopMinRLongContinuation() != null) m.put("timeStopMinRLongContinuation", req.getTimeStopMinRLongContinuation());
-        if (req.getTimeStopMinRShort() != null)            m.put("timeStopMinRShort", req.getTimeStopMinRShort());
+        putIfPresent(m, "timeStopMinRLongSweep",           req::getTimeStopMinRLongSweep);
+        putIfPresent(m, "timeStopMinRLongContinuation",    req::getTimeStopMinRLongContinuation);
+        putIfPresent(m, "timeStopMinRShort",               req::getTimeStopMinRShort);
 
         // Long sweep
-        if (req.getLongSweepMinAtr() != null)              m.put("longSweepMinAtr", req.getLongSweepMinAtr());
-        if (req.getLongSweepMaxAtr() != null)              m.put("longSweepMaxAtr", req.getLongSweepMaxAtr());
-        if (req.getLongSweepRsiMin() != null)              m.put("longSweepRsiMin", req.getLongSweepRsiMin());
-        if (req.getLongSweepRsiMax() != null)              m.put("longSweepRsiMax", req.getLongSweepRsiMax());
-        if (req.getLongSweepRvolMin() != null)             m.put("longSweepRvolMin", req.getLongSweepRvolMin());
-        if (req.getLongSweepBodyMin() != null)             m.put("longSweepBodyMin", req.getLongSweepBodyMin());
-        if (req.getLongSweepClvMin() != null)              m.put("longSweepClvMin", req.getLongSweepClvMin());
-        if (req.getMinSignalScoreLongSweep() != null)      m.put("minSignalScoreLongSweep", req.getMinSignalScoreLongSweep());
-        if (req.getMinConfidenceScoreLongSweep() != null)  m.put("minConfidenceScoreLongSweep", req.getMinConfidenceScoreLongSweep());
+        putIfPresent(m, "longSweepMinAtr",                 req::getLongSweepMinAtr);
+        putIfPresent(m, "longSweepMaxAtr",                 req::getLongSweepMaxAtr);
+        putIfPresent(m, "longSweepRsiMin",                 req::getLongSweepRsiMin);
+        putIfPresent(m, "longSweepRsiMax",                 req::getLongSweepRsiMax);
+        putIfPresent(m, "longSweepRvolMin",                req::getLongSweepRvolMin);
+        putIfPresent(m, "longSweepBodyMin",                req::getLongSweepBodyMin);
+        putIfPresent(m, "longSweepClvMin",                 req::getLongSweepClvMin);
+        putIfPresent(m, "minSignalScoreLongSweep",         req::getMinSignalScoreLongSweep);
+        putIfPresent(m, "minConfidenceScoreLongSweep",     req::getMinConfidenceScoreLongSweep);
 
         // Long continuation
-        if (req.getLongContRsiMin() != null)               m.put("longContRsiMin", req.getLongContRsiMin());
-        if (req.getLongContRsiMax() != null)               m.put("longContRsiMax", req.getLongContRsiMax());
-        if (req.getLongContRvolMin() != null)              m.put("longContRvolMin", req.getLongContRvolMin());
-        if (req.getLongContBodyMin() != null)              m.put("longContBodyMin", req.getLongContBodyMin());
-        if (req.getLongContClvMin() != null)               m.put("longContClvMin", req.getLongContClvMin());
-        if (req.getLongContDonchianBufferAtr() != null)    m.put("longContDonchianBufferAtr", req.getLongContDonchianBufferAtr());
-        if (req.getMinSignalScoreLongCont() != null)       m.put("minSignalScoreLongCont", req.getMinSignalScoreLongCont());
-        if (req.getMinConfidenceScoreLongCont() != null)   m.put("minConfidenceScoreLongCont", req.getMinConfidenceScoreLongCont());
+        putIfPresent(m, "longContRsiMin",                  req::getLongContRsiMin);
+        putIfPresent(m, "longContRsiMax",                  req::getLongContRsiMax);
+        putIfPresent(m, "longContRvolMin",                 req::getLongContRvolMin);
+        putIfPresent(m, "longContBodyMin",                 req::getLongContBodyMin);
+        putIfPresent(m, "longContClvMin",                  req::getLongContClvMin);
+        putIfPresent(m, "longContDonchianBufferAtr",       req::getLongContDonchianBufferAtr);
+        putIfPresent(m, "minSignalScoreLongCont",          req::getMinSignalScoreLongCont);
+        putIfPresent(m, "minConfidenceScoreLongCont",      req::getMinConfidenceScoreLongCont);
 
         // Short
-        if (req.getShortSweepMinAtr() != null)             m.put("shortSweepMinAtr", req.getShortSweepMinAtr());
-        if (req.getShortSweepMaxAtr() != null)             m.put("shortSweepMaxAtr", req.getShortSweepMaxAtr());
-        if (req.getShortRsiMin() != null)                  m.put("shortRsiMin", req.getShortRsiMin());
-        if (req.getShortRvolMin() != null)                 m.put("shortRvolMin", req.getShortRvolMin());
-        if (req.getShortBodyMin() != null)                 m.put("shortBodyMin", req.getShortBodyMin());
-        if (req.getShortClvMax() != null)                  m.put("shortClvMax", req.getShortClvMax());
-        if (req.getMinSignalScoreShort() != null)          m.put("minSignalScoreShort", req.getMinSignalScoreShort());
+        putIfPresent(m, "shortSweepMinAtr",                req::getShortSweepMinAtr);
+        putIfPresent(m, "shortSweepMaxAtr",                req::getShortSweepMaxAtr);
+        putIfPresent(m, "shortRsiMin",                     req::getShortRsiMin);
+        putIfPresent(m, "shortRvolMin",                    req::getShortRvolMin);
+        putIfPresent(m, "shortBodyMin",                    req::getShortBodyMin);
+        putIfPresent(m, "shortClvMax",                     req::getShortClvMax);
+        putIfPresent(m, "minSignalScoreShort",             req::getMinSignalScoreShort);
 
         return m;
+    }
+
+    private static <T> void putIfPresent(Map<String, Object> m, String key, Supplier<T> getter) {
+        T value = getter.get();
+        if (value != null) m.put(key, value);
     }
 }

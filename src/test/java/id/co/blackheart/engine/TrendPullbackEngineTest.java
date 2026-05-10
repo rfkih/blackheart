@@ -218,7 +218,7 @@ class TrendPullbackEngineTest {
         return StrategySpec.builder()
                 .strategyCode("TPR")
                 .strategyName("TPR")
-                .archetype(TrendPullbackEngine.ARCHETYPE)
+                .archetype(TrendPullbackEngine.ARCHETYPE_NAME)
                 .archetypeVersion(TrendPullbackEngine.VERSION)
                 .specSchemaVersion(1)
                 .params(new HashMap<>(params))

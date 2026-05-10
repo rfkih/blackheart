@@ -31,6 +31,9 @@ public final class StrategyDecisionInvariants {
     private static final String SIDE_SHORT = "SHORT";
     private static final BigDecimal ZERO = BigDecimal.ZERO;
 
+    private static final String BELOW_ENTRY_FRAGMENT = ") must be strictly below entry (";
+    private static final String ABOVE_ENTRY_FRAGMENT = ") must be strictly above entry (";
+
     private StrategyDecisionInvariants() {}
 
     /**
@@ -76,17 +79,14 @@ public final class StrategyDecisionInvariants {
             if (notPositive(d.getStopLossPrice())) {
                 v.add("OPEN_LONG must set a positive stopLossPrice");
             } else if (d.getStopLossPrice().compareTo(entry) >= 0) {
-                v.add("OPEN_LONG stopLossPrice (" + d.getStopLossPrice() + ") must be strictly below entry ("
-                        + entry + ")");
+                v.add("OPEN_LONG stopLossPrice (" + d.getStopLossPrice() + BELOW_ENTRY_FRAGMENT + entry + ")");
             }
 
             if (d.getTakeProfitPrice1() != null && d.getTakeProfitPrice1().compareTo(entry) <= 0) {
-                v.add("OPEN_LONG takeProfitPrice1 (" + d.getTakeProfitPrice1() + ") must be strictly above entry ("
-                        + entry + ")");
+                v.add("OPEN_LONG takeProfitPrice1 (" + d.getTakeProfitPrice1() + ABOVE_ENTRY_FRAGMENT + entry + ")");
             }
             if (d.getTakeProfitPrice2() != null && d.getTakeProfitPrice2().compareTo(entry) <= 0) {
-                v.add("OPEN_LONG takeProfitPrice2 (" + d.getTakeProfitPrice2() + ") must be strictly above entry ("
-                        + entry + ")");
+                v.add("OPEN_LONG takeProfitPrice2 (" + d.getTakeProfitPrice2() + ABOVE_ENTRY_FRAGMENT + entry + ")");
             }
         }
         return v;
@@ -111,17 +111,14 @@ public final class StrategyDecisionInvariants {
             if (notPositive(d.getStopLossPrice())) {
                 v.add("OPEN_SHORT must set a positive stopLossPrice");
             } else if (d.getStopLossPrice().compareTo(entry) <= 0) {
-                v.add("OPEN_SHORT stopLossPrice (" + d.getStopLossPrice() + ") must be strictly above entry ("
-                        + entry + ")");
+                v.add("OPEN_SHORT stopLossPrice (" + d.getStopLossPrice() + ABOVE_ENTRY_FRAGMENT + entry + ")");
             }
 
             if (d.getTakeProfitPrice1() != null && d.getTakeProfitPrice1().compareTo(entry) >= 0) {
-                v.add("OPEN_SHORT takeProfitPrice1 (" + d.getTakeProfitPrice1() + ") must be strictly below entry ("
-                        + entry + ")");
+                v.add("OPEN_SHORT takeProfitPrice1 (" + d.getTakeProfitPrice1() + BELOW_ENTRY_FRAGMENT + entry + ")");
             }
             if (d.getTakeProfitPrice2() != null && d.getTakeProfitPrice2().compareTo(entry) >= 0) {
-                v.add("OPEN_SHORT takeProfitPrice2 (" + d.getTakeProfitPrice2() + ") must be strictly below entry ("
-                        + entry + ")");
+                v.add("OPEN_SHORT takeProfitPrice2 (" + d.getTakeProfitPrice2() + BELOW_ENTRY_FRAGMENT + entry + ")");
             }
         }
         return v;

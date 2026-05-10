@@ -14,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -101,81 +100,104 @@ public class BacktestAnalysisService {
     // ── Headline ─────────────────────────────────────────────────────────────
 
     private Headline computeHeadline(BacktestRun run, List<BacktestTrade> trades) {
+        List<BacktestTrade> chrono = new ArrayList<>(trades);
+        chrono.sort(Comparator.comparing(BacktestTrade::getEntryTime,
+                Comparator.nullsLast(Comparator.naturalOrder())));
+
+        HeadlineAccumulator acc = new HeadlineAccumulator();
+        for (BacktestTrade t : chrono) {
+            acc.add(t);
+        }
+        return acc.toHeadline(trades.size(), safe(run.getInitialCapital()));
+    }
+
+    /**
+     * Mutable accumulator for the chronological pass through trades. Pulls
+     * the win/loss tally, R-multiple sum, equity-curve peak/drawdown and
+     * consecutive-loss streak out of {@link #computeHeadline} so that method
+     * stays under Sonar's cognitive-complexity ceiling.
+     */
+    private static final class HeadlineAccumulator {
         int wins = 0;
         int losses = 0;
         BigDecimal grossProfit = BigDecimal.ZERO;
         BigDecimal grossLoss = BigDecimal.ZERO;
         BigDecimal totalR = BigDecimal.ZERO;
         int rCount = 0;
-
         BigDecimal eq = BigDecimal.ZERO;
         BigDecimal peak = BigDecimal.ZERO;
         BigDecimal maxDd = BigDecimal.ZERO;
         int maxConsecLosses = 0;
-        int cur = 0;
+        int curLossStreak = 0;
 
-        List<BacktestTrade> chrono = new ArrayList<>(trades);
-        chrono.sort(Comparator.comparing(BacktestTrade::getEntryTime,
-                Comparator.nullsLast(Comparator.naturalOrder())));
-
-        for (BacktestTrade t : chrono) {
+        void add(BacktestTrade t) {
             BigDecimal pnl = safe(t.getRealizedPnlAmount());
-            if (pnl.signum() > 0) {
+            tallyPnl(pnl);
+            tallyR(t.getRealizedRMultiple());
+            tallyEquity(pnl);
+        }
+
+        private void tallyPnl(BigDecimal pnl) {
+            int sign = pnl.signum();
+            if (sign > 0) {
                 wins++;
                 grossProfit = grossProfit.add(pnl);
-                cur = 0;
-            } else if (pnl.signum() < 0) {
+                curLossStreak = 0;
+            } else if (sign < 0) {
                 losses++;
                 grossLoss = grossLoss.add(pnl);
-                cur++;
-                if (cur > maxConsecLosses) maxConsecLosses = cur;
+                curLossStreak++;
+                if (curLossStreak > maxConsecLosses) maxConsecLosses = curLossStreak;
             }
+        }
 
-            if (t.getRealizedRMultiple() != null) {
-                totalR = totalR.add(t.getRealizedRMultiple());
-                rCount++;
-            }
+        private void tallyR(BigDecimal r) {
+            if (r == null) return;
+            totalR = totalR.add(r);
+            rCount++;
+        }
 
+        private void tallyEquity(BigDecimal pnl) {
             eq = eq.add(pnl);
             if (eq.compareTo(peak) > 0) peak = eq;
             BigDecimal dd = eq.subtract(peak);
             if (dd.compareTo(maxDd) < 0) maxDd = dd;
         }
 
-        int total = trades.size();
-        BigDecimal winRate = total > 0
-                ? new BigDecimal(wins).divide(new BigDecimal(total), 4, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-        BigDecimal pf = grossLoss.signum() < 0
-                ? grossProfit.divide(grossLoss.abs(), 4, RoundingMode.HALF_UP)
-                : null; // undefined when there are no losses — caller renders "∞"
-        BigDecimal avgR = rCount > 0
-                ? totalR.divide(new BigDecimal(rCount), 4, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-        BigDecimal avgWin = wins > 0
-                ? grossProfit.divide(new BigDecimal(wins), 4, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-        BigDecimal avgLoss = losses > 0
-                ? grossLoss.divide(new BigDecimal(losses), 4, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
+        Headline toHeadline(int total, BigDecimal initialCapital) {
+            Headline h = new Headline();
+            h.setTradeCount(total);
+            h.setWins(wins);
+            h.setLosses(losses);
+            h.setWinRate(ratio(wins, total));
+            // PF undefined when there are no losses — caller renders "∞".
+            h.setProfitFactor(grossLoss.signum() < 0
+                    ? grossProfit.divide(grossLoss.abs(), 4, RoundingMode.HALF_UP)
+                    : null);
+            h.setAvgR(ratio(totalR, rCount));
+            h.setAvgWin(ratio(grossProfit, wins));
+            h.setAvgLoss(ratio(grossLoss, losses));
+            h.setGrossProfit(grossProfit);
+            h.setGrossLoss(grossLoss);
+            h.setNetPnl(eq);
+            h.setPeakEquity(peak);
+            h.setMaxDrawdown(maxDd);
+            h.setMaxConsecutiveLosses(maxConsecLosses);
+            h.setInitialCapital(initialCapital);
+            return h;
+        }
 
-        Headline h = new Headline();
-        h.setTradeCount(total);
-        h.setWins(wins);
-        h.setLosses(losses);
-        h.setWinRate(winRate);
-        h.setProfitFactor(pf);
-        h.setAvgR(avgR);
-        h.setAvgWin(avgWin);
-        h.setAvgLoss(avgLoss);
-        h.setGrossProfit(grossProfit);
-        h.setGrossLoss(grossLoss);
-        h.setNetPnl(eq);
-        h.setPeakEquity(peak);
-        h.setMaxDrawdown(maxDd);
-        h.setMaxConsecutiveLosses(maxConsecLosses);
-        h.setInitialCapital(safe(run.getInitialCapital()));
-        return h;
+        private static BigDecimal ratio(int numerator, int denominator) {
+            return denominator > 0
+                    ? new BigDecimal(numerator).divide(new BigDecimal(denominator), 4, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+        }
+
+        private static BigDecimal ratio(BigDecimal numerator, int denominator) {
+            return denominator > 0
+                    ? numerator.divide(new BigDecimal(denominator), 4, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO;
+        }
     }
 
     // ── Feature buckets ──────────────────────────────────────────────────────
@@ -184,53 +206,64 @@ public class BacktestAnalysisService {
      *  manually. Keep these in sync with what the analyses in chat use. */
     private static final List<BucketConfig> BUCKETS = List.of(
             new BucketConfig("entry_adx", "Entry ADX", BacktestTrade::getEntryAdx,
-                    new double[][]{{18,25},{25,30},{30,35},{35,45}}),
+                    List.of(new Range(18,25), new Range(25,30), new Range(30,35), new Range(35,45))),
             new BucketConfig("bias_adx", "Bias (4H) ADX", BacktestTrade::getBiasAdx,
-                    new double[][]{{0,20},{20,25},{25,30},{30,35},{35,40},{40,60}}),
+                    List.of(new Range(0,20), new Range(20,25), new Range(25,30),
+                            new Range(30,35), new Range(35,40), new Range(40,60))),
             new BucketConfig("entry_rsi", "Entry RSI", BacktestTrade::getEntryRsi,
-                    new double[][]{{30,38},{38,45},{45,50},{50,55},{55,60},{60,70}}),
+                    List.of(new Range(30,38), new Range(38,45), new Range(45,50),
+                            new Range(50,55), new Range(55,60), new Range(60,70))),
             new BucketConfig("entry_clv", "Close-Location-Value",
                     BacktestTrade::getEntryCloseLocationValue,
-                    new double[][]{{0.0,0.6},{0.6,0.7},{0.7,0.8},{0.8,0.9},{0.9,1.01}}),
+                    List.of(new Range(0.0,0.6), new Range(0.6,0.7), new Range(0.7,0.8),
+                            new Range(0.8,0.9), new Range(0.9,1.01))),
             new BucketConfig("entry_rvol", "Relative Volume",
                     BacktestTrade::getEntryRelativeVolume20,
-                    new double[][]{{0.0,1.0},{1.0,1.3},{1.3,1.8},{1.8,3.0},{3.0,10.0}})
+                    List.of(new Range(0.0,1.0), new Range(1.0,1.3), new Range(1.3,1.8),
+                            new Range(1.8,3.0), new Range(3.0,10.0)))
     );
 
     private Map<String, List<BucketRow>> computeBuckets(List<BacktestTrade> trades) {
         Map<String, List<BucketRow>> out = new LinkedHashMap<>();
         for (BucketConfig cfg : BUCKETS) {
-            List<BucketRow> rows = new ArrayList<>(cfg.ranges().length);
-            for (double[] range : cfg.ranges()) {
-                double lo = range[0];
-                double hi = range[1];
-                int n = 0;
-                int wn = 0;
-                BigDecimal total = BigDecimal.ZERO;
-                for (BacktestTrade t : trades) {
-                    BigDecimal v = cfg.extractor().apply(t);
-                    if (v == null) continue;
-                    double d = v.doubleValue();
-                    if (d < lo || d >= hi) continue;
-                    n++;
-                    BigDecimal pnl = safe(t.getRealizedPnlAmount());
-                    if (pnl.signum() > 0) wn++;
-                    total = total.add(pnl);
-                }
-                if (n == 0) continue;
-                BucketRow row = new BucketRow();
-                row.setLow(lo);
-                row.setHigh(hi);
-                row.setCount(n);
-                row.setWins(wn);
-                row.setWinRate(BigDecimal.valueOf(wn)
-                        .divide(BigDecimal.valueOf(n), 4, RoundingMode.HALF_UP));
-                row.setTotalPnl(total);
-                rows.add(row);
+            List<BucketRow> rows = new ArrayList<>(cfg.ranges().size());
+            for (Range range : cfg.ranges()) {
+                BucketRow row = computeBucketRow(trades, range, cfg.extractor());
+                if (row != null) rows.add(row);
             }
             out.put(cfg.key(), rows);
         }
         return out;
+    }
+
+    private BucketRow computeBucketRow(
+            List<BacktestTrade> trades,
+            Range range,
+            Function<BacktestTrade, BigDecimal> extractor) {
+        int n = 0;
+        int wn = 0;
+        BigDecimal total = BigDecimal.ZERO;
+        for (BacktestTrade t : trades) {
+            BigDecimal v = extractor.apply(t);
+            if (v == null) continue;
+            double d = v.doubleValue();
+            if (range.contains(d)) {
+                n++;
+                BigDecimal pnl = safe(t.getRealizedPnlAmount());
+                if (pnl.signum() > 0) wn++;
+                total = total.add(pnl);
+            }
+        }
+        if (n == 0) return null;
+        BucketRow row = new BucketRow();
+        row.setLow(range.lo());
+        row.setHigh(range.hi());
+        row.setCount(n);
+        row.setWins(wn);
+        row.setWinRate(BigDecimal.valueOf(wn)
+                .divide(BigDecimal.valueOf(n), 4, RoundingMode.HALF_UP));
+        row.setTotalPnl(total);
+        return row;
     }
 
     // ── MFE capture ──────────────────────────────────────────────────────────
@@ -329,14 +362,22 @@ public class BacktestAnalysisService {
 
     // ── Config record for bucket ranges ──────────────────────────────────────
 
+    /** Half-open bucket [{@code lo}, {@code hi}). Replaces the historical
+     *  {@code double[]} pairs so the enclosing record's auto-generated
+     *  equals/hashCode behave by value (S6218) without needing manual
+     *  array overrides. */
+    private record Range(double lo, double hi) {
+        boolean contains(double v) { return v >= lo && v < hi; }
+    }
+
     private record BucketConfig(
             String key,
             String label,
             Function<BacktestTrade, BigDecimal> extractor,
-            double[][] ranges
+            List<Range> ranges
     ) {
         public BucketConfig {
-            ranges = Arrays.copyOf(ranges, ranges.length);
+            ranges = List.copyOf(ranges);
         }
     }
 }

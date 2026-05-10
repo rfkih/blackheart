@@ -59,7 +59,7 @@ public class SpecTraceLogger {
         this.isolatedTx = tx;
         // Clamp to [0, 1]; an out-of-range config shouldn't disable tracing
         // silently nor write 200% of the time.
-        this.liveSampleRate = Math.max(0.0, Math.min(1.0, liveSampleRate));
+        this.liveSampleRate = Math.clamp(liveSampleRate, 0.0, 1.0);
         log.info("SpecTraceLogger initialised | liveSampleRate={}", this.liveSampleRate);
     }
 
@@ -77,12 +77,12 @@ public class SpecTraceLogger {
      * @param rules     optional per-rule trace entries; pass {@code null} for an
      *                  empty array (engines wire this in M3.2+ as they emit)
      */
-    public void record(StrategySpec spec,
-                       EnrichedStrategyContext context,
-                       StrategyDecision decision,
-                       long latencyNs,
-                       Throwable error,
-                       List<Map<String, Object>> rules) {
+    public void recordTrace(StrategySpec spec,
+                            EnrichedStrategyContext context,
+                            StrategyDecision decision,
+                            long latencyNs,
+                            Throwable error,
+                            List<Map<String, Object>> rules) {
         try {
             if (!shouldRecord(context)) return;
             SpecTrace trace = buildTrace(spec, context, decision, latencyNs, error, rules);
@@ -194,7 +194,7 @@ public class SpecTraceLogger {
     }
 
     private Map<String, Object> snapshotSpec(StrategySpec spec) {
-        Map<String, Object> snap = new HashMap<>(8);
+        Map<String, Object> snap = HashMap.newHashMap(7);
         if (spec == null) return snap;
         snap.put("strategyCode", spec.getStrategyCode());
         snap.put("strategyName", spec.getStrategyName());

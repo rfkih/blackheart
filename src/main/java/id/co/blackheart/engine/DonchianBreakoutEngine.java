@@ -39,7 +39,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DonchianBreakoutEngine implements StrategyEngine {
 
-    public static final String ARCHETYPE = "donchian_breakout";
+    public static final String ARCHETYPE_NAME = "donchian_breakout";
     public static final int VERSION = 1;
 
     private static final String SIDE_LONG  = "LONG";
@@ -55,6 +55,8 @@ public class DonchianBreakoutEngine implements StrategyEngine {
 
     private static final String EXIT_STRUCTURE_SINGLE = "SINGLE";
     private static final String TARGET_ALL = "ALL";
+
+    private static final String KEY_ENTRY = "entry";
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal ONE  = BigDecimal.ONE;
@@ -77,7 +79,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
 
     @Override
     public String archetype() {
-        return ARCHETYPE;
+        return ARCHETYPE_NAME;
     }
 
     @Override
@@ -110,24 +112,25 @@ public class DonchianBreakoutEngine implements StrategyEngine {
 
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(ZERO) <= 0) return hold(spec, context, "Invalid close price");
-
         if (EngineContextHelpers.isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
-
-        if (context.hasTradablePosition() && snap != null) {
-            return managePosition(spec, context, md, snap, t);
-        }
-
+        if (context.hasTradablePosition() && snap != null) return managePosition(spec, context, md, snap, t);
         if (prev == null) return hold(spec, context, "No previous bar");
 
-        if (context.isLongAllowed()) {
-            StrategyDecision d = tryLongEntry(spec, context, md, f, prev, t);
+        StrategyDecision entry = tryEntries(spec, context, md, f, prev, t);
+        return entry != null ? entry : hold(spec, context, "No qualified DCB setup");
+    }
+
+    private StrategyDecision tryEntries(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
+                                        FeatureStore f, FeatureStore prev, Tuning t) {
+        if (ctx.isLongAllowed()) {
+            StrategyDecision d = tryLongEntry(spec, ctx, md, f, prev, t);
             if (d != null) return d;
         }
-        if (context.isShortAllowed()) {
-            StrategyDecision d = tryShortEntry(spec, context, md, f, prev, t);
+        if (ctx.isShortAllowed()) {
+            StrategyDecision d = tryShortEntry(spec, ctx, md, f, prev, t);
             if (d != null) return d;
         }
-        return hold(spec, context, "No qualified DCB setup");
+        return null;
     }
 
     private StrategyDecision tryLongEntry(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
@@ -174,8 +177,8 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr())
                 .entryTrendRegime(f.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", spec.getStrategyCode(), "LONG", ARCHETYPE))
-                .diagnostics(Map.of("entry", entry, "stop", stop, "tp1", tp1,
+                .tags(List.of("ENTRY", spec.getStrategyCode(), SIDE_LONG, ARCHETYPE_NAME))
+                .diagnostics(Map.of(KEY_ENTRY, entry, "stop", stop, "tp1", tp1,
                         "donchUpper", donchianUpper, "atr", atr,
                         "rvol", strategyHelper.safe(f.getRelativeVolume20())))
                 .build();
@@ -225,8 +228,8 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr())
                 .entryTrendRegime(f.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", spec.getStrategyCode(), "SHORT", ARCHETYPE))
-                .diagnostics(Map.of("entry", entry, "stop", stop, "tp1", tp1,
+                .tags(List.of("ENTRY", spec.getStrategyCode(), SIDE_SHORT, ARCHETYPE_NAME))
+                .diagnostics(Map.of(KEY_ENTRY, entry, "stop", stop, "tp1", tp1,
                         "donchLower", donchianLower, "atr", atr,
                         "rvol", strategyHelper.safe(f.getRelativeVolume20())))
                 .build();
@@ -238,24 +241,8 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         if (side == null) return hold(spec, ctx, "DCB manage: unknown side");
         boolean isLong = SIDE_LONG.equalsIgnoreCase(side);
 
-        LocalDateTime entryTime = snap.getEntryTime();
-        LocalDateTime now = md.getEndTime();
-        if (entryTime != null && now != null) {
-            long minutesHeld = Duration.between(entryTime, now).toMinutes();
-            long maxMinutes = (long) t.maxBarsHeld * t.intervalMinutes;
-            if (minutesHeld >= maxMinutes) {
-                log.info("DCB[{}] {} TIMED EXIT | minutesHeld={}", spec.getStrategyCode(), side, minutesHeld);
-                return baseBuilder(spec, ctx)
-                        .decisionType(isLong ? DecisionType.CLOSE_LONG : DecisionType.CLOSE_SHORT)
-                        .signalType(SIGNAL_TYPE_MANAGEMENT)
-                        .setupType(isLong ? setupLongTimedExit(spec) : setupShortTimedExit(spec)).side(side)
-                        .reason("DCB maxBarsHeld reached")
-                        .targetPositionRole(TARGET_ALL).decisionTime(LocalDateTime.now())
-                        .tags(List.of("EXIT", spec.getStrategyCode(), side, "TIMED"))
-                        .diagnostics(Map.of("close", strategyHelper.safe(md.getClosePrice())))
-                        .build();
-            }
-        }
+        StrategyDecision timed = tryTimedExit(spec, ctx, md, snap, t, isLong, side);
+        if (timed != null) return timed;
 
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
         BigDecimal initStop = snap.getInitialStopLossPrice() != null
@@ -280,10 +267,30 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                     .reason("DCB break-even shift at " + rMultiple + "R")
                     .decisionTime(LocalDateTime.now())
                     .tags(List.of("MANAGEMENT", spec.getStrategyCode(), side, "BREAK_EVEN"))
-                    .diagnostics(Map.of("rMultiple", rMultiple, "curStop", curStop, "entry", entry))
+                    .diagnostics(Map.of("rMultiple", rMultiple, "curStop", curStop, KEY_ENTRY, entry))
                     .build();
         }
         return hold(spec, ctx, "DCB holding — SL/TP active");
+    }
+
+    private StrategyDecision tryTimedExit(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
+                                          PositionSnapshot snap, Tuning t, boolean isLong, String side) {
+        LocalDateTime entryTime = snap.getEntryTime();
+        LocalDateTime now = md.getEndTime();
+        if (entryTime == null || now == null) return null;
+        long minutesHeld = Duration.between(entryTime, now).toMinutes();
+        long maxMinutes = (long) t.maxBarsHeld * t.intervalMinutes;
+        if (minutesHeld < maxMinutes) return null;
+        log.info("DCB[{}] {} TIMED EXIT | minutesHeld={}", spec.getStrategyCode(), side, minutesHeld);
+        return baseBuilder(spec, ctx)
+                .decisionType(isLong ? DecisionType.CLOSE_LONG : DecisionType.CLOSE_SHORT)
+                .signalType(SIGNAL_TYPE_MANAGEMENT)
+                .setupType(isLong ? setupLongTimedExit(spec) : setupShortTimedExit(spec)).side(side)
+                .reason("DCB maxBarsHeld reached")
+                .targetPositionRole(TARGET_ALL).decisionTime(LocalDateTime.now())
+                .tags(List.of("EXIT", spec.getStrategyCode(), side, "TIMED"))
+                .diagnostics(Map.of("close", strategyHelper.safe(md.getClosePrice())))
+                .build();
     }
 
     private BigDecimal resolveSize(EnrichedStrategyContext ctx, String side,
@@ -310,7 +317,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         String name = spec.getStrategyName();
         if (!StringUtils.hasText(name)) name = spec.getStrategyCode();
         Integer ver = spec.getArchetypeVersion();
-        String version = ARCHETYPE + ".v" + (ver == null ? VERSION : ver);
+        String version = ARCHETYPE_NAME + ".v" + (ver == null ? VERSION : ver);
         return StrategyDecision.builder()
                 .strategyCode(spec.getStrategyCode())
                 .strategyName(name)
@@ -322,14 +329,14 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         return baseBuilder(spec, ctx)
                 .decisionType(DecisionType.HOLD)
                 .signalType(signalEntry(spec)).reason(reason).decisionTime(LocalDateTime.now())
-                .tags(List.of("HOLD", spec.getStrategyCode(), ARCHETYPE)).build();
+                .tags(List.of("HOLD", spec.getStrategyCode(), ARCHETYPE_NAME)).build();
     }
 
     private StrategyDecision veto(StrategySpec spec, EnrichedStrategyContext ctx, String reason) {
         return baseBuilder(spec, ctx)
                 .decisionType(DecisionType.HOLD)
                 .vetoed(Boolean.TRUE).vetoReason(reason).reason("DCB vetoed").decisionTime(LocalDateTime.now())
-                .tags(List.of("VETO", spec.getStrategyCode(), ARCHETYPE, "RISK_LAYER")).diagnostics(Map.of()).build();
+                .tags(List.of("VETO", spec.getStrategyCode(), ARCHETYPE_NAME, "RISK_LAYER")).diagnostics(Map.of()).build();
     }
 
     private String signalEntry(StrategySpec spec) {

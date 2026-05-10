@@ -61,6 +61,8 @@ import java.util.UUID;
 public class ErrorLogController {
 
     private static final int MAX_PAGE_SIZE = 200;
+    private static final String FIELD_STATUS = "status";
+    private static final String FIELD_LAST_SEEN_AT = "lastSeenAt";
     private static final Set<String> ALLOWED_STATUS = Set.of(
             "NEW", "INVESTIGATING", "RESOLVED", "IGNORED", "WONT_FIX");
     private static final Set<String> TERMINAL_STATUS = Set.of(
@@ -74,7 +76,7 @@ public class ErrorLogController {
      * MDC, so the inbox redacts on the way out as defense in depth.
      */
     private static final Set<String> ALLOWED_SORT_FIELDS = Set.of(
-            "lastSeenAt", "occurredAt", "occurrenceCount");
+            FIELD_LAST_SEEN_AT, "occurredAt", "occurrenceCount");
 
     private static final Set<String> MDC_REDACT_KEYS = Set.of(
             "authorization", "password", "token", "secret",
@@ -97,11 +99,11 @@ public class ErrorLogController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime since,
             @RequestParam(required = false) String search,
-            @RequestParam(defaultValue = "lastSeenAt,desc") String sort,
+            @RequestParam(defaultValue = FIELD_LAST_SEEN_AT + ",desc") String sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size
     ) {
-        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        int safeSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(safePage, safeSize, parseSort(sort));
 
@@ -114,9 +116,9 @@ public class ErrorLogController {
         Specification<ErrorLog> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (sevFilter != null)    predicates.add(cb.equal(root.get("severity"), sevFilter));
-            if (statusFilter != null) predicates.add(cb.equal(root.get("status"), statusFilter));
+            if (statusFilter != null) predicates.add(cb.equal(root.get(FIELD_STATUS), statusFilter));
             if (jvmFilter != null)    predicates.add(cb.equal(root.get("jvm"), jvmFilter));
-            if (since != null)        predicates.add(cb.greaterThanOrEqualTo(root.get("lastSeenAt"), since));
+            if (since != null)        predicates.add(cb.greaterThanOrEqualTo(root.get(FIELD_LAST_SEEN_AT), since));
             if (searchLike != null)   predicates.add(cb.or(
                     cb.like(cb.lower(root.get("message")), searchLike),
                     cb.like(cb.lower(root.get("loggerName")), searchLike),
@@ -226,7 +228,7 @@ public class ErrorLogController {
         // values with NullPointerException.
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("errorId", id.toString());
-        data.put("status", next);
+        data.put(FIELD_STATUS, next);
         data.put("resolvedAt", resolvedAt == null ? null : resolvedAt.toString());
         data.put("resolvedBy", resolvedBy);
         return ResponseEntity.ok(ResponseDto.builder()
@@ -237,10 +239,10 @@ public class ErrorLogController {
 
     private static Sort parseSort(String sort) {
         if (!StringUtils.hasText(sort))
-            return Sort.by(Sort.Direction.DESC, "lastSeenAt");
+            return Sort.by(Sort.Direction.DESC, FIELD_LAST_SEEN_AT);
         String[] parts = sort.split(",", 2);
         String field = parts[0].trim();
-        if (!ALLOWED_SORT_FIELDS.contains(field)) field = "lastSeenAt";
+        if (!ALLOWED_SORT_FIELDS.contains(field)) field = FIELD_LAST_SEEN_AT;
         Sort.Direction dir = (parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim()))
                 ? Sort.Direction.ASC : Sort.Direction.DESC;
         return Sort.by(dir, field);
@@ -285,7 +287,7 @@ public class ErrorLogController {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("errorId", e.getErrorId());
         row.put("severity", e.getSeverity());
-        row.put("status", e.getStatus());
+        row.put(FIELD_STATUS, e.getStatus());
         row.put("jvm", e.getJvm());
         row.put("loggerName", e.getLoggerName());
         row.put("threadName", e.getThreadName());
@@ -295,7 +297,7 @@ public class ErrorLogController {
         row.put("fingerprint", e.getFingerprint());
         row.put("occurrenceCount", e.getOccurrenceCount());
         row.put("occurredAt", e.getOccurredAt() == null ? null : e.getOccurredAt().toString());
-        row.put("lastSeenAt", e.getLastSeenAt() == null ? null : e.getLastSeenAt().toString());
+        row.put(FIELD_LAST_SEEN_AT, e.getLastSeenAt() == null ? null : e.getLastSeenAt().toString());
         row.put("resolvedAt", e.getResolvedAt() == null ? null : e.getResolvedAt().toString());
         row.put("resolvedBy", e.getResolvedBy());
         return row;

@@ -23,6 +23,15 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DefaultStrategyContextEnrichmentService implements StrategyContextEnrichmentService {
 
+    /**
+     * Map key used both as the contractual {@code executionMetadata} flag
+     * (caller writes "backtest" / "live") and as a diagnostic provenance
+     * label on enriched snapshots. The two usages are distinct in intent
+     * but share the wire-format key, so a single constant prevents the
+     * literal from drifting across call-sites.
+     */
+    private static final String SOURCE_KEY = "source";
+
     private final FeatureStoreRepository featureStoreRepository;
     private final MarketDataRepository marketDataRepository;
 
@@ -41,7 +50,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         FeatureStore previousFeatureStore = null;
 
         boolean isBacktest = baseContext.getExecutionMetadata() != null
-                && "backtest".equals(baseContext.getExecutionMetadata().get("source"));
+                && "backtest".equals(baseContext.getExecutionMetadata().get(SOURCE_KEY));
 
         if (!isBacktest
                 && requirements.isRequireBiasTimeframe()
@@ -121,6 +130,14 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
                 .build();
     }
 
+    private static final String LABEL_BULL_TREND = "BULL_TREND";
+    private static final String LABEL_BEAR_TREND = "BEAR_TREND";
+    private static final String LABEL_RANGE = "RANGE";
+    private static final BigDecimal TREND_BASE_SCORE = new BigDecimal("0.70");
+    private static final BigDecimal TREND_BONUS = new BigDecimal("0.10");
+    private static final BigDecimal ADX_TREND_THRESHOLD = new BigDecimal("18");
+    private static final BigDecimal COMPRESSION_DEFAULT = new BigDecimal("0.20");
+
     private RegimeSnapshot buildRegimeSnapshot(
             BaseStrategyContext context,
             FeatureStore biasFeatureStore,
@@ -130,74 +147,23 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         MarketData currentMarket = context.getMarketData();
 
         if (currentFeature == null || currentMarket == null || currentMarket.getClosePrice() == null) {
-            return RegimeSnapshot.builder()
-                    .regimeLabel("UNKNOWN")
-                    .trendScore(BigDecimal.ZERO)
-                    .compressionScore(BigDecimal.ZERO)
-                    .regimeConfidence(BigDecimal.ZERO)
-                    .diagnostics(Map.of(
-                            "reason", "missing_current_market_or_feature"
-                    ))
-                    .build();
+            return unknownRegimeSnapshot();
         }
 
-        BigDecimal trendScore = BigDecimal.ZERO;
-        String regimeLabel = "RANGE";
-
-        if (currentFeature.getEma50() != null
-                && currentFeature.getEma200() != null
-                && currentFeature.getEma50Slope() != null) {
-            BigDecimal close = currentMarket.getClosePrice();
-
-            boolean bullish = close.compareTo(currentFeature.getEma50()) > 0
-                    && currentFeature.getEma50().compareTo(currentFeature.getEma200()) > 0
-                    && currentFeature.getEma50Slope().compareTo(BigDecimal.ZERO) > 0;
-
-            boolean bearish = close.compareTo(currentFeature.getEma50()) < 0
-                    && currentFeature.getEma50().compareTo(currentFeature.getEma200()) < 0
-                    && currentFeature.getEma50Slope().compareTo(BigDecimal.ZERO) < 0;
-
-            if (bullish) {
-                regimeLabel = "BULL_TREND";
-                trendScore = new BigDecimal("0.70");
-            } else if (bearish) {
-                regimeLabel = "BEAR_TREND";
-                trendScore = new BigDecimal("0.70");
-            }
+        RegimeDetection detection = detectRegime(currentFeature, currentMarket.getClosePrice());
+        BigDecimal trendScore = detection.trendScore();
+        if (hasAdxTrend(currentFeature)) {
+            trendScore = trendScore.add(TREND_BONUS);
         }
-
-        if (currentFeature.getAdx() != null && currentFeature.getAdx().compareTo(new BigDecimal("18")) >= 0) {
-            trendScore = trendScore.add(new BigDecimal("0.10"));
-        }
-
-        if (biasFeatureStore != null
-                && biasMarketData != null
-                && biasMarketData.getClosePrice() != null
-                && biasFeatureStore.getEma50() != null
-                && biasFeatureStore.getEma200() != null) {
-            boolean bullishBias = biasMarketData.getClosePrice().compareTo(biasFeatureStore.getEma50()) > 0
-                    && biasFeatureStore.getEma50().compareTo(biasFeatureStore.getEma200()) > 0;
-
-            boolean bearishBias = biasMarketData.getClosePrice().compareTo(biasFeatureStore.getEma50()) < 0
-                    && biasFeatureStore.getEma50().compareTo(biasFeatureStore.getEma200()) < 0;
-
-            if (("BULL_TREND".equals(regimeLabel) && bullishBias)
-                    || ("BEAR_TREND".equals(regimeLabel) && bearishBias)) {
-                trendScore = trendScore.add(new BigDecimal("0.10"));
-            }
-        }
-
+        trendScore = applyBiasConfirmation(detection.regimeLabel(), trendScore, biasFeatureStore, biasMarketData);
         if (trendScore.compareTo(BigDecimal.ONE) > 0) {
             trendScore = BigDecimal.ONE;
         }
 
-        BigDecimal compressionScore = BigDecimal.ZERO;
-        if (currentFeature.getAtr() != null && currentFeature.getAtr().compareTo(BigDecimal.ZERO) > 0) {
-            compressionScore = new BigDecimal("0.20");
-        }
+        BigDecimal compressionScore = hasPositiveAtr(currentFeature) ? COMPRESSION_DEFAULT : BigDecimal.ZERO;
 
         return RegimeSnapshot.builder()
-                .regimeLabel(regimeLabel)
+                .regimeLabel(detection.regimeLabel())
                 .trendScore(trendScore)
                 .compressionScore(compressionScore)
                 .regimeConfidence(trendScore)
@@ -206,6 +172,71 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
                         "biasMarketPresent", biasMarketData != null
                 ))
                 .build();
+    }
+
+    private static RegimeSnapshot unknownRegimeSnapshot() {
+        return RegimeSnapshot.builder()
+                .regimeLabel("UNKNOWN")
+                .trendScore(BigDecimal.ZERO)
+                .compressionScore(BigDecimal.ZERO)
+                .regimeConfidence(BigDecimal.ZERO)
+                .diagnostics(Map.of("reason", "missing_current_market_or_feature"))
+                .build();
+    }
+
+    /** Trend label + base trend score derived from EMA stack alignment. */
+    private record RegimeDetection(String regimeLabel, BigDecimal trendScore) {}
+
+    private static RegimeDetection detectRegime(FeatureStore feature, BigDecimal close) {
+        if (feature.getEma50() == null || feature.getEma200() == null || feature.getEma50Slope() == null) {
+            return new RegimeDetection(LABEL_RANGE, BigDecimal.ZERO);
+        }
+        boolean bullish = close.compareTo(feature.getEma50()) > 0
+                && feature.getEma50().compareTo(feature.getEma200()) > 0
+                && feature.getEma50Slope().compareTo(BigDecimal.ZERO) > 0;
+        if (bullish) return new RegimeDetection(LABEL_BULL_TREND, TREND_BASE_SCORE);
+
+        boolean bearish = close.compareTo(feature.getEma50()) < 0
+                && feature.getEma50().compareTo(feature.getEma200()) < 0
+                && feature.getEma50Slope().compareTo(BigDecimal.ZERO) < 0;
+        if (bearish) return new RegimeDetection(LABEL_BEAR_TREND, TREND_BASE_SCORE);
+
+        return new RegimeDetection(LABEL_RANGE, BigDecimal.ZERO);
+    }
+
+    private static boolean hasAdxTrend(FeatureStore feature) {
+        return feature.getAdx() != null && feature.getAdx().compareTo(ADX_TREND_THRESHOLD) >= 0;
+    }
+
+    private static boolean hasPositiveAtr(FeatureStore feature) {
+        return feature.getAtr() != null && feature.getAtr().compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    /**
+     * Adds the bias-confirmation bonus when the higher-timeframe EMA stack
+     * agrees with the current trend label. Returns trendScore unchanged when
+     * any bias input is missing or the stacks disagree.
+     */
+    private static BigDecimal applyBiasConfirmation(
+            String regimeLabel,
+            BigDecimal trendScore,
+            FeatureStore biasFeatureStore,
+            MarketData biasMarketData) {
+        if (biasFeatureStore == null
+                || biasMarketData == null
+                || biasMarketData.getClosePrice() == null
+                || biasFeatureStore.getEma50() == null
+                || biasFeatureStore.getEma200() == null) {
+            return trendScore;
+        }
+        BigDecimal biasClose = biasMarketData.getClosePrice();
+        boolean bullishBias = biasClose.compareTo(biasFeatureStore.getEma50()) > 0
+                && biasFeatureStore.getEma50().compareTo(biasFeatureStore.getEma200()) > 0;
+        boolean bearishBias = biasClose.compareTo(biasFeatureStore.getEma50()) < 0
+                && biasFeatureStore.getEma50().compareTo(biasFeatureStore.getEma200()) < 0;
+        boolean confirms = (LABEL_BULL_TREND.equals(regimeLabel) && bullishBias)
+                || (LABEL_BEAR_TREND.equals(regimeLabel) && bearishBias);
+        return confirms ? trendScore.add(TREND_BONUS) : trendScore;
     }
 
     private VolatilitySnapshot buildVolatilitySnapshot(BaseStrategyContext context) {
@@ -233,7 +264,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
                 .forecastVol(forecastVol)
                 .jumpRiskScore(jumpRiskScore)
                 .diagnostics(Map.of(
-                        "source", "feature_store_atr"
+                        SOURCE_KEY, "feature_store_atr"
                 ))
                 .build();
     }
@@ -282,7 +313,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
                 .executionQualityScore(executionQualityScore)
                 .tradable(tradable)
                 .diagnostics(Map.of(
-                        "source", "default_market_quality"
+                        SOURCE_KEY, "default_market_quality"
                 ))
                 .build();
     }

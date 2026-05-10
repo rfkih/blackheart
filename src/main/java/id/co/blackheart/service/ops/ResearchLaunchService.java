@@ -44,11 +44,15 @@ import java.util.List;
 @Profile("!research")
 public class ResearchLaunchService {
 
-    private static final Duration HEALTH_PROBE_TIMEOUT = Duration.ofSeconds(2);
-    private static final Duration STOP_REQUEST_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration WAIT_FOR_DOWN_BUDGET = Duration.ofSeconds(20);
     private static final Duration WAIT_FOR_UP_BUDGET = Duration.ofSeconds(60);
     private static final Duration WAIT_POLL_INTERVAL = Duration.ofMillis(750);
+
+    /** Env var the launcher script honours for log redirection. Read via
+     *  {@code System.getenv()} in {@link #start}, {@link #restart} and
+     *  {@link #spawnLauncher} — kept as one constant so the var name is
+     *  defined once. */
+    private static final String LOG_FILE_ENV_VAR = "LOG_FILE";
 
     private final RestTemplate restTemplate;
     private final String researchUrl;
@@ -85,7 +89,7 @@ public class ResearchLaunchService {
                 .state(up ? "STARTED" : "STARTING")
                 .healthy(up)
                 .pid(pid)
-                .logPath(System.getenv().getOrDefault("LOG_FILE", "/tmp/blackheart-research.log"))
+                .logPath(System.getenv().getOrDefault(LOG_FILE_ENV_VAR, "/tmp/blackheart-research.log"))
                 .message(up
                         ? "Research JVM responded to /actuator/health/liveness."
                         : "Launcher spawned but JVM not yet healthy after "
@@ -105,17 +109,28 @@ public class ResearchLaunchService {
         }
         boolean accepted = postShutdown(cookieHeader);
         boolean down = accepted && waitForDown(WAIT_FOR_DOWN_BUDGET);
+        String state = stopState(down, accepted);
+        String message = stopMessage(down, accepted);
         return ResearchLaunchResponse.builder()
-                .state(down ? "STOPPED" : (accepted ? "STOP_REQUESTED" : "STOP_FAILED"))
+                .state(state)
                 .healthy(!down && isHealthy())
-                .message(down
-                        ? "Research JVM stopped."
-                        : (accepted
-                                ? "Shutdown request accepted but JVM still up after "
-                                        + WAIT_FOR_DOWN_BUDGET.toSeconds() + "s."
-                                : "Shutdown request rejected — check admin auth / actuator config."))
+                .message(message)
                 .observedAt(Instant.now())
                 .build();
+    }
+
+    private static String stopState(boolean down, boolean accepted) {
+        if (down) return "STOPPED";
+        return accepted ? "STOP_REQUESTED" : "STOP_FAILED";
+    }
+
+    private static String stopMessage(boolean down, boolean accepted) {
+        if (down) return "Research JVM stopped.";
+        if (accepted) {
+            return "Shutdown request accepted but JVM still up after "
+                    + WAIT_FOR_DOWN_BUDGET.toSeconds() + "s.";
+        }
+        return "Shutdown request rejected — check admin auth / actuator config.";
     }
 
     public ResearchLaunchResponse restart(String cookieHeader) {
@@ -129,7 +144,7 @@ public class ResearchLaunchService {
                 .state(up ? "RESTARTED" : "STARTING")
                 .healthy(up)
                 .pid(pid)
-                .logPath(System.getenv().getOrDefault("LOG_FILE", "/tmp/blackheart-research.log"))
+                .logPath(System.getenv().getOrDefault(LOG_FILE_ENV_VAR, "/tmp/blackheart-research.log"))
                 .message(up
                         ? "Research JVM restarted (prior state: " + stopped.getState() + ")."
                         : "Restart spawned but JVM not yet healthy after "
@@ -198,7 +213,7 @@ public class ResearchLaunchService {
                 .directory(workingDir)
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(
-                        new File(System.getenv().getOrDefault("LOG_FILE", "/tmp/blackheart-research-launcher.log"))));
+                        new File(System.getenv().getOrDefault(LOG_FILE_ENV_VAR, "/tmp/blackheart-research-launcher.log"))));
         try {
             Process p = pb.start();
             log.info("Spawned research launcher: shell={} script={} cwd={} pid={}",

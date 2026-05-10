@@ -90,11 +90,12 @@ public class BacktestV1Controller {
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(backtestQueryService.listRuns(
                         userId,
-                        page, size,
-                        status, strategyCode, symbol, intervalName,
-                        from, to,
-                        sortBy, sortDir,
-                        triggeredBy))
+                        new BacktestQueryService.ListRunsQuery(
+                                page, size,
+                                status, strategyCode, symbol, intervalName,
+                                from, to,
+                                sortBy, sortDir,
+                                triggeredBy)))
                 .build());
     }
 

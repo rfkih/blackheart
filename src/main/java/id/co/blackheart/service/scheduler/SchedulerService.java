@@ -226,7 +226,7 @@ public class SchedulerService {
                     log.info("[{}][IP_MONITOR] Triggered at {}", jobName, LocalDateTime.now());
                     break;
 
-                case "FUNDING_INGEST":
+                case JOB_TYPE_FUNDING_INGEST:
                     runFundingIngest(jobName);
                     break;
 
@@ -262,9 +262,7 @@ public class SchedulerService {
             ScheduledFuture<?> task = schedulerMap.get(job.getJobName());
             boolean scheduled = task != null && !task.isCancelled() && !task.isDone();
             Instant nextRunAt = computeNextRun(job.getCronExpression(), job.getJobType());
-            Instant lastRunAt = job.getLastRunAt() != null
-                    ? job.getLastRunAt().atZone(ZoneId.systemDefault()).toInstant()
-                    : ("IP_MONITOR".equals(job.getJobType()) ? ipMonitorLastRun : null);
+            Instant lastRunAt = resolveLastRunAt(job, ipMonitorLastRun);
             out.add(SchedulerJobStatusResponse.builder()
                     .id(job.getId())
                     .jobName(job.getJobName())
@@ -312,9 +310,8 @@ public class SchedulerService {
                 return;
             }
             for (String rawSymbol : fundingSymbols) {
-                if (rawSymbol == null) continue;
-                String symbol = rawSymbol.trim();
-                if (symbol.isEmpty()) continue;
+                String symbol = sanitizeSymbol(rawSymbol);
+                if (symbol == null) continue;
                 try {
                     FundingRateBackfillService.BackfillResult r =
                             fundingRateBackfillService.ingestIncremental(symbol);
@@ -328,6 +325,19 @@ public class SchedulerService {
         } finally {
             fundingIngestRunning.set(false);
         }
+    }
+
+    private static Instant resolveLastRunAt(SchedulerJob job, Instant ipMonitorLastRun) {
+        if (job.getLastRunAt() != null) {
+            return job.getLastRunAt().atZone(ZoneId.systemDefault()).toInstant();
+        }
+        return "IP_MONITOR".equals(job.getJobType()) ? ipMonitorLastRun : null;
+    }
+
+    private static String sanitizeSymbol(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     @PreDestroy

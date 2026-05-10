@@ -96,19 +96,6 @@ public class ResearchParamService {
 
     // ── Persistence ──────────────────────────────────────────────────────────
 
-    private <T> T loadFromDisk(String pathStr, Class<T> type) {
-        try {
-            Path path = Path.of(pathStr);
-            if (!Files.exists(path)) return null;
-            byte[] bytes = Files.readAllBytes(path);
-            if (bytes.length == 0) return null;
-            return objectMapper.readValue(bytes, type);
-        } catch (IOException e) {
-            log.warn("Could not read params from {} — falling back to defaults", pathStr, e);
-            return null;
-        }
-    }
-
     /**
      * Update {@code defaults} with any non-null fields present in the on-disk
      * JSON, returning the merged value. Keys absent from the JSON keep their

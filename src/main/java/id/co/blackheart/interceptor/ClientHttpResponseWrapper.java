@@ -13,7 +13,7 @@ public class ClientHttpResponseWrapper implements ClientHttpResponse {
     private final ClientHttpResponse response;
     private final byte[] body;
 
-    public ClientHttpResponseWrapper(ClientHttpResponse response, byte[] body) throws IOException {
+    public ClientHttpResponseWrapper(ClientHttpResponse response, byte[] body) {
         this.response = response;
         this.body = body != null ? body.clone() : new byte[0];
     }

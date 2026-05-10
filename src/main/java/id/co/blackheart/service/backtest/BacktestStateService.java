@@ -74,36 +74,29 @@ public class BacktestStateService {
     ) {
         BigDecimal sum = ZERO;
         for (BacktestTradePosition position : positions) {
-            if (position == null || !"OPEN".equalsIgnoreCase(position.getStatus())) {
-                continue;
-            }
-
-            BigDecimal remainingQty = safe(position.getRemainingQty());
-            BigDecimal entryPrice = safe(position.getEntryPrice());
-
-            if (remainingQty.compareTo(ZERO) <= 0 || entryPrice.compareTo(ZERO) <= 0) {
-                continue;
-            }
-
-            BigDecimal markToMarketValue;
-
-            if ("LONG".equalsIgnoreCase(position.getSide())) {
-                markToMarketValue = remainingQty.multiply(latestPrice);
-            } else {
-                /**
-                 * Synthetic short model:
-                 * equity contribution = reserved quote notional + unrealized pnl
-                 * Clamped at zero — max loss is the collateral put up at entry;
-                 * markToMarketValue cannot go negative (position liquidated at that point).
-                 */
-                BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
-                BigDecimal unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
-                markToMarketValue = reservedNotional.add(unrealizedPnl).max(ZERO);
-            }
-
-            sum = sum.add(markToMarketValue);
+            sum = sum.add(positionContribution(position, latestPrice));
         }
         return sum;
+    }
+
+    private BigDecimal positionContribution(BacktestTradePosition position, BigDecimal latestPrice) {
+        if (position == null || !"OPEN".equalsIgnoreCase(position.getStatus())) {
+            return ZERO;
+        }
+        BigDecimal remainingQty = safe(position.getRemainingQty());
+        BigDecimal entryPrice = safe(position.getEntryPrice());
+        if (remainingQty.compareTo(ZERO) <= 0 || entryPrice.compareTo(ZERO) <= 0) {
+            return ZERO;
+        }
+        if ("LONG".equalsIgnoreCase(position.getSide())) {
+            return remainingQty.multiply(latestPrice);
+        }
+        // Synthetic short model: equity contribution = reserved quote notional + unrealized pnl.
+        // Clamped at zero — max loss is the collateral put up at entry; markToMarketValue
+        // cannot go negative (position liquidated at that point).
+        BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
+        BigDecimal unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
+        return reservedNotional.add(unrealizedPnl).max(ZERO);
     }
 
     /**

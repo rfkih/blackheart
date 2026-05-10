@@ -18,6 +18,7 @@ import java.util.HashSet;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Postgres LISTEN/NOTIFY consumer that drops cached spec-driven executors
@@ -59,8 +60,8 @@ public class SpecChangeListener {
     private final boolean enabled;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private volatile Thread worker;
-    private volatile Connection conn;
+    private final AtomicReference<Thread> worker = new AtomicReference<>();
+    private final AtomicReference<Connection> conn = new AtomicReference<>();
 
     public SpecChangeListener(@Value("${spring.datasource.url}") String jdbcUrl,
                               @Value("${spring.datasource.username}") String jdbcUser,
@@ -81,18 +82,20 @@ public class SpecChangeListener {
             return;
         }
         running.set(true);
-        worker = new Thread(this::runWithReconnect, "spec-change-listener");
-        worker.setDaemon(true);
-        worker.start();
+        Thread t = new Thread(this::runWithReconnect, "spec-change-listener");
+        t.setDaemon(true);
+        worker.set(t);
+        t.start();
         log.info("SpecChangeListener started — listening on channel '{}'", CHANNEL);
     }
 
     @PreDestroy
     void stop() {
         running.set(false);
-        if (worker != null) worker.interrupt();
-        closeQuietly(conn);
-        conn = null;
+        Thread w = worker.get();
+        if (w != null) w.interrupt();
+        closeQuietly(conn.get());
+        conn.set(null);
     }
 
     private void runWithReconnect() {
@@ -110,8 +113,8 @@ public class SpecChangeListener {
                 if (!running.get()) return;
                 log.error("SpecChangeListener unexpected error; reconnecting in {}ms", backoff, ex);
             } finally {
-                closeQuietly(conn);
-                conn = null;
+                closeQuietly(conn.get());
+                conn.set(null);
             }
             sleepQuietly(backoff);
             backoff = Math.min(MAX_BACKOFF_MS, backoff * 2);
@@ -128,37 +131,48 @@ public class SpecChangeListener {
         try (Statement st = c.createStatement()) {
             st.execute("LISTEN " + CHANNEL);
         }
-        this.conn = c;
+        this.conn.set(c);
     }
 
     private void pollLoop() throws SQLException {
-        PGConnection pg = conn.unwrap(PGConnection.class);
+        PGConnection pg = conn.get().unwrap(PGConnection.class);
         while (running.get()) {
             PGNotification[] notifications = pg.getNotifications(POLL_TIMEOUT_MS);
-            if (notifications == null || notifications.length == 0) continue;
+            if (notifications != null && notifications.length > 0) {
+                processBatch(notifications);
+            }
+        }
+    }
 
-            // Bulk DDL (e.g. archetype version bump touching N rows) fans out
-            // N notifications. Dedup per batch so we invalidate each code once.
-            Set<String> codes = new HashSet<>();
-            boolean fullFlush = false;
-            for (PGNotification n : notifications) {
-                if (!CHANNEL.equals(n.getName())) continue;
-                String payload = n.getParameter();
-                if (!StringUtils.hasText(payload)) {
-                    fullFlush = true;
-                } else {
-                    codes.add(payload);
-                }
+    /**
+     * Bulk DDL (e.g. archetype version bump touching N rows) fans out N
+     * notifications. Dedup per batch so we invalidate each code once.
+     */
+    private void processBatch(PGNotification[] notifications) {
+        Set<String> codes = new HashSet<>();
+        boolean fullFlush = false;
+        for (PGNotification n : notifications) {
+            if (!CHANNEL.equals(n.getName())) continue;
+            String payload = n.getParameter();
+            if (!StringUtils.hasText(payload)) {
+                fullFlush = true;
+            } else {
+                codes.add(payload);
             }
-            if (fullFlush) {
-                log.info("Received spec_change batch with empty payload — flushing entire spec cache");
-                executorFactory.invalidateSpecCache();
-            } else if (!codes.isEmpty()) {
-                log.info("Received spec_change batch | size={} codes={}", notifications.length, codes);
-                for (String code : codes) {
-                    executorFactory.invalidateSpecCache(code);
-                }
-            }
+        }
+        applyInvalidation(notifications.length, codes, fullFlush);
+    }
+
+    private void applyInvalidation(int batchSize, Set<String> codes, boolean fullFlush) {
+        if (fullFlush) {
+            log.info("Received spec_change batch with empty payload — flushing entire spec cache");
+            executorFactory.invalidateSpecCache();
+            return;
+        }
+        if (codes.isEmpty()) return;
+        log.info("Received spec_change batch | size={} codes={}", batchSize, codes);
+        for (String code : codes) {
+            executorFactory.invalidateSpecCache(code);
         }
     }
 

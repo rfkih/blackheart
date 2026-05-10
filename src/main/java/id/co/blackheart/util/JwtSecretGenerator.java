@@ -1,5 +1,7 @@
 package id.co.blackheart.util;
 
+import lombok.extern.slf4j.Slf4j;
+
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import java.util.Base64;
@@ -29,6 +31,7 @@ import java.util.Base64;
  * works without secret-management infra; rotating to a unique secret per
  * deployment environment is a hard requirement once you're past localhost.
  */
+@Slf4j
 public final class JwtSecretGenerator {
 
     private JwtSecretGenerator() {
@@ -41,17 +44,17 @@ public final class JwtSecretGenerator {
         SecretKey key = gen.generateKey();
         String encoded = Base64.getEncoder().encodeToString(key.getEncoded());
 
-        System.out.println();
-        System.out.println("Fresh JWT_SECRET (HS256, 256-bit, Base64):");
-        System.out.println();
-        System.out.println("    " + encoded);
-        System.out.println();
-        System.out.println("Set in prod env:");
-        System.out.println("    export JWT_SECRET=\"" + encoded + "\"");
-        System.out.println();
-        System.out.println("Then either restart with SPRING_PROFILES_ACTIVE=prod (or any non-dev/test/local)");
-        System.out.println("or unset SPRING_PROFILES_ACTIVE — JwtService refuses to boot with the dev sentinel");
-        System.out.println("unless an explicit dev/test/local profile is active.");
-        System.out.println();
+        log.info("");
+        log.info("Fresh JWT_SECRET (HS256, 256-bit, Base64):");
+        log.info("");
+        log.info("    {}", encoded);
+        log.info("");
+        log.info("Set in prod env:");
+        log.info("    export JWT_SECRET=\"{}\"", encoded);
+        log.info("");
+        log.info("Then either restart with SPRING_PROFILES_ACTIVE=prod (or any non-dev/test/local)");
+        log.info("or unset SPRING_PROFILES_ACTIVE — JwtService refuses to boot with the dev sentinel");
+        log.info("unless an explicit dev/test/local profile is active.");
+        log.info("");
     }
 }

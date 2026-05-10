@@ -38,11 +38,13 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class MeanReversionOscillatorEngine implements StrategyEngine {
 
-    public static final String ARCHETYPE = "mean_reversion_oscillator";
+    public static final String ARCHETYPE_NAME = "mean_reversion_oscillator";
     public static final int VERSION = 1;
 
     private static final String SIDE_LONG  = "LONG";
     private static final String SIDE_SHORT = "SHORT";
+
+    private static final String KEY_ENTRY = "entry";
 
     /** Defaults; specs may override via {@code body.signals.*} for parity with hand-coded ancestors. */
     private static final String DEFAULT_SIGNAL_TYPE_REVERSAL   = "MRO_BAND_EXHAUSTION";
@@ -74,7 +76,7 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
 
     @Override
     public String archetype() {
-        return ARCHETYPE;
+        return ARCHETYPE_NAME;
     }
 
     @Override
@@ -172,8 +174,8 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr()).entryRsi(f.getRsi())
                 .entryTrendRegime(f.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", spec.getStrategyCode(), "LONG", ARCHETYPE))
-                .diagnostics(Map.of("entry", entry, "stop", stop, "tp1", tp1, "rr", rr,
+                .tags(List.of("ENTRY", spec.getStrategyCode(), SIDE_LONG, ARCHETYPE_NAME))
+                .diagnostics(Map.of(KEY_ENTRY, entry, "stop", stop, "tp1", tp1, "rr", rr,
                         "bbLower", lowerBand, "bbMid", middle, "atr", atr,
                         "rsi", strategyHelper.safe(f.getRsi())))
                 .build();
@@ -224,8 +226,8 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
                 .entryAdx(f.getAdx()).entryAtr(f.getAtr()).entryRsi(f.getRsi())
                 .entryTrendRegime(f.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", spec.getStrategyCode(), "SHORT", ARCHETYPE))
-                .diagnostics(Map.of("entry", entry, "stop", stop, "tp1", tp1, "rr", rr))
+                .tags(List.of("ENTRY", spec.getStrategyCode(), SIDE_SHORT, ARCHETYPE_NAME))
+                .diagnostics(Map.of(KEY_ENTRY, entry, "stop", stop, "tp1", tp1, "rr", rr))
                 .build();
     }
 
@@ -235,25 +237,36 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
         if (side == null) return hold(spec, ctx, "MRO manage: unknown side");
         boolean isLong = SIDE_LONG.equalsIgnoreCase(side);
 
+        StrategyDecision timed = tryTimedExit(spec, ctx, md, snap, side, isLong, t);
+        if (timed != null) return timed;
+
+        return tryBreakEvenShift(spec, ctx, md, snap, side, isLong, t);
+    }
+
+    private StrategyDecision tryTimedExit(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
+                                          PositionSnapshot snap, String side, boolean isLong, Tuning t) {
         LocalDateTime entryTime = snap.getEntryTime();
         LocalDateTime now = md.getEndTime();
-        if (entryTime != null && now != null) {
-            long minutesHeld = Duration.between(entryTime, now).toMinutes();
-            long maxMinutes = (long) t.maxBarsHeld * t.intervalMinutes;
-            if (minutesHeld >= maxMinutes) {
-                log.info("MRO[{}] {} TIMED EXIT | minutesHeld={}", spec.getStrategyCode(), side, minutesHeld);
-                return baseBuilder(spec, ctx)
-                        .decisionType(isLong ? DecisionType.CLOSE_LONG : DecisionType.CLOSE_SHORT)
-                        .signalType(SIGNAL_TYPE_MANAGEMENT)
-                        .setupType(isLong ? setupLongTimedExit(spec) : setupShortTimedExit(spec)).side(side)
-                        .reason("MRO maxBarsHeld reached")
-                        .targetPositionRole(TARGET_ALL).decisionTime(LocalDateTime.now())
-                        .tags(List.of("EXIT", spec.getStrategyCode(), side, "TIMED"))
-                        .diagnostics(Map.of("close", strategyHelper.safe(md.getClosePrice())))
-                        .build();
-            }
-        }
+        if (entryTime == null || now == null) return null;
 
+        long minutesHeld = Duration.between(entryTime, now).toMinutes();
+        long maxMinutes = (long) t.maxBarsHeld * t.intervalMinutes;
+        if (minutesHeld < maxMinutes) return null;
+
+        log.info("MRO[{}] {} TIMED EXIT | minutesHeld={}", spec.getStrategyCode(), side, minutesHeld);
+        return baseBuilder(spec, ctx)
+                .decisionType(isLong ? DecisionType.CLOSE_LONG : DecisionType.CLOSE_SHORT)
+                .signalType(SIGNAL_TYPE_MANAGEMENT)
+                .setupType(isLong ? setupLongTimedExit(spec) : setupShortTimedExit(spec)).side(side)
+                .reason("MRO maxBarsHeld reached")
+                .targetPositionRole(TARGET_ALL).decisionTime(LocalDateTime.now())
+                .tags(List.of("EXIT", spec.getStrategyCode(), side, "TIMED"))
+                .diagnostics(Map.of("close", strategyHelper.safe(md.getClosePrice())))
+                .build();
+    }
+
+    private StrategyDecision tryBreakEvenShift(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
+                                               PositionSnapshot snap, String side, boolean isLong, Tuning t) {
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
         BigDecimal initStop = snap.getInitialStopLossPrice() != null
                 ? snap.getInitialStopLossPrice() : strategyHelper.safe(snap.getCurrentStopLossPrice());
@@ -265,22 +278,23 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
         BigDecimal rMultiple = move.divide(initRisk, 8, RoundingMode.HALF_UP);
 
         boolean alreadyAtBe = isLong ? curStop.compareTo(entry) >= 0 : curStop.compareTo(entry) <= 0;
-        if (rMultiple.compareTo(t.breakEvenR) >= 0 && !alreadyAtBe) {
-            log.info("MRO[{}] {} BE shift | rMultiple={} curStop={} -> entry={}",
-                    spec.getStrategyCode(), side, rMultiple, curStop, entry);
-            return baseBuilder(spec, ctx)
-                    .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
-                    .signalType(SIGNAL_TYPE_MANAGEMENT).side(side)
-                    .stopLossPrice(entry).trailingStopPrice(entry)
-                    .takeProfitPrice1(snap.getTakeProfitPrice())
-                    .targetPositionRole(TARGET_ALL)
-                    .reason("MRO break-even shift at " + rMultiple + "R")
-                    .decisionTime(LocalDateTime.now())
-                    .tags(List.of("MANAGEMENT", spec.getStrategyCode(), side, "BREAK_EVEN"))
-                    .diagnostics(Map.of("rMultiple", rMultiple, "curStop", curStop, "entry", entry))
-                    .build();
+        if (rMultiple.compareTo(t.breakEvenR) < 0 || alreadyAtBe) {
+            return hold(spec, ctx, "MRO holding — SL/TP active");
         }
-        return hold(spec, ctx, "MRO holding — SL/TP active");
+
+        log.info("MRO[{}] {} BE shift | rMultiple={} curStop={} -> entry={}",
+                spec.getStrategyCode(), side, rMultiple, curStop, entry);
+        return baseBuilder(spec, ctx)
+                .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
+                .signalType(SIGNAL_TYPE_MANAGEMENT).side(side)
+                .stopLossPrice(entry).trailingStopPrice(entry)
+                .takeProfitPrice1(snap.getTakeProfitPrice())
+                .targetPositionRole(TARGET_ALL)
+                .reason("MRO break-even shift at " + rMultiple + "R")
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("MANAGEMENT", spec.getStrategyCode(), side, "BREAK_EVEN"))
+                .diagnostics(Map.of("rMultiple", rMultiple, "curStop", curStop, KEY_ENTRY, entry))
+                .build();
     }
 
     private BigDecimal resolveSize(EnrichedStrategyContext ctx, String side,
@@ -307,7 +321,7 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
         String name = spec.getStrategyName();
         if (!StringUtils.hasText(name)) name = spec.getStrategyCode();
         Integer ver = spec.getArchetypeVersion();
-        String version = ARCHETYPE + ".v" + (ver == null ? VERSION : ver);
+        String version = ARCHETYPE_NAME + ".v" + (ver == null ? VERSION : ver);
         return StrategyDecision.builder()
                 .strategyCode(spec.getStrategyCode())
                 .strategyName(name)
@@ -319,14 +333,14 @@ public class MeanReversionOscillatorEngine implements StrategyEngine {
         return baseBuilder(spec, ctx)
                 .decisionType(DecisionType.HOLD)
                 .signalType(signalReversal(spec)).reason(reason).decisionTime(LocalDateTime.now())
-                .tags(List.of("HOLD", spec.getStrategyCode(), ARCHETYPE)).build();
+                .tags(List.of("HOLD", spec.getStrategyCode(), ARCHETYPE_NAME)).build();
     }
 
     private StrategyDecision veto(StrategySpec spec, EnrichedStrategyContext ctx, String reason) {
         return baseBuilder(spec, ctx)
                 .decisionType(DecisionType.HOLD)
                 .vetoed(Boolean.TRUE).vetoReason(reason).reason("MRO vetoed").decisionTime(LocalDateTime.now())
-                .tags(List.of("VETO", spec.getStrategyCode(), ARCHETYPE, "RISK_LAYER")).diagnostics(Map.of()).build();
+                .tags(List.of("VETO", spec.getStrategyCode(), ARCHETYPE_NAME, "RISK_LAYER")).diagnostics(Map.of()).build();
     }
 
     // ── Spec-overridable label resolvers (body.signals.* takes precedence). ──

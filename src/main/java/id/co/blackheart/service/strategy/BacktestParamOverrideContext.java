@@ -60,10 +60,10 @@ public final class BacktestParamOverrideContext {
         // {@code lsr} at lookup time.
         Map<String, Map<String, Object>> normalised = new HashMap<>();
         for (Map.Entry<String, Map<String, Object>> e : overridesByStrategy.entrySet()) {
-            if (e.getKey() == null) continue;
             Map<String, Object> inner = e.getValue();
-            if (CollectionUtils.isEmpty(inner)) continue;
-            normalised.put(e.getKey().trim().toUpperCase(), new HashMap<>(inner));
+            if (e.getKey() != null && !CollectionUtils.isEmpty(inner)) {
+                normalised.put(e.getKey().trim().toUpperCase(), new HashMap<>(inner));
+            }
         }
         if (normalised.isEmpty()) {
             HOLDER.remove();

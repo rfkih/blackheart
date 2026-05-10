@@ -53,102 +53,136 @@ public class CorrelationGuardService {
     private final AlertService alertService;
 
     public GateVerdict check(AccountStrategy requestingStrategy, Account account, String side) {
-        // Collect accountStrategyIds of OTHER strategies with open same-side trades.
-        List<Trades> openTrades = tradesRepository.findOpenByAccountIds(List.of(account.getAccountId()));
-        List<UUID> sameSideStrategyIds = openTrades.stream()
-                .filter(t -> side.equalsIgnoreCase(t.getSide()))
-                .map(Trades::getAccountStrategyId)
-                .filter(Objects::nonNull)   // guard against legacy rows with null account_strategy_id
-                .distinct()
-                .filter(id -> !id.equals(requestingStrategy.getAccountStrategyId()))
-                .collect(Collectors.toList());
-
+        List<UUID> sameSideStrategyIds = collectSameSideOpenStrategyIds(
+                account, side, requestingStrategy.getAccountStrategyId());
         if (sameSideStrategyIds.isEmpty()) {
             return GateVerdict.allow();
         }
 
-        // --- Concentration check ---
-        if (account.getMaxCapitalConcentrationPct() != null) {
-            List<AccountStrategy> openStrategies = accountStrategyRepository.findAllById(sameSideStrategyIds);
-            BigDecimal existingAlloc = openStrategies.stream()
-                    .map(as -> as.getCapitalAllocationPct() != null ? as.getCapitalAllocationPct() : BigDecimal.ZERO)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal thisAlloc = requestingStrategy.getCapitalAllocationPct() != null
-                    ? requestingStrategy.getCapitalAllocationPct() : BigDecimal.ZERO;
-            BigDecimal totalAlloc = existingAlloc.add(thisAlloc);
+        GateVerdict concentration = checkConcentration(requestingStrategy, account, side, sameSideStrategyIds);
+        if (!concentration.allowed()) return concentration;
 
-            if (totalAlloc.compareTo(account.getMaxCapitalConcentrationPct()) > 0) {
-                String reason = String.format(
-                        "Capital concentration blocked: adding %s%% would bring same-%s exposure to %s%% " +
-                        "(limit %s%%, accountId=%s)",
-                        thisAlloc.setScale(2, RoundingMode.HALF_UP),
-                        side.toUpperCase(),
-                        totalAlloc.setScale(2, RoundingMode.HALF_UP),
-                        account.getMaxCapitalConcentrationPct(),
-                        account.getAccountId());
-                log.warn("[CorrelationGuard] {}", reason);
-                alertService.raise(AlertSeverity.WARN, "CONCENTRATION_BLOCKED", reason,
-                        "concentration_" + account.getAccountId() + "_" + side.toUpperCase());
-                return GateVerdict.deny(reason);
-            }
+        return checkCorrelation(requestingStrategy, account, side, sameSideStrategyIds);
+    }
+
+    /** Collect accountStrategyIds of OTHER strategies with open same-side trades. */
+    private List<UUID> collectSameSideOpenStrategyIds(Account account, String side, UUID requestingId) {
+        List<Trades> openTrades = tradesRepository.findOpenByAccountIds(List.of(account.getAccountId()));
+        return openTrades.stream()
+                .filter(t -> side.equalsIgnoreCase(t.getSide()))
+                .map(Trades::getAccountStrategyId)
+                .filter(Objects::nonNull)   // guard against legacy rows with null account_strategy_id
+                .distinct()
+                .filter(id -> !id.equals(requestingId))
+                .toList();
+    }
+
+    private GateVerdict checkConcentration(
+            AccountStrategy requestingStrategy, Account account, String side, List<UUID> sameSideStrategyIds) {
+        if (account.getMaxCapitalConcentrationPct() == null) return GateVerdict.allow();
+
+        List<AccountStrategy> openStrategies = accountStrategyRepository.findAllById(sameSideStrategyIds);
+        BigDecimal existingAlloc = openStrategies.stream()
+                .map(as -> as.getCapitalAllocationPct() != null ? as.getCapitalAllocationPct() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal thisAlloc = requestingStrategy.getCapitalAllocationPct() != null
+                ? requestingStrategy.getCapitalAllocationPct() : BigDecimal.ZERO;
+        BigDecimal totalAlloc = existingAlloc.add(thisAlloc);
+
+        if (totalAlloc.compareTo(account.getMaxCapitalConcentrationPct()) <= 0) return GateVerdict.allow();
+
+        String reason = String.format(
+                "Capital concentration blocked: adding %s%% would bring same-%s exposure to %s%% " +
+                "(limit %s%%, accountId=%s)",
+                thisAlloc.setScale(2, RoundingMode.HALF_UP),
+                side.toUpperCase(),
+                totalAlloc.setScale(2, RoundingMode.HALF_UP),
+                account.getMaxCapitalConcentrationPct(),
+                account.getAccountId());
+        log.warn("[CorrelationGuard] {}", reason);
+        alertService.raise(AlertSeverity.WARN, "CONCENTRATION_BLOCKED", reason,
+                "concentration_" + account.getAccountId() + "_" + side.toUpperCase());
+        return GateVerdict.deny(reason);
+    }
+
+    private GateVerdict checkCorrelation(
+            AccountStrategy requestingStrategy, Account account, String side, List<UUID> sameSideStrategyIds) {
+        if (account.getMaxCorrBlockThreshold() == null) return GateVerdict.allow();
+
+        LocalDate endDate   = LocalDate.now().minusDays(1);
+        LocalDate startDate = endDate.minusDays(CORR_WINDOW_DAYS);
+
+        List<StrategyDailyRealizedCurve> thisCurve = curveRepository
+                .findByAccountStrategyIdAndCurveDateBetween(
+                        requestingStrategy.getAccountStrategyId(), startDate, endDate);
+        if (thisCurve.size() < MIN_CORR_DAYS) return GateVerdict.allow();
+
+        Map<LocalDate, Double> thisMap = toCurveMap(thisCurve);
+        double threshold = account.getMaxCorrBlockThreshold().doubleValue();
+        CheckContext ctx = new CheckContext(requestingStrategy, account, side, threshold, startDate, endDate);
+
+        for (UUID otherId : sameSideStrategyIds) {
+            GateVerdict pair = checkCorrelationPair(ctx, otherId, thisMap);
+            if (!pair.allowed()) return pair;
         }
-
-        // --- Correlation check ---
-        if (account.getMaxCorrBlockThreshold() != null) {
-            LocalDate endDate   = LocalDate.now().minusDays(1);
-            LocalDate startDate = endDate.minusDays(CORR_WINDOW_DAYS);
-
-            List<StrategyDailyRealizedCurve> thisCurve = curveRepository
-                    .findByAccountStrategyIdAndCurveDateBetween(
-                            requestingStrategy.getAccountStrategyId(), startDate, endDate);
-
-            if (thisCurve.size() < MIN_CORR_DAYS) {
-                return GateVerdict.allow();
-            }
-
-            // (a, b) -> a: guard against duplicate curve_date rows caused by data anomalies;
-            // DB unique constraint prevents this in normal operation.
-            Map<LocalDate, Double> thisMap = thisCurve.stream().collect(Collectors.toMap(
-                    StrategyDailyRealizedCurve::getCurveDate,
-                    c -> c.getDailyRealizedPnlAmount().doubleValue(),
-                    (a, b) -> a));
-
-            for (UUID otherId : sameSideStrategyIds) {
-                List<StrategyDailyRealizedCurve> otherCurve = curveRepository
-                        .findByAccountStrategyIdAndCurveDateBetween(otherId, startDate, endDate);
-
-                Map<LocalDate, Double> otherMap = otherCurve.stream().collect(Collectors.toMap(
-                        StrategyDailyRealizedCurve::getCurveDate,
-                        c -> c.getDailyRealizedPnlAmount().doubleValue(),
-                        (a, b) -> a));
-
-                List<LocalDate> common = thisMap.keySet().stream()
-                        .filter(otherMap::containsKey)
-                        .sorted()
-                        .collect(Collectors.toList());
-
-                if (common.size() < MIN_CORR_DAYS) continue;
-
-                double[] xs = common.stream().mapToDouble(thisMap::get).toArray();
-                double[] ys = common.stream().mapToDouble(otherMap::get).toArray();
-                double r    = pearson(xs, ys);
-
-                double threshold = account.getMaxCorrBlockThreshold().doubleValue();
-                if (r >= threshold) {
-                    String reason = String.format(
-                            "Correlated strategies blocked: %s vs %s has 30-day P&L correlation r=%.3f >= threshold %.3f " +
-                            "(side=%s, accountId=%s)",
-                            requestingStrategy.getAccountStrategyId(), otherId, r, threshold,
-                            side.toUpperCase(), account.getAccountId());
-                    log.warn("[CorrelationGuard] {}", reason);
-                    alertService.raise(AlertSeverity.WARN, "CORRELATION_BLOCKED", reason,
-                            "corr_" + requestingStrategy.getAccountStrategyId() + "_" + otherId);
-                    return GateVerdict.deny(reason);
-                }
-            }
-        }
-
         return GateVerdict.allow();
+    }
+
+    /**
+     * Bundles the requesting-side context that every correlation pair check
+     * needs. Reduces {@link #checkCorrelationPair} from 8 to 3 parameters
+     * (Sonar S107) without losing any caller information.
+     */
+    private record CheckContext(
+            AccountStrategy requestingStrategy,
+            Account account,
+            String side,
+            double threshold,
+            LocalDate startDate,
+            LocalDate endDate
+    ) {}
+
+    private GateVerdict checkCorrelationPair(
+            CheckContext ctx,
+            UUID otherId,
+            Map<LocalDate, Double> thisMap) {
+        List<StrategyDailyRealizedCurve> otherCurve = curveRepository
+                .findByAccountStrategyIdAndCurveDateBetween(otherId, ctx.startDate(), ctx.endDate());
+        Map<LocalDate, Double> otherMap = toCurveMap(otherCurve);
+
+        List<LocalDate> common = thisMap.keySet().stream()
+                .filter(otherMap::containsKey)
+                .sorted()
+                .toList();
+        if (common.size() < MIN_CORR_DAYS) return GateVerdict.allow();
+
+        double[] xs = common.stream().mapToDouble(thisMap::get).toArray();
+        double[] ys = common.stream().mapToDouble(otherMap::get).toArray();
+        double r = pearson(xs, ys);
+
+        if (r < ctx.threshold()) return GateVerdict.allow();
+
+        String reason = String.format(
+                "Correlated strategies blocked: %s vs %s has 30-day P&L correlation r=%.3f >= threshold %.3f " +
+                "(side=%s, accountId=%s)",
+                ctx.requestingStrategy().getAccountStrategyId(), otherId, r, ctx.threshold(),
+                ctx.side().toUpperCase(), ctx.account().getAccountId());
+        log.warn("[CorrelationGuard] {}", reason);
+        alertService.raise(AlertSeverity.WARN, "CORRELATION_BLOCKED", reason,
+                "corr_" + ctx.requestingStrategy().getAccountStrategyId() + "_" + otherId);
+        return GateVerdict.deny(reason);
+    }
+
+    /**
+     * Reduces a daily-realized curve to a date→pnl lookup. The merge function
+     * keeps the first occurrence on duplicate curve_date — a defensive guard
+     * since the DB unique constraint normally prevents duplicates.
+     */
+    private static Map<LocalDate, Double> toCurveMap(List<StrategyDailyRealizedCurve> curve) {
+        return curve.stream().collect(Collectors.toMap(
+                StrategyDailyRealizedCurve::getCurveDate,
+                c -> c.getDailyRealizedPnlAmount().doubleValue(),
+                (first, dup) -> first));
     }
 
     /** Pearson product-moment correlation. Returns 0 when variance is zero or n < 3. */
@@ -157,7 +191,9 @@ public class CorrelationGuardService {
         if (n < 3) return 0.0;
         double meanX = Arrays.stream(xs).average().orElse(0.0);
         double meanY = Arrays.stream(ys).average().orElse(0.0);
-        double cov = 0, varX = 0, varY = 0;
+        double cov = 0;
+        double varX = 0;
+        double varY = 0;
         for (int i = 0; i < n; i++) {
             double dx = xs[i] - meanX;
             double dy = ys[i] - meanY;

@@ -24,67 +24,80 @@ import org.springframework.stereotype.Component;
 @Component
 public class SeverityClassifier {
 
-    public String classify(String loggerName, String exceptionClass) {
-        if (loggerName == null) return "MEDIUM";
-        String n = loggerName;
+    private static final String SEVERITY_CRITICAL = "CRITICAL";
+    private static final String SEVERITY_HIGH = "HIGH";
+    private static final String SEVERITY_MEDIUM = "MEDIUM";
 
-        // ── Live trading execution path: CRITICAL ────────────────────────────
-        if (n.startsWith("id.co.blackheart.service.live")
+    public String classify(String loggerName, String exceptionClass) {
+        if (loggerName == null) return SEVERITY_MEDIUM;
+
+        if (isLiveTradingHotPath(loggerName) || isFatalJvmError(exceptionClass)) {
+            return SEVERITY_CRITICAL;
+        }
+
+        if (loggerName.startsWith("frontend.")) {
+            return classifyFrontend(loggerName);
+        }
+        if (loggerName.startsWith("middleware.")) {
+            return classifyMiddleware(loggerName);
+        }
+        if (isServiceOrPersistence(loggerName)) {
+            return SEVERITY_HIGH;
+        }
+        return SEVERITY_MEDIUM;
+    }
+
+    // ── Live trading execution path: CRITICAL ────────────────────────────
+    private boolean isLiveTradingHotPath(String n) {
+        return n.startsWith("id.co.blackheart.service.live")
                 || n.startsWith("id.co.blackheart.service.trade")
                 || n.startsWith("id.co.blackheart.client.BinanceClient")
                 || n.startsWith("id.co.blackheart.stream")
                 || n.contains("LiveTradingDecisionExecutor")
                 || n.contains("LiveTradingCoordinator")
                 || n.contains("LiveOrchestratorCoordinator")
-                || n.contains("BinanceWebSocket")) {
-            return "CRITICAL";
-        }
+                || n.contains("BinanceWebSocket");
+    }
 
-        // OutOfMemory / StackOverflow on any thread is always CRITICAL.
-        if (exceptionClass != null
-                && (exceptionClass.equals("java.lang.OutOfMemoryError")
-                || exceptionClass.equals("java.lang.StackOverflowError"))) {
-            return "CRITICAL";
-        }
+    // OutOfMemory / StackOverflow on any thread is always CRITICAL.
+    private boolean isFatalJvmError(String exceptionClass) {
+        return "java.lang.OutOfMemoryError".equals(exceptionClass)
+                || "java.lang.StackOverflowError".equals(exceptionClass);
+    }
 
-        // ── Frontend errors (logger names prefixed by the controller) ────────
-        // The /api/v1/errors controller stamps loggerName as
-        // "frontend.<route>" (e.g. "frontend.trade.NewOrderForm"). Routes
-        // that hand off to live capital decisions (place/cancel order, kill
-        // switch, promotion) page as HIGH — a broken UI on those paths still
-        // costs the operator real money even though the JS itself isn't on
-        // the trading hot path. Everything else from the frontend is MEDIUM.
-        if (n.startsWith("frontend.")) {
-            if (n.startsWith("frontend.trade")
-                    || n.startsWith("frontend.kill-switch")
-                    || n.startsWith("frontend.strategy-promotion")
-                    || n.startsWith("frontend.account-strategy")) {
-                return "HIGH";
-            }
-            return "MEDIUM";
+    // The /api/v1/errors controller stamps loggerName as "frontend.<route>"
+    // (e.g. "frontend.trade.NewOrderForm"). Routes that hand off to live
+    // capital decisions (place/cancel order, kill switch, promotion) page as
+    // HIGH — a broken UI on those paths still costs the operator real money
+    // even though the JS itself isn't on the trading hot path. Everything
+    // else from the frontend is MEDIUM.
+    private String classifyFrontend(String n) {
+        if (n.startsWith("frontend.trade")
+                || n.startsWith("frontend.kill-switch")
+                || n.startsWith("frontend.strategy-promotion")
+                || n.startsWith("frontend.account-strategy")) {
+            return SEVERITY_HIGH;
         }
+        return SEVERITY_MEDIUM;
+    }
 
-        // Middleware (FastAPI, Node) — Phase C. Same shape as frontend, with
-        // a "middleware." prefix. Default MEDIUM; HIGH only if it sits in the
-        // request path of a live decision.
-        if (n.startsWith("middleware.")) {
-            if (n.startsWith("middleware.trade")
-                    || n.startsWith("middleware.kill-switch")) {
-                return "HIGH";
-            }
-            return "MEDIUM";
+    // Middleware (FastAPI, Node) — Phase C. Same shape as frontend, with a
+    // "middleware." prefix. Default MEDIUM; HIGH only if it sits in the
+    // request path of a live decision.
+    private String classifyMiddleware(String n) {
+        if (n.startsWith("middleware.trade")
+                || n.startsWith("middleware.kill-switch")) {
+            return SEVERITY_HIGH;
         }
+        return SEVERITY_MEDIUM;
+    }
 
-        // ── Service-layer (non-hot-path) and persistence: HIGH ───────────────
-        if (n.startsWith("id.co.blackheart.service")
+    private boolean isServiceOrPersistence(String n) {
+        return n.startsWith("id.co.blackheart.service")
                 || n.startsWith("id.co.blackheart.repository")
                 || n.startsWith("id.co.blackheart.engine")
                 || n.startsWith("org.flywaydb")
                 || n.startsWith("org.hibernate")
-                || n.startsWith("com.zaxxer.hikari")) {
-            return "HIGH";
-        }
-
-        return "MEDIUM";
+                || n.startsWith("com.zaxxer.hikari");
     }
 }

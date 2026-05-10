@@ -1,5 +1,6 @@
 package id.co.blackheart.logging;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -70,6 +71,7 @@ public class LoggingServiceImpl implements LoggingService {
 
     @Override
     public void logRequest(HttpServletRequest request, Object body) {
+        if (!log.isInfoEnabled()) return;
         try {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("method", request.getMethod());
@@ -91,6 +93,7 @@ public class LoggingServiceImpl implements LoggingService {
 
     @Override
     public void logResponse(HttpServletRequest request, HttpServletResponse response, Object body) {
+        if (!log.isInfoEnabled()) return;
         try {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("method", request.getMethod());
@@ -120,7 +123,7 @@ public class LoggingServiceImpl implements LoggingService {
      * for debugging. Falls back to the UTF-8 string (or the raw object) if
      * the bytes aren't valid JSON.
      */
-    private String serialiseWithRedaction(Object body) throws Exception {
+    private String serialiseWithRedaction(Object body) throws JsonProcessingException {
         Object effective = body;
         if (body instanceof byte[] bytes) {
             String asText = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);

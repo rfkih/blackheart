@@ -45,6 +45,8 @@ import java.util.List;
 @Slf4j
 public class SecurityConfig {
 
+    private static final String ROLE_ADMIN = "ADMIN";
+
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final AuthRateLimitFilter authRateLimitFilter;
     private final UserDetailsServiceImpl userDetailsService;
@@ -111,17 +113,17 @@ public class SecurityConfig {
                         // dumps). Admin-only on both JVMs; the /research
                         // dashboard polls these from an admin session. Probe
                         // sub-paths above are excluded from this rule.
-                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+                        .requestMatchers("/actuator/**").hasRole(ROLE_ADMIN)
                         // Research-JVM actuator, reverse-proxied through this
                         // JVM so the research process stays bound to
                         // 127.0.0.1. Same admin gate as the local actuator —
                         // ResearchProxyController forwards the path through
                         // to research:8081/actuator/**.
-                        .requestMatchers("/research-actuator/**").hasRole("ADMIN")
+                        .requestMatchers("/research-actuator/**").hasRole(ROLE_ADMIN)
                         // Python research orchestrator (FastAPI, 8082)
                         // proxied through ResearchOrchestratorProxyController.
                         // Same admin gate as the actuator surfaces.
-                        .requestMatchers("/api/v1/research-orch/**").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/research-orch/**").hasRole(ROLE_ADMIN)
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(ex -> ex

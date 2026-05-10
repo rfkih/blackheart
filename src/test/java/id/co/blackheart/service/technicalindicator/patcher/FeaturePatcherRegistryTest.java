@@ -2,6 +2,9 @@ package id.co.blackheart.service.technicalindicator.patcher;
 
 import id.co.blackheart.model.FeatureStore;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -34,52 +37,35 @@ class FeaturePatcherRegistryTest {
     void duplicateColumn_failsFastAtConstruction() {
         FakePatcher a = new FakePatcher("slope_200");
         FakePatcher b = new FakePatcher("slope_200");
+        List<FeaturePatcher<?>> patchers = List.of(a, b);
 
         IllegalStateException ex = assertThrows(
                 IllegalStateException.class,
-                () -> new FeaturePatcherRegistry(List.of(a, b))
+                () -> new FeaturePatcherRegistry(patchers)
         );
         assertTrue(ex.getMessage().contains("Duplicate"));
         assertTrue(ex.getMessage().contains("slope_200"));
     }
 
-    @Test
-    void invalidIdentifier_uppercase_rejected() {
-        FakePatcher bad = new FakePatcher("Slope_200");
+    /**
+     * Every rejection path (uppercase, SQL-injection-shaped, leading digit,
+     * null) hits the same SAFE_IDENT validation in {@code FeaturePatcherRegistry}
+     * and surfaces an {@code IllegalStateException} mentioning the regex.
+     * Parameterized so a future "yet another invalid form" lands in one
+     * place instead of growing the test count.
+     */
+    @ParameterizedTest(name = "rejects invalid column: \"{0}\"")
+    @NullSource
+    @ValueSource(strings = {"Slope_200", "col; DROP TABLE x", "200_slope"})
+    void invalidColumn_rejected(String badColumn) {
+        FakePatcher bad = new FakePatcher(badColumn);
+        List<FeaturePatcher<?>> patchers = List.of(bad);
+
         IllegalStateException ex = assertThrows(
                 IllegalStateException.class,
-                () -> new FeaturePatcherRegistry(List.of(bad))
+                () -> new FeaturePatcherRegistry(patchers)
         );
         assertTrue(ex.getMessage().contains("[a-z_][a-z0-9_]*"));
-    }
-
-    @Test
-    void invalidIdentifier_sqlInjection_rejected() {
-        // Nobody would deliberately do this — but the regex is the defense
-        // against accidental misuse / a future patcher drift.
-        FakePatcher bad = new FakePatcher("col; DROP TABLE x");
-        assertThrows(
-                IllegalStateException.class,
-                () -> new FeaturePatcherRegistry(List.of(bad))
-        );
-    }
-
-    @Test
-    void invalidIdentifier_leadingDigit_rejected() {
-        FakePatcher bad = new FakePatcher("200_slope");
-        assertThrows(
-                IllegalStateException.class,
-                () -> new FeaturePatcherRegistry(List.of(bad))
-        );
-    }
-
-    @Test
-    void nullColumn_rejected() {
-        FakePatcher bad = new FakePatcher(null);
-        assertThrows(
-                IllegalStateException.class,
-                () -> new FeaturePatcherRegistry(List.of(bad))
-        );
     }
 
     @Test

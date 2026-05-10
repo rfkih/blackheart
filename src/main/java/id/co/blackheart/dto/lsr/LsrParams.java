@@ -195,6 +195,8 @@ public class LsrParams implements Serializable {
                 return Optional.of(BigDecimal.valueOf(n.doubleValue()));
             }
             default -> {
+                // Fall through to the String-parsing block below so any other
+                // type (typically String from JSON deserialization) is handled.
             }
         }
         try {
@@ -217,6 +219,8 @@ public class LsrParams implements Serializable {
                 return Optional.of(n.intValue());
             }
             default -> {
+                // Fall through to the String-parsing block below so any other
+                // type (typically String from JSON deserialization) is handled.
             }
         }
         try {

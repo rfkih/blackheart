@@ -116,6 +116,17 @@ public class ResearchSweepService {
     private static final String STATUS_FAILED = "FAILED";
     private static final String STATUS_CANCELLED = "CANCELLED";
 
+    /** On-disk snapshot file extensions. {@link #EXTENSION_JSON_TMP} is the
+     *  sibling-write target for atomic-rename, scanned + cleaned up at boot. */
+    private static final String EXTENSION_JSON     = ".json";
+    private static final String EXTENSION_JSON_TMP = ".json.tmp";
+
+    /** Strategy-param keys repeated across {@link #KNOWN_PARAM_KEYS} entries.
+     *  Kept as constants so a rename in one strategy's param schema is a
+     *  one-line edit here, not a grep across three Set.of literals. */
+    private static final String KEY_STOP_ATR_BUFFER = "stopAtrBuffer";
+    private static final String KEY_ADX_ENTRY_MAX   = "adxEntryMax";
+
     private final BacktestService backtestService;
     private final BacktestRunRepository runRepository;
     private final BacktestAnalysisService analysisService;
@@ -338,7 +349,7 @@ public class ResearchSweepService {
         sweeps.remove(sweepId);
         cancelFlags.remove(sweepId);
         try {
-            Files.deleteIfExists(Path.of(sweepsDir).resolve(sweepId + ".json"));
+            Files.deleteIfExists(Path.of(sweepsDir).resolve(sweepId + EXTENSION_JSON));
         } catch (IOException e) {
             log.warn("Could not delete sweep file for {}", sweepId, e);
         }
@@ -383,13 +394,10 @@ public class ResearchSweepService {
             UUID userId, Set<String> statusFilter, String sort, Pageable pageable) {
         List<SweepState> filtered = new ArrayList<>();
         for (SweepState s : sweeps.values()) {
-            if (userId != null && s.getUserId() != null && !userId.equals(s.getUserId())) continue;
-            if (!CollectionUtils.isEmpty(statusFilter)) {
-                String st = s.getStatus() == null ? "" : s.getStatus().toUpperCase(Locale.ROOT);
-                if (!statusFilter.contains(st)) continue;
+            if (matchesPagedFilter(s, userId, statusFilter)) {
+                enrichDsrThreshold(s);
+                filtered.add(s);
             }
-            enrichDsrThreshold(s);
-            filtered.add(s);
         }
         filtered.sort(sweepComparator(sort));
 
@@ -398,6 +406,13 @@ public class ResearchSweepService {
         int to = Math.min(from + pageable.getPageSize(), total);
         List<SweepState> pageRows = filtered.subList(from, to);
         return new PageImpl<>(new ArrayList<>(pageRows), pageable, total);
+    }
+
+    private static boolean matchesPagedFilter(SweepState s, UUID userId, Set<String> statusFilter) {
+        if (userId != null && s.getUserId() != null && !userId.equals(s.getUserId())) return false;
+        if (CollectionUtils.isEmpty(statusFilter)) return true;
+        String st = s.getStatus() == null ? "" : s.getStatus().toUpperCase(Locale.ROOT);
+        return statusFilter.contains(st);
     }
 
     /** Parse {@code field,direction} (Spring's convention). Defaults: createdAt,desc. */
@@ -502,119 +517,164 @@ public class ResearchSweepService {
                 log.info("Sweep {} cancelled before round {}", state.getSweepId(), r);
                 return;
             }
-            final int round = r;
-            state.setCurrentRound(round);
-            persist(state);
-
-            int startIdx = indexOfFirstInRound(state.getResults(), round);
-            if (startIdx < 0) {
-                log.info("Sweep {} round {} had no queued combos — stopping early",
-                        state.getSweepId(), round);
-                break;
-            }
-
-            List<SweepResult> results = state.getResults();
-            for (int i = startIdx; i < results.size(); i++) {
-                if (isCancelled(state)) {
-                    log.info("Sweep {} cancelled mid-round {}", state.getSweepId(), round);
-                    return;
-                }
-                SweepResult cur = results.get(i);
-                if (cur.getRound() == null || cur.getRound() != round) break;
-                executeOneSafe(state, cur);
-                state.setFinishedCombos(state.getFinishedCombos() + 1);
-                persist(state);
-            }
-
-            if (round == totalRounds) break;
-
-            // Plan the next round from this round's elites. Filter to combos
-            // with at least MIN_TRADES_FOR_ELITE trades so a 1-trade outlier
-            // doesn't seed the entire next round.
-            List<SweepResult> roundResults = results.stream()
-                    .filter(x -> x.getRound() != null && x.getRound() == round)
-                    .filter(x -> STATUS_COMPLETED.equalsIgnoreCase(x.getStatus()))
-                    .toList();
-            if (roundResults.isEmpty()) {
-                log.info("Sweep {} round {} produced no completed results — stopping",
-                        state.getSweepId(), round);
-                break;
-            }
-
-            List<SweepResult> elitePool = roundResults.stream()
-                    .filter(x -> x.getTradeCount() != null && x.getTradeCount() >= MIN_TRADES_FOR_ELITE)
-                    .toList();
-            if (elitePool.isEmpty()) {
-                // Fallback: nothing met the trade-count floor; use the full
-                // pool so the sweep doesn't dead-end on a noisy first round.
-                log.info("Sweep {} round {} — no combos with >= {} trades, using full pool",
-                        state.getSweepId(), round, MIN_TRADES_FOR_ELITE);
-                elitePool = roundResults;
-            }
-
-            BigDecimal elitePct = state.getSpec().getElitePct();
-            if (elitePct == null || elitePct.signum() <= 0) elitePct = DEFAULT_ELITE_PCT;
-            int eliteCount = Math.max(1, (int) Math.ceil(elitePool.size() * elitePct.doubleValue()));
-
-            List<SweepResult> elites = new ArrayList<>(elitePool);
-            elites.sort(rankComparator(rankMetric));
-            elites = elites.subList(0, Math.min(eliteCount, elites.size()));
-
-            // Dedup uses canonicalised paramSet (BigDecimal scales stripped)
-            // so 0.6 and 0.60 don't both land in the next round.
-            Set<Map<String, Object>> alreadyPlanned = new HashSet<>();
-            for (SweepResult seen : results) alreadyPlanned.add(canonicalise(seen.getParamSet()));
-
-            List<Map<String, Object>> nextCombos = new ArrayList<>();
-            int producedCandidates = 0;
-            for (SweepResult elite : elites) {
-                for (Map<String, Object> refined : refineAroundElite(
-                        state.getSpec().getParamRanges(), elite.getParamSet())) {
-                    producedCandidates++;
-                    Map<String, Object> canonical = canonicalise(refined);
-                    if (alreadyPlanned.add(canonical)) {
-                        nextCombos.add(refined);
-                        if (nextCombos.size() >= MAX_COMBOS_PER_ROUND) break;
-                    }
-                }
-                if (nextCombos.size() >= MAX_COMBOS_PER_ROUND) break;
-            }
-
-            if (producedCandidates > nextCombos.size()) {
-                int truncated = (state.getRoundsTruncated() == null ? 0 : state.getRoundsTruncated())
-                        + (producedCandidates - nextCombos.size());
-                state.setRoundsTruncated(truncated);
-                log.info("Sweep {} round {} produced {} refined candidates, {} kept after dedup+cap",
-                        state.getSweepId(), round, producedCandidates, nextCombos.size());
-            }
-
-            if (nextCombos.isEmpty()) {
-                log.info("Sweep {} converged at round {} — no new combos to explore",
-                        state.getSweepId(), round);
-                break;
-            }
-
-            int nextRound = round + 1;
-            for (Map<String, Object> combo : nextCombos) {
-                results.add(SweepResult.builder()
-                        .round(nextRound)
-                        .paramSet(combo)
-                        .status(STATUS_PENDING)
-                        .build());
-            }
-            state.setTotalCombos(results.size());
-            persist(state);
-            log.info("Sweep {} planned round {} with {} combos",
-                    state.getSweepId(), nextRound, nextCombos.size());
+            RoundOutcome outcome = runOneRound(state, r, rankMetric, totalRounds);
+            if (outcome == RoundOutcome.STOP_SWEEP) return;
+            if (outcome == RoundOutcome.DONE) return;     // last/converged/no-data
         }
+    }
+
+    /** Outcome of a single research-mode round. STOP_SWEEP = caller cancelled
+     *  during execution; DONE = orderly stop (last round, converged, no data);
+     *  CONTINUE = next round was planned, keep iterating. */
+    private enum RoundOutcome { CONTINUE, DONE, STOP_SWEEP }
+
+    private RoundOutcome runOneRound(SweepState state, int round, String rankMetric, int totalRounds) {
+        state.setCurrentRound(round);
+        persist(state);
+
+        int startIdx = indexOfFirstInRound(state.getResults(), round);
+        if (startIdx < 0) {
+            log.info("Sweep {} round {} had no queued combos — stopping early",
+                    state.getSweepId(), round);
+            return RoundOutcome.DONE;
+        }
+
+        if (!executeRoundCombos(state, startIdx, round)) {
+            return RoundOutcome.STOP_SWEEP;          // cancelled mid-round
+        }
+        if (round == totalRounds) return RoundOutcome.DONE;
+
+        return planNextRound(state, round, rankMetric)
+                ? RoundOutcome.CONTINUE
+                : RoundOutcome.DONE;
+    }
+
+    /** Run every queued combo for {@code round}. Returns false when cancelled. */
+    private boolean executeRoundCombos(SweepState state, int startIdx, int round) {
+        List<SweepResult> results = state.getResults();
+        for (int i = startIdx; i < results.size(); i++) {
+            if (isCancelled(state)) {
+                log.info("Sweep {} cancelled mid-round {}", state.getSweepId(), round);
+                return false;
+            }
+            SweepResult cur = results.get(i);
+            if (cur.getRound() == null || cur.getRound() != round) break;
+            executeOneSafe(state, cur);
+            state.setFinishedCombos(state.getFinishedCombos() + 1);
+            persist(state);
+        }
+        return true;
+    }
+
+    /**
+     * Pick this round's elites, refine around them, dedupe, append to results.
+     * Returns false when nothing new was planned (search converged or no
+     * completed combos to seed from) — caller stops the sweep.
+     */
+    private boolean planNextRound(SweepState state, int round, String rankMetric) {
+        List<SweepResult> results = state.getResults();
+        List<SweepResult> roundResults = results.stream()
+                .filter(x -> x.getRound() != null && x.getRound() == round)
+                .filter(x -> STATUS_COMPLETED.equalsIgnoreCase(x.getStatus()))
+                .toList();
+        if (roundResults.isEmpty()) {
+            log.info("Sweep {} round {} produced no completed results — stopping",
+                    state.getSweepId(), round);
+            return false;
+        }
+
+        List<SweepResult> elites = pickElites(state, roundResults, rankMetric, round);
+
+        // Dedup uses canonicalised paramSet (BigDecimal scales stripped)
+        // so 0.6 and 0.60 don't both land in the next round.
+        Set<Map<String, Object>> alreadyPlanned = new HashSet<>();
+        for (SweepResult seen : results) alreadyPlanned.add(canonicalise(seen.getParamSet()));
+
+        List<Map<String, Object>> nextCombos = new ArrayList<>();
+        int producedCandidates = collectRefinedCombos(state, elites, alreadyPlanned, nextCombos);
+
+        if (producedCandidates > nextCombos.size()) {
+            int truncated = (state.getRoundsTruncated() == null ? 0 : state.getRoundsTruncated())
+                    + (producedCandidates - nextCombos.size());
+            state.setRoundsTruncated(truncated);
+            log.info("Sweep {} round {} produced {} refined candidates, {} kept after dedup+cap",
+                    state.getSweepId(), round, producedCandidates, nextCombos.size());
+        }
+        if (nextCombos.isEmpty()) {
+            log.info("Sweep {} converged at round {} — no new combos to explore",
+                    state.getSweepId(), round);
+            return false;
+        }
+
+        int nextRound = round + 1;
+        for (Map<String, Object> combo : nextCombos) {
+            results.add(SweepResult.builder()
+                    .round(nextRound)
+                    .paramSet(combo)
+                    .status(STATUS_PENDING)
+                    .build());
+        }
+        state.setTotalCombos(results.size());
+        persist(state);
+        log.info("Sweep {} planned round {} with {} combos",
+                state.getSweepId(), nextRound, nextCombos.size());
+        return true;
+    }
+
+    /** Filter to combos with enough trades, sort by rank metric, take the top
+     *  {@code elitePct} (defaulting to {@link #DEFAULT_ELITE_PCT}). Falls back
+     *  to the full pool when no combo meets the trade-count floor. */
+    private List<SweepResult> pickElites(
+            SweepState state, List<SweepResult> roundResults, String rankMetric, int round) {
+        List<SweepResult> elitePool = roundResults.stream()
+                .filter(x -> x.getTradeCount() != null && x.getTradeCount() >= MIN_TRADES_FOR_ELITE)
+                .toList();
+        if (elitePool.isEmpty()) {
+            log.info("Sweep {} round {} — no combos with >= {} trades, using full pool",
+                    state.getSweepId(), round, MIN_TRADES_FOR_ELITE);
+            elitePool = roundResults;
+        }
+        BigDecimal elitePct = state.getSpec().getElitePct();
+        if (elitePct == null || elitePct.signum() <= 0) elitePct = DEFAULT_ELITE_PCT;
+        int eliteCount = Math.max(1, (int) Math.ceil(elitePool.size() * elitePct.doubleValue()));
+
+        List<SweepResult> elites = new ArrayList<>(elitePool);
+        elites.sort(rankComparator(rankMetric));
+        return elites.subList(0, Math.min(eliteCount, elites.size()));
+    }
+
+    /** Cross-product refine each elite, dedupe via {@code alreadyPlanned},
+     *  cap at {@link #MAX_COMBOS_PER_ROUND}. Mutates {@code nextCombos} +
+     *  {@code alreadyPlanned} in place. Returns the total candidate count
+     *  (some may have been deduped or capped out) so the caller can record
+     *  truncation. */
+    private int collectRefinedCombos(SweepState state, List<SweepResult> elites,
+                                     Set<Map<String, Object>> alreadyPlanned,
+                                     List<Map<String, Object>> nextCombos) {
+        int producedCandidates = 0;
+        for (SweepResult elite : elites) {
+            for (Map<String, Object> refined : refineAroundElite(
+                    state.getSpec().getParamRanges(), elite.getParamSet())) {
+                producedCandidates++;
+                Map<String, Object> canonical = canonicalise(refined);
+                if (alreadyPlanned.add(canonical)) {
+                    nextCombos.add(refined);
+                    if (nextCombos.size() >= MAX_COMBOS_PER_ROUND) return producedCandidates;
+                }
+            }
+            if (nextCombos.size() >= MAX_COMBOS_PER_ROUND) return producedCandidates;
+        }
+        return producedCandidates;
     }
 
     /** Strips trailing zeros from every BigDecimal in the combo so equality
      *  works across different scales (0.6 vs 0.60). Non-decimal values pass
-     *  through unchanged. */
+     *  through unchanged. Returns an empty map for a null input — the only
+     *  call sites add the result to a dedupe set, so an empty placeholder
+     *  is harmless and keeps the helper null-free for Sonar S1168. */
     static Map<String, Object> canonicalise(Map<String, Object> combo) {
-        if (combo == null) return null;
         Map<String, Object> out = new LinkedHashMap<>();
+        if (combo == null) return out;
         for (Map.Entry<String, Object> e : combo.entrySet()) {
             Object v = e.getValue();
             if (v instanceof BigDecimal bd) {
@@ -630,6 +690,12 @@ public class ResearchSweepService {
     private void executeOneSafe(SweepState state, SweepResult r) {
         try {
             executeOne(state, r);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            log.error("Sweep combo interrupted | sweepId={} combo={}",
+                    state.getSweepId(), r.getParamSet(), ie);
+            r.setStatus(STATUS_FAILED);
+            r.setErrorMessage(ie.getMessage());
         } catch (Exception e) {
             log.error("Sweep combo failed | sweepId={} combo={}",
                     state.getSweepId(), r.getParamSet(), e);
@@ -647,7 +713,7 @@ public class ResearchSweepService {
         return -1;
     }
 
-    private void executeOne(SweepState state, SweepResult result) throws Exception {
+    private void executeOne(SweepState state, SweepResult result) throws InterruptedException {
         SweepSpec spec = state.getSpec();
         if ("WALK_FORWARD_K".equalsIgnoreCase(spec.getSplitMode())) {
             executeWalkForwardK(state, result, spec);
@@ -658,7 +724,7 @@ public class ResearchSweepService {
         }
     }
 
-    private void executeSingle(SweepState state, SweepResult result, SweepSpec spec) throws Exception {
+    private void executeSingle(SweepState state, SweepResult result, SweepSpec spec) throws InterruptedException {
         BacktestRunRequest req = buildRequest(spec, result.getParamSet());
 
         long startNanos = System.nanoTime();
@@ -700,7 +766,7 @@ public class ResearchSweepService {
      * <p>Wall time per combo doubles, but in exchange the leaderboard stops
      * being a fancy in-sample overfitter.
      */
-    private void executeTrainOos(SweepState state, SweepResult result, SweepSpec spec) throws Exception {
+    private void executeTrainOos(SweepState state, SweepResult result, SweepSpec spec) throws InterruptedException {
         long startNanos = System.nanoTime();
         result.setStatus(STATUS_RUNNING);
         persist(state);
@@ -792,7 +858,7 @@ public class ResearchSweepService {
      * it automatically; stddev across folds is exposed separately as a
      * regime-sensitivity diagnostic.
      */
-    private void executeWalkForwardK(SweepState state, SweepResult result, SweepSpec spec) throws Exception {
+    private void executeWalkForwardK(SweepState state, SweepResult result, SweepSpec spec) throws InterruptedException {
         long startNanos = System.nanoTime();
         result.setStatus(STATUS_RUNNING);
         persist(state);
@@ -812,82 +878,94 @@ public class ResearchSweepService {
         java.util.List<Double> oosSharpes = new java.util.ArrayList<>(k);
 
         for (int i = 0; i < k; i++) {
-            WalkForwardWindowing.Fold plan = foldPlan.get(i);
-            java.time.LocalDateTime trainFrom = plan.trainFromDate();
-            java.time.LocalDateTime trainTo = plan.trainToDate();
-            java.time.LocalDateTime oosFrom = plan.oosFromDate();
-            java.time.LocalDateTime oosTo = plan.oosToDate();
-
-            WindowResult fold = WindowResult.builder()
-                    .foldIndex(i + 1)
-                    .trainFromDate(trainFrom)
-                    .trainToDate(trainTo)
-                    .oosFromDate(oosFrom)
-                    .oosToDate(oosTo)
-                    .build();
-
-            // Train leg.
-            BacktestRunRequest trainReq = buildRequest(spec, result.getParamSet());
-            trainReq.setStartTime(trainFrom);
-            trainReq.setEndTime(trainTo);
-            BacktestRunResponse trainSubmit = backtestService.runBacktest(state.getUserId(), trainReq);
-            UUID trainRunId = trainSubmit.getBacktestRunId();
-            fold.setTrainBacktestRunId(trainRunId);
-            result.setBacktestRunId(trainRunId);
-            persist(state);
-
-            BacktestRun trainCompleted = waitForRun(trainRunId, state, result);
-            if (trainCompleted == null
-                    || !STATUS_COMPLETED.equalsIgnoreCase(trainCompleted.getStatus())) {
-                fold.setStatus(STATUS_FAILED);
-                folds.add(fold);
-                continue; // bad fold doesn't poison the rest
-            }
-            fold.setTrainSharpeRatio(trainCompleted.getSharpeRatio());
-
-            // OOS leg.
-            BacktestRunRequest oosReq = buildRequest(spec, result.getParamSet());
-            oosReq.setStartTime(oosFrom);
-            oosReq.setEndTime(oosTo);
-            BacktestRunResponse oosSubmit = backtestService.runBacktest(state.getUserId(), oosReq);
-            UUID oosRunId = oosSubmit.getBacktestRunId();
-            fold.setOosBacktestRunId(oosRunId);
-            result.setBacktestRunId(oosRunId);
-            persist(state);
-
-            BacktestRun oosCompleted = waitForRun(oosRunId, state, result);
-            if (oosCompleted == null
-                    || !STATUS_COMPLETED.equalsIgnoreCase(oosCompleted.getStatus())) {
-                fold.setStatus(STATUS_FAILED);
-                folds.add(fold);
-                continue;
-            }
-            fold.setOosSharpeRatio(oosCompleted.getSharpeRatio());
-            fold.setOosPsr(oosCompleted.getPsr());
-            fold.setOosNetPnl(oosCompleted.getNetProfit());
-            fold.setOosTradeCount(oosCompleted.getTotalTrades());
-            fold.setStatus(STATUS_COMPLETED);
+            WindowResult fold = runOneFold(state, result, spec, foldPlan.get(i), i + 1);
             folds.add(fold);
-
-            if (oosCompleted.getSharpeRatio() != null) {
-                oosSharpes.add(oosCompleted.getSharpeRatio().doubleValue());
+            if (fold.getOosSharpeRatio() != null) {
+                oosSharpes.add(fold.getOosSharpeRatio().doubleValue());
             }
-            // Mirror the most-recent fold's OOS run as the "current" backtest
-            // so the legacy populateMetrics() snapshot at the end has data.
         }
 
         result.setWindowResults(folds);
         result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
         result.setProgressPercent(100);
 
-        // Aggregate across folds. Mean OOS Sharpe mirrors to legacy slots so
-        // leaderboard sort + DSR threshold operate on it; stddev is the
-        // regime-sensitivity diagnostic surfaced alongside.
         if (oosSharpes.isEmpty()) {
             result.setStatus(STATUS_FAILED);
             result.setErrorMessage("All " + k + " walk-forward folds failed");
             return;
         }
+
+        aggregateFoldStatistics(result, folds, oosSharpes);
+        result.setStatus(STATUS_COMPLETED);
+    }
+
+    /** Run one walk-forward fold (train + OOS). Returns a populated {@link WindowResult}
+     *  whose status is COMPLETED on success or FAILED when either leg failed —
+     *  bad folds don't poison the rest of the sweep. */
+    private WindowResult runOneFold(SweepState state, SweepResult result, SweepSpec spec,
+                                    WalkForwardWindowing.Fold plan, int foldIndex)
+            throws InterruptedException {
+        WindowResult fold = WindowResult.builder()
+                .foldIndex(foldIndex)
+                .trainFromDate(plan.trainFromDate())
+                .trainToDate(plan.trainToDate())
+                .oosFromDate(plan.oosFromDate())
+                .oosToDate(plan.oosToDate())
+                .build();
+
+        FoldLegOutcome train = runFoldLeg(state, result, spec, plan.trainFromDate(), plan.trainToDate());
+        // Stamp the runId regardless of completion so the operator can navigate
+        // to the (timed-out / failed) run from the fold UI.
+        fold.setTrainBacktestRunId(train.runId());
+        if (train.completed() == null
+                || !STATUS_COMPLETED.equalsIgnoreCase(train.completed().getStatus())) {
+            fold.setStatus(STATUS_FAILED);
+            return fold;
+        }
+        fold.setTrainSharpeRatio(train.completed().getSharpeRatio());
+
+        FoldLegOutcome oos = runFoldLeg(state, result, spec, plan.oosFromDate(), plan.oosToDate());
+        fold.setOosBacktestRunId(oos.runId());
+        if (oos.completed() == null
+                || !STATUS_COMPLETED.equalsIgnoreCase(oos.completed().getStatus())) {
+            fold.setStatus(STATUS_FAILED);
+            return fold;
+        }
+        BacktestRun oosCompleted = oos.completed();
+        fold.setOosSharpeRatio(oosCompleted.getSharpeRatio());
+        fold.setOosPsr(oosCompleted.getPsr());
+        fold.setOosNetPnl(oosCompleted.getNetProfit());
+        fold.setOosTradeCount(oosCompleted.getTotalTrades());
+        fold.setStatus(STATUS_COMPLETED);
+        return fold;
+    }
+
+    /** Submitted runId paired with the wait outcome. {@code completed} is
+     *  null when {@link #waitForRun} timed out — the {@code runId} is still
+     *  populated so callers can record it on the fold for navigation. */
+    private record FoldLegOutcome(UUID runId, BacktestRun completed) {}
+
+    /** Submit + wait for one backtest leg of a walk-forward fold. Mirrors
+     *  the run id onto {@code result} so the live progress bar tracks it. */
+    private FoldLegOutcome runFoldLeg(SweepState state, SweepResult result, SweepSpec spec,
+                                      java.time.LocalDateTime from, java.time.LocalDateTime to)
+            throws InterruptedException {
+        BacktestRunRequest req = buildRequest(spec, result.getParamSet());
+        req.setStartTime(from);
+        req.setEndTime(to);
+        BacktestRunResponse submit = backtestService.runBacktest(state.getUserId(), req);
+        UUID runId = submit.getBacktestRunId();
+        result.setBacktestRunId(runId);
+        persist(state);
+        return new FoldLegOutcome(runId, waitForRun(runId, state, result));
+    }
+
+    /** Aggregate across folds. Mean OOS Sharpe mirrors to legacy slots so
+     *  leaderboard sort + DSR threshold operate on it; stddev is the
+     *  regime-sensitivity diagnostic surfaced alongside. Pulls the rest of
+     *  the headline metrics from the last successful OOS run so non-Sharpe
+     *  columns (winRate, profitFactor, avgR, etc.) still populate. */
+    private void aggregateFoldStatistics(SweepResult result, List<WindowResult> folds, List<Double> oosSharpes) {
         double[] arr = oosSharpes.stream().mapToDouble(Double::doubleValue).toArray();
         BigDecimal mean = BigDecimal.valueOf(SharpeStatistics.mean(arr))
                 .setScale(4, RoundingMode.HALF_UP);
@@ -896,20 +974,9 @@ public class ResearchSweepService {
                 : BigDecimal.ZERO;
         result.setMeanOosSharpe(mean);
         result.setStddevOosSharpe(sd);
-        // Mirror to the legacy fields the leaderboard sort + DSR cohort use.
         result.setSharpeRatio(mean);
 
-        // Pull the rest of the headline metrics from the last successful OOS
-        // run so non-Sharpe columns (winRate, profitFactor, avgR, etc.) still
-        // populate. The leaderboard already shows averages where it matters
-        // (Sharpe); the rest are illustrative for the most-recent fold.
-        WindowResult lastSuccessful = null;
-        for (int i = folds.size() - 1; i >= 0; i--) {
-            if (STATUS_COMPLETED.equalsIgnoreCase(folds.get(i).getStatus())) {
-                lastSuccessful = folds.get(i);
-                break;
-            }
-        }
+        WindowResult lastSuccessful = findLastSuccessfulFold(folds);
         if (lastSuccessful != null && lastSuccessful.getOosBacktestRunId() != null) {
             BacktestRun lastRun = runRepository.findById(lastSuccessful.getOosBacktestRunId()).orElse(null);
             if (lastRun != null) {
@@ -920,8 +987,15 @@ public class ResearchSweepService {
                 result.setPsr(lastRun.getPsr());
             }
         }
+    }
 
-        result.setStatus(STATUS_COMPLETED);
+    private static WindowResult findLastSuccessfulFold(List<WindowResult> folds) {
+        for (int i = folds.size() - 1; i >= 0; i--) {
+            if (STATUS_COMPLETED.equalsIgnoreCase(folds.get(i).getStatus())) {
+                return folds.get(i);
+            }
+        }
+        return null;
     }
 
     private void applyTrainMetrics(SweepResult result, BacktestRun run) {
@@ -1031,7 +1105,7 @@ public class ResearchSweepService {
     private void enrichDsrThreshold(SweepState state) {
         if (state == null || state.getResults() == null) return;
         double[] sharpes = state.getResults().stream()
-                .filter(r -> "COMPLETED".equalsIgnoreCase(r.getStatus()))
+                .filter(r -> STATUS_COMPLETED.equalsIgnoreCase(r.getStatus()))
                 .map(SweepResult::getSharpeRatio)
                 .filter(java.util.Objects::nonNull)
                 .mapToDouble(BigDecimal::doubleValue)
@@ -1128,14 +1202,19 @@ public class ResearchSweepService {
         if (ranges == null || elite == null) return List.of();
         Map<String, List<Object>> perKey = new LinkedHashMap<>();
         for (Map.Entry<String, ParamRange> e : ranges.entrySet()) {
-            Object seedRaw = elite.get(e.getKey());
-            BigDecimal seed = toDecimal(seedRaw);
-            if (seed == null) continue;
-            List<BigDecimal> vals = e.getValue().refineAround(seed, 1);
-            if (vals.isEmpty()) continue;
-            perKey.put(e.getKey(), new ArrayList<>(vals));
+            List<Object> refined = refinedValuesForKey(e.getValue(), elite.get(e.getKey()));
+            if (!refined.isEmpty()) {
+                perKey.put(e.getKey(), refined);
+            }
         }
         return expandGrid(perKey);
+    }
+
+    private static List<Object> refinedValuesForKey(ParamRange range, Object seedRaw) {
+        BigDecimal seed = toDecimal(seedRaw);
+        if (seed == null) return List.of();
+        List<BigDecimal> vals = range.refineAround(seed, 1);
+        return vals.isEmpty() ? List.of() : new ArrayList<>(vals);
     }
 
     private static BigDecimal toDecimal(Object v) {
@@ -1234,6 +1313,25 @@ public class ResearchSweepService {
     }
 
     private void validate(SweepSpec spec) {
+        validateRequiredFields(spec);
+
+        boolean trainOosMode = "TRAIN_OOS".equalsIgnoreCase(spec.getSplitMode());
+        boolean walkForwardMode = "WALK_FORWARD_K".equalsIgnoreCase(spec.getSplitMode());
+        BigDecimal holdoutPct = spec.getHoldoutFractionPct();
+        if (holdoutPct != null && !trainOosMode && !walkForwardMode) {
+            throw new IllegalArgumentException(
+                    "holdoutFractionPct only applies with splitMode TRAIN_OOS or WALK_FORWARD_K");
+        }
+
+        if (trainOosMode)    validateTrainOosMode(spec, holdoutPct);
+        if (walkForwardMode) validateWalkForwardMode(spec, holdoutPct);
+
+        validateTotalRunsCap(spec, trainOosMode, walkForwardMode);
+        validateRoundsAndKeys(spec);
+        validateFixedParamsKeys(spec);
+    }
+
+    private static void validateRequiredFields(SweepSpec spec) {
         if (spec == null) throw new IllegalArgumentException("spec required");
         if (!StringUtils.hasText(spec.getStrategyCode())) throw new IllegalArgumentException("strategyCode required");
         if (!RESEARCH_CAPABLE_CODES.contains(spec.getStrategyCode().toUpperCase())) {
@@ -1257,155 +1355,174 @@ public class ResearchSweepService {
         if (spec.getInitialCapital() == null || spec.getInitialCapital().signum() <= 0) {
             throw new IllegalArgumentException("initialCapital must be positive");
         }
-        // Train/OOS split validation. The fraction is bounded so neither leg
-        // ends up degenerate — at 5% the OOS sample is too short to score, at
-        // 60% the train sample is too short to fit. We also require each
-        // window to be at least 7-30 days so the strategy has a chance to
-        // open positions; otherwise the metrics are mostly noise.
-        boolean trainOosMode = "TRAIN_OOS".equalsIgnoreCase(spec.getSplitMode());
-        boolean walkForwardMode = "WALK_FORWARD_K".equalsIgnoreCase(spec.getSplitMode());
-        BigDecimal holdoutPct = spec.getHoldoutFractionPct();
-        if (holdoutPct != null && !trainOosMode && !walkForwardMode) {
+    }
+
+    /** Train/OOS split validation. The fraction is bounded so neither leg
+     *  ends up degenerate — at 5% the OOS sample is too short to score, at
+     *  60% the train sample is too short to fit. We also require each
+     *  window to be at least 7-30 days so the strategy has a chance to
+     *  open positions; otherwise the metrics are mostly noise. */
+    private static void validateTrainOosMode(SweepSpec spec, BigDecimal holdoutPct) {
+        BigDecimal oosPct = spec.getOosFractionPct();
+        if (oosPct == null) oosPct = new BigDecimal("30");
+        if (oosPct.compareTo(new BigDecimal("10")) < 0
+                || oosPct.compareTo(new BigDecimal("50")) > 0) {
             throw new IllegalArgumentException(
-                    "holdoutFractionPct only applies with splitMode TRAIN_OOS or WALK_FORWARD_K");
+                    "oosFractionPct must be between 10 and 50, got " + oosPct);
         }
-        if (trainOosMode) {
-            BigDecimal oosPct = spec.getOosFractionPct();
-            if (oosPct == null) oosPct = new BigDecimal("30");
-            if (oosPct.compareTo(new BigDecimal("10")) < 0
-                    || oosPct.compareTo(new BigDecimal("50")) > 0) {
-                throw new IllegalArgumentException(
-                        "oosFractionPct must be between 10 and 50, got " + oosPct);
-            }
-            BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
-            if (hPct.signum() < 0
-                    || hPct.compareTo(new BigDecimal("40")) > 0) {
-                throw new IllegalArgumentException(
-                        "holdoutFractionPct must be between 0 and 40, got " + hPct);
-            }
-            // Combined sanity: train slice must be at least 30% of the window
-            // so the optimization has something to fit on.
-            BigDecimal trainPct = new BigDecimal("100").subtract(oosPct).subtract(hPct);
-            if (trainPct.compareTo(new BigDecimal("30")) < 0) {
-                throw new IllegalArgumentException(
-                        "Train slice would be only " + trainPct + "% of the window — "
-                                + "lower oosFractionPct or holdoutFractionPct so train >= 30%");
-            }
-
-            long totalSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
-            long holdoutSeconds = (long) (totalSeconds * hPct.doubleValue() / 100.0);
-            long oosSeconds = (long) (totalSeconds * oosPct.doubleValue() / 100.0);
-            long trainSeconds = totalSeconds - oosSeconds - holdoutSeconds;
-
-            if (oosSeconds < Duration.ofDays(7).getSeconds()) {
-                throw new IllegalArgumentException(
-                        "OOS window is shorter than 7 days — widen the date range or lower oosFractionPct");
-            }
-            if (trainSeconds < Duration.ofDays(30).getSeconds()) {
-                throw new IllegalArgumentException(
-                        "Train window is shorter than 30 days — widen the date range");
-            }
-            if (hPct.signum() > 0 && holdoutSeconds < Duration.ofDays(7).getSeconds()) {
-                throw new IllegalArgumentException(
-                        "Holdout window is shorter than 7 days — widen the date range or lower holdoutFractionPct");
-            }
+        BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
+        if (hPct.signum() < 0
+                || hPct.compareTo(new BigDecimal("40")) > 0) {
+            throw new IllegalArgumentException(
+                    "holdoutFractionPct must be between 0 and 40, got " + hPct);
         }
-        // K-fold walk-forward validation. Train head + K OOS slices tile the
-        // available (non-holdout) window. The OOS coverage is controlled by
-        // oosFractionPct (default 30%) — train head is whatever remains.
-        if (walkForwardMode) {
-            int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
-            if (k < 2 || k > 8) {
-                throw new IllegalArgumentException(
-                        "walkForwardWindows must be between 2 and 8, got " + k);
-            }
-            BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
-            if (hPct.signum() < 0 || hPct.compareTo(new BigDecimal("40")) > 0) {
-                throw new IllegalArgumentException(
-                        "holdoutFractionPct must be between 0 and 40, got " + hPct);
-            }
-            // OOS fraction shares semantics with TRAIN_OOS mode: % of the
-            // available (non-holdout) window covered by OOS evaluation.
-            // Default 30% when not provided.
-            BigDecimal oosPctRaw = spec.getOosFractionPct() != null
-                    ? spec.getOosFractionPct() : new BigDecimal("30");
-            if (oosPctRaw.compareTo(new BigDecimal("10")) < 0
-                    || oosPctRaw.compareTo(new BigDecimal("70")) > 0) {
-                throw new IllegalArgumentException(
-                        "oosFractionPct must be between 10 and 70 for K-fold, got " + oosPctRaw);
-            }
-            long totalSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
-            long holdoutSeconds = (long) (totalSeconds * hPct.doubleValue() / 100.0);
-            long availableSeconds = totalSeconds - holdoutSeconds;
-            double oosFraction = oosPctRaw.doubleValue() / 100.0;
-
-            WalkForwardWindowing.SliceSizing sizing =
-                    WalkForwardWindowing.computeSliceSizing(availableSeconds, k, oosFraction);
-            WalkForwardWindowing.validateSliceSizes(sizing);
-
-            if (hPct.signum() > 0 && holdoutSeconds < Duration.ofDays(7).getSeconds()) {
-                throw new IllegalArgumentException(
-                        "Holdout window is shorter than 7 days — lower holdoutFractionPct or widen the date range");
-            }
+        // Combined sanity: train slice must be at least 30% of the window
+        // so the optimization has something to fit on.
+        BigDecimal trainPct = new BigDecimal("100").subtract(oosPct).subtract(hPct);
+        if (trainPct.compareTo(new BigDecimal("30")) < 0) {
+            throw new IllegalArgumentException(
+                    "Train slice would be only " + trainPct + "% of the window — "
+                            + "lower oosFractionPct or holdoutFractionPct so train >= 30%");
         }
-        // Total-runs hard cap. Walk-forward modes multiply run count per
-        // combo, so we estimate before submission and reject grids that
-        // would queue runaway-cluster work.
-        int runsPerCombo = walkForwardMode
-                ? 2 * (spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows())
-                : (trainOosMode ? 2 : 1);
+
+        long totalSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
+        long holdoutSeconds = (long) (totalSeconds * hPct.doubleValue() / 100.0);
+        long oosSeconds = (long) (totalSeconds * oosPct.doubleValue() / 100.0);
+        long trainSeconds = totalSeconds - oosSeconds - holdoutSeconds;
+
+        if (oosSeconds < Duration.ofDays(7).getSeconds()) {
+            throw new IllegalArgumentException(
+                    "OOS window is shorter than 7 days — widen the date range or lower oosFractionPct");
+        }
+        if (trainSeconds < Duration.ofDays(30).getSeconds()) {
+            throw new IllegalArgumentException(
+                    "Train window is shorter than 30 days — widen the date range");
+        }
+        if (hPct.signum() > 0 && holdoutSeconds < Duration.ofDays(7).getSeconds()) {
+            throw new IllegalArgumentException(
+                    "Holdout window is shorter than 7 days — widen the date range or lower holdoutFractionPct");
+        }
+    }
+
+    /** K-fold walk-forward validation. Train head + K OOS slices tile the
+     *  available (non-holdout) window. The OOS coverage is controlled by
+     *  oosFractionPct (default 30%) — train head is whatever remains. */
+    private static void validateWalkForwardMode(SweepSpec spec, BigDecimal holdoutPct) {
+        int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
+        if (k < 2 || k > 8) {
+            throw new IllegalArgumentException(
+                    "walkForwardWindows must be between 2 and 8, got " + k);
+        }
+        BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
+        if (hPct.signum() < 0 || hPct.compareTo(new BigDecimal("40")) > 0) {
+            throw new IllegalArgumentException(
+                    "holdoutFractionPct must be between 0 and 40, got " + hPct);
+        }
+        BigDecimal oosPctRaw = spec.getOosFractionPct() != null
+                ? spec.getOosFractionPct() : new BigDecimal("30");
+        if (oosPctRaw.compareTo(new BigDecimal("10")) < 0
+                || oosPctRaw.compareTo(new BigDecimal("70")) > 0) {
+            throw new IllegalArgumentException(
+                    "oosFractionPct must be between 10 and 70 for K-fold, got " + oosPctRaw);
+        }
+        long totalSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
+        long holdoutSeconds = (long) (totalSeconds * hPct.doubleValue() / 100.0);
+        long availableSeconds = totalSeconds - holdoutSeconds;
+        double oosFraction = oosPctRaw.doubleValue() / 100.0;
+
+        WalkForwardWindowing.SliceSizing sizing =
+                WalkForwardWindowing.computeSliceSizing(availableSeconds, k, oosFraction);
+        WalkForwardWindowing.validateSliceSizes(sizing);
+
+        if (hPct.signum() > 0 && holdoutSeconds < Duration.ofDays(7).getSeconds()) {
+            throw new IllegalArgumentException(
+                    "Holdout window is shorter than 7 days — lower holdoutFractionPct or widen the date range");
+        }
+    }
+
+    /** Total-runs hard cap. Walk-forward modes multiply run count per combo,
+     *  so we estimate before submission and reject grids that would queue
+     *  runaway-cluster work. */
+    private void validateTotalRunsCap(SweepSpec spec, boolean trainOosMode, boolean walkForwardMode) {
+        int runsPerCombo = runsPerCombo(spec, trainOosMode, walkForwardMode);
         int estimatedCombos = estimateTotalCombos(spec);
         if ((long) estimatedCombos * runsPerCombo > MAX_TOTAL_RUNS) {
             throw new IllegalArgumentException(
                     "Sweep would queue " + ((long) estimatedCombos * runsPerCombo)
                             + " backtests (cap " + MAX_TOTAL_RUNS + "). Lower the grid, lower K, or split into smaller sweeps.");
         }
+    }
+
+    private void validateRoundsAndKeys(SweepSpec spec) {
         int rounds = spec.getRounds() == null ? 1 : spec.getRounds();
         Set<String> knownKeys = knownParamKeysFor(spec.getStrategyCode());
         if (rounds > 1) {
-            if (rounds > MAX_ROUNDS) {
-                throw new IllegalArgumentException("rounds capped at " + MAX_ROUNDS);
-            }
-            if (CollectionUtils.isEmpty(spec.getParamRanges())) {
-                throw new IllegalArgumentException(
-                        "paramRanges required for multi-round research sweeps");
-            }
-            for (Map.Entry<String, ParamRange> e : spec.getParamRanges().entrySet()) {
-                ParamRange r = e.getValue();
-                if (r == null || r.getMin() == null || r.getMax() == null || r.getStep() == null
-                        || r.getStep().signum() <= 0
-                        || r.getMin().compareTo(r.getMax()) > 0) {
-                    throw new IllegalArgumentException(
-                            "Invalid range for " + e.getKey() + " — need min/max/step and min≤max");
-                }
-                rejectUnknownKey(e.getKey(), knownKeys, spec.getStrategyCode());
-            }
+            validateMultiRoundRanges(spec, rounds, knownKeys);
         } else {
-            if (CollectionUtils.isEmpty(spec.getParamGrid())) {
-                throw new IllegalArgumentException("paramGrid must contain at least one varied key");
-            }
-            for (String key : spec.getParamGrid().keySet()) {
-                rejectUnknownKey(key, knownKeys, spec.getStrategyCode());
-            }
+            validateFlatGrid(spec, knownKeys);
         }
+    }
 
-        // Fixed params: every key must be known and must NOT also appear as a
-        // swept key. A swept value would always win the merge anyway, but
-        // accepting the collision silently would let users submit a sweep
-        // that ignores half their fixed values.
+    private void validateMultiRoundRanges(SweepSpec spec, int rounds, Set<String> knownKeys) {
+        if (rounds > MAX_ROUNDS) {
+            throw new IllegalArgumentException("rounds capped at " + MAX_ROUNDS);
+        }
+        if (CollectionUtils.isEmpty(spec.getParamRanges())) {
+            throw new IllegalArgumentException(
+                    "paramRanges required for multi-round research sweeps");
+        }
+        for (Map.Entry<String, ParamRange> e : spec.getParamRanges().entrySet()) {
+            ParamRange r = e.getValue();
+            if (r == null || r.getMin() == null || r.getMax() == null || r.getStep() == null
+                    || r.getStep().signum() <= 0
+                    || r.getMin().compareTo(r.getMax()) > 0) {
+                throw new IllegalArgumentException(
+                        "Invalid range for " + e.getKey() + " — need min/max/step and min≤max");
+            }
+            rejectUnknownKey(e.getKey(), knownKeys, spec.getStrategyCode());
+        }
+    }
+
+    private void validateFlatGrid(SweepSpec spec, Set<String> knownKeys) {
+        if (CollectionUtils.isEmpty(spec.getParamGrid())) {
+            throw new IllegalArgumentException("paramGrid must contain at least one varied key");
+        }
+        for (String key : spec.getParamGrid().keySet()) {
+            rejectUnknownKey(key, knownKeys, spec.getStrategyCode());
+        }
+    }
+
+    /** Fixed params: every key must be known and must NOT also appear as a
+     *  swept key. A swept value would always win the merge anyway, but
+     *  accepting the collision silently would let users submit a sweep
+     *  that ignores half their fixed values. */
+    private void validateFixedParamsKeys(SweepSpec spec) {
         Map<String, Object> fixed = spec.getFixedParams();
-        if (!CollectionUtils.isEmpty(fixed)) {
-            Set<String> sweptKeys = new HashSet<>();
-            if (spec.getParamRanges() != null) sweptKeys.addAll(spec.getParamRanges().keySet());
-            if (spec.getParamGrid() != null)   sweptKeys.addAll(spec.getParamGrid().keySet());
-            for (String key : fixed.keySet()) {
-                rejectUnknownKey(key, knownKeys, spec.getStrategyCode());
-                if (sweptKeys.contains(key)) {
-                    throw new IllegalArgumentException(
-                            "Param '" + key + "' is both swept and pinned — pick one.");
-                }
+        if (CollectionUtils.isEmpty(fixed)) return;
+
+        Set<String> knownKeys = knownParamKeysFor(spec.getStrategyCode());
+        Set<String> sweptKeys = new HashSet<>();
+        if (spec.getParamRanges() != null) sweptKeys.addAll(spec.getParamRanges().keySet());
+        if (spec.getParamGrid() != null)   sweptKeys.addAll(spec.getParamGrid().keySet());
+        for (String key : fixed.keySet()) {
+            rejectUnknownKey(key, knownKeys, spec.getStrategyCode());
+            if (sweptKeys.contains(key)) {
+                throw new IllegalArgumentException(
+                        "Param '" + key + "' is both swept and pinned — pick one.");
             }
         }
+    }
+
+    /** Per-combo backtest count for the {@link #MAX_TOTAL_RUNS} estimate.
+     *  WALK_FORWARD_K runs 2K backtests (train + OOS per fold); TRAIN_OOS
+     *  runs 2 (train + OOS); single mode runs 1. K defaults to 4 when not
+     *  set. Pulled out of {@link #validate} so the ternaries flatten. */
+    private static int runsPerCombo(SweepSpec spec, boolean trainOosMode, boolean walkForwardMode) {
+        if (walkForwardMode) {
+            int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
+            return 2 * k;
+        }
+        return trainOosMode ? 2 : 1;
     }
 
     private void rejectUnknownKey(String key, Set<String> knownKeys, String strategyCode) {
@@ -1424,11 +1541,11 @@ public class ResearchSweepService {
     private static final Map<String, Set<String>> KNOWN_PARAM_KEYS = Map.of(
             "TPR", Set.of(
                     "ema50SlopeMin", "biasAdxMin", "biasAdxMax",
-                    "adxEntryMin", "adxEntryMax", "diSpreadMin",
+                    "adxEntryMin", KEY_ADX_ENTRY_MAX, "diSpreadMin",
                     "pullbackTouchAtr",
                     "longRsiMin", "longRsiMax", "shortRsiMin", "shortRsiMax",
                     "bodyRatioMin", "clvMin", "clvMax", "rvolMin",
-                    "stopAtrBuffer", "maxEntryRiskPct", "tp1R",
+                    KEY_STOP_ATR_BUFFER, "maxEntryRiskPct", "tp1R",
                     "breakEvenR", "runnerBreakEvenR",
                     "runnerPhase2R", "runnerPhase3R",
                     "runnerAtrPhase2", "runnerAtrPhase3",
@@ -1439,18 +1556,18 @@ public class ResearchSweepService {
                     "squeezeKcTolerance", "atrRatioCompressMax", "erCompressMax",
                     "relVolBreakoutMin", "relVolBreakoutMax", "bodyRatioBreakoutMin",
                     "biasErMin",
-                    "adxEntryMax", "longRsiMin", "shortRsiMax",
+                    KEY_ADX_ENTRY_MAX, "longRsiMin", "shortRsiMax",
                     "longDiSpreadMin", "shortDiSpreadMin",
-                    "stopAtrBuffer", "tp1R", "maxEntryRiskPct",
+                    KEY_STOP_ATR_BUFFER, "tp1R", "maxEntryRiskPct",
                     "runnerHalfR", "runnerBreakEvenR", "runnerPhase2R", "runnerPhase3R",
                     "runnerAtrPhase2", "runnerAtrPhase3",
                     "runnerLockPhase2R", "runnerLockPhase3R",
                     "minSignalScore"
             ),
             "LSR", Set.of(
-                    "adxTrendingMin", "adxCompressionMax", "adxEntryMin", "adxEntryMax",
+                    "adxTrendingMin", "adxCompressionMax", "adxEntryMin", KEY_ADX_ENTRY_MAX,
                     "atrRatioExhaustion", "atrRatioChaotic", "atrRatioCompress",
-                    "stopAtrBuffer", "maxRiskPct",
+                    KEY_STOP_ATR_BUFFER, "maxRiskPct",
                     "tp1RLongSweep", "tp1RLongContinuation", "tp1RShort",
                     "beTriggerRLongSweep", "beTriggerRLongContinuation", "beTriggerRShort",
                     "beFeeBufferR",
@@ -1482,24 +1599,30 @@ public class ResearchSweepService {
         try {
             Path dir = Path.of(sweepsDir);
             Files.createDirectories(dir);
-            Path file = dir.resolve(state.getSweepId() + ".json");
-            Path tmp = dir.resolve(state.getSweepId() + ".json.tmp");
+            Path file = dir.resolve(state.getSweepId() + EXTENSION_JSON);
+            Path tmp = dir.resolve(state.getSweepId() + EXTENSION_JSON_TMP);
             // Write to a sibling temp file then atomic-rename so a process kill
             // mid-write can never leave a partially-flushed JSON on disk that
             // would fail to parse on next boot.
             Files.writeString(tmp,
                     objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
-            try {
-                Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (IOException atomicFail) {
-                // ATOMIC_MOVE isn't supported on every filesystem (e.g. some
-                // network mounts) — fall back to plain replace.
-                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
-            }
+            atomicReplace(tmp, file);
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize sweep state", e);
         } catch (IOException e) {
             log.error("Failed to write sweep state to {}", sweepsDir, e);
+        }
+    }
+
+    /** Atomic-rename {@code tmp} onto {@code dest}, falling back to plain
+     *  replace on filesystems that reject {@link StandardCopyOption#ATOMIC_MOVE}
+     *  (some network mounts). Pulled out so {@link #persist}'s try-block has
+     *  no nested try (Sonar S1141). */
+    private static void atomicReplace(Path tmp, Path dest) throws IOException {
+        try {
+            Files.move(tmp, dest, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException atomicFail) {
+            Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -1510,38 +1633,66 @@ public class ResearchSweepService {
             try (var stream = Files.list(dir)) {
                 Iterator<Path> it = stream.iterator();
                 while (it.hasNext()) {
-                    Path p = it.next();
-                    String name = p.getFileName().toString();
-                    if (!name.endsWith(".json")) continue;
-                    // Stale .tmp files from a kill mid-write — sweep them up.
-                    if (name.endsWith(".json.tmp")) {
-                        try { Files.deleteIfExists(p); } catch (IOException ignored) { }
-                        continue;
-                    }
-                    try {
-                        byte[] bytes = Files.readAllBytes(p);
-                        SweepState s = objectMapper.readValue(bytes, SweepState.class);
-                        // Sweeps that were in-flight at shutdown are stuck —
-                        // mark them failed so the UI doesn't spinner-forever,
-                        // and FAIL the orphan backtest_run rows they had
-                        // submitted (otherwise they sit at PENDING/RUNNING
-                        // forever in the trades view).
-                        if (STATUS_RUNNING.equalsIgnoreCase(s.getStatus())
-                                || STATUS_PENDING.equalsIgnoreCase(s.getStatus())) {
-                            failOrphanedRuns(s);
-                            s.setStatus(STATUS_FAILED);
-                            persist(s);
-                        }
-                        sweeps.put(s.getSweepId(), s);
-                        cancelFlags.put(s.getSweepId(), new AtomicBoolean(false));
-                    } catch (IOException e) {
-                        log.warn("Could not read sweep snapshot {}", p, e);
-                    }
+                    handleSnapshotPath(it.next());
                 }
             }
             log.info("Loaded {} persisted sweep state(s)", sweeps.size());
         } catch (IOException e) {
             log.warn("Could not enumerate sweeps directory {}", sweepsDir, e);
+        }
+    }
+
+    /**
+     * Per-file dispatch from {@link #loadPersistedSweeps}: clean stale
+     * {@code .json.tmp} fragments first, skip non-JSON, otherwise rehydrate
+     * the sweep snapshot. Combined into one method so the enclosing loop
+     * body has no nested try and no chain of {@code continue}s.
+     *
+     * <p>The {@code .json.tmp} branch must precede the {@code .json} filter:
+     * {@code "foo.json.tmp".endsWith(".json")} is false, so checking the
+     * .json suffix first would silently drop tmp files into the unhandled
+     * bucket and let them accumulate forever.
+     */
+    private void handleSnapshotPath(Path p) {
+        String name = p.getFileName().toString();
+
+        // Stale .tmp left by a kill mid-write — best-effort cleanup, retried
+        // next boot if delete fails.
+        if (name.endsWith(EXTENSION_JSON_TMP)) {
+            try {
+                Files.deleteIfExists(p);
+            } catch (IOException ignored) {
+                // Tmp deletion is non-critical — retried on next boot.
+            }
+            return;
+        }
+
+        if (!name.endsWith(EXTENSION_JSON)) return;
+
+        loadSweepSnapshot(p);
+    }
+
+    /** Read + register a single sweep snapshot, recovering orphaned runs
+     *  if the JVM died while the sweep was in flight. Pulled out of
+     *  {@link #loadPersistedSweeps} so its outer try has no nested try. */
+    private void loadSweepSnapshot(Path p) {
+        try {
+            byte[] bytes = Files.readAllBytes(p);
+            SweepState s = objectMapper.readValue(bytes, SweepState.class);
+            // Sweeps that were in-flight at shutdown are stuck — mark them
+            // failed so the UI doesn't spinner-forever, and FAIL the orphan
+            // backtest_run rows they had submitted (otherwise they sit at
+            // PENDING/RUNNING forever in the trades view).
+            if (STATUS_RUNNING.equalsIgnoreCase(s.getStatus())
+                    || STATUS_PENDING.equalsIgnoreCase(s.getStatus())) {
+                failOrphanedRuns(s);
+                s.setStatus(STATUS_FAILED);
+                persist(s);
+            }
+            sweeps.put(s.getSweepId(), s);
+            cancelFlags.put(s.getSweepId(), new AtomicBoolean(false));
+        } catch (IOException e) {
+            log.warn("Could not read sweep snapshot {}", p, e);
         }
     }
 
@@ -1554,22 +1705,27 @@ public class ResearchSweepService {
     private void failOrphanedRuns(SweepState s) {
         if (s.getResults() == null) return;
         for (SweepResult r : s.getResults()) {
-            UUID runId = r.getBacktestRunId();
-            if (runId == null) continue;
-            try {
-                BacktestRun run = runRepository.findById(runId).orElse(null);
-                if (run == null) continue;
-                String status = run.getStatus();
-                if (STATUS_PENDING.equalsIgnoreCase(status)
-                        || STATUS_RUNNING.equalsIgnoreCase(status)) {
-                    run.setStatus(STATUS_FAILED);
-                    run.setNotes("Orphaned by sweep " + s.getSweepId() + " on JVM restart");
-                    runRepository.save(run);
-                    log.info("Failed orphan backtest_run {} (was {})", runId, status);
-                }
-            } catch (Exception e) {
-                log.warn("Could not fail orphan run {}", runId, e);
+            failOrphanedRun(s.getSweepId(), r.getBacktestRunId());
+        }
+    }
+
+    /** Best-effort orphan-run cleanup for a single result. Pulled out so the
+     *  caller's loop has zero {@code continue} statements (Sonar S135). */
+    private void failOrphanedRun(UUID sweepId, UUID runId) {
+        if (runId == null) return;
+        try {
+            BacktestRun run = runRepository.findById(runId).orElse(null);
+            if (run == null) return;
+            String status = run.getStatus();
+            if (STATUS_PENDING.equalsIgnoreCase(status)
+                    || STATUS_RUNNING.equalsIgnoreCase(status)) {
+                run.setStatus(STATUS_FAILED);
+                run.setNotes("Orphaned by sweep " + sweepId + " on JVM restart");
+                runRepository.save(run);
+                log.info("Failed orphan backtest_run {} (was {})", runId, status);
             }
+        } catch (Exception e) {
+            log.warn("Could not fail orphan run {}", runId, e);
         }
     }
 
@@ -1587,7 +1743,13 @@ public class ResearchSweepService {
         if (v == null) return null;
         if (v instanceof java.math.BigDecimal bd) return bd;
         if (v instanceof Number n) {
-            try { return new java.math.BigDecimal(n.toString()); } catch (NumberFormatException ignored) { }
+            try {
+                return new java.math.BigDecimal(n.toString());
+            } catch (NumberFormatException ignored) {
+                // Number → toString() should always parse, but Number is an
+                // open hierarchy and a custom subclass could return junk.
+                // Fall through to the generic toString attempt below.
+            }
         }
         try { return new java.math.BigDecimal(v.toString()); } catch (NumberFormatException e) { return null; }
     }

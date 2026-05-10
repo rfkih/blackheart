@@ -341,31 +341,13 @@ public class TradeCloseService {
         BigDecimal weightedPriceSum = BigDecimal.ZERO;
 
         for (TradePosition position : positions) {
-            if (position == null) {
-                continue;
-            }
-
+            if (position == null) continue;
             BigDecimal qty = safe(position.getRemainingQty());
-            if (qty.compareTo(BigDecimal.ZERO) <= 0) {
-                continue;
+            if (qty.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal referencePrice = referencePriceFor(position);
+                weightedPriceSum = weightedPriceSum.add(referencePrice.multiply(qty));
+                totalQty = totalQty.add(qty);
             }
-
-            BigDecimal referencePrice = safe(position.getEntryPrice());
-
-            BigDecimal currentStop = position.getCurrentStopLossPrice();
-            BigDecimal trailingStop = position.getTrailingStopPrice();
-            BigDecimal takeProfit = position.getTakeProfitPrice();
-
-            if (currentStop != null && currentStop.compareTo(BigDecimal.ZERO) > 0) {
-                referencePrice = currentStop;
-            } else if (trailingStop != null && trailingStop.compareTo(BigDecimal.ZERO) > 0) {
-                referencePrice = trailingStop;
-            } else if (takeProfit != null && takeProfit.compareTo(BigDecimal.ZERO) > 0) {
-                referencePrice = takeProfit;
-            }
-
-            weightedPriceSum = weightedPriceSum.add(referencePrice.multiply(qty));
-            totalQty = totalQty.add(qty);
         }
 
         if (totalQty.compareTo(BigDecimal.ZERO) <= 0) {
@@ -373,6 +355,21 @@ public class TradeCloseService {
         }
 
         return weightedPriceSum.divide(totalQty, 8, RoundingMode.HALF_UP);
+    }
+
+    /** Pick the most useful reference price for a position when resolving a
+     *  weighted-average close price: prefer the active stop, then the trailing
+     *  stop, then the take-profit, falling back to the entry price when none
+     *  are set. Pulled out of {@link #resolveCloseReferencePrice} so its loop
+     *  stays under Sonar's break/continue ceiling. */
+    private BigDecimal referencePriceFor(TradePosition position) {
+        BigDecimal currentStop = position.getCurrentStopLossPrice();
+        if (currentStop != null && currentStop.compareTo(BigDecimal.ZERO) > 0) return currentStop;
+        BigDecimal trailingStop = position.getTrailingStopPrice();
+        if (trailingStop != null && trailingStop.compareTo(BigDecimal.ZERO) > 0) return trailingStop;
+        BigDecimal takeProfit = position.getTakeProfitPrice();
+        if (takeProfit != null && takeProfit.compareTo(BigDecimal.ZERO) > 0) return takeProfit;
+        return safe(position.getEntryPrice());
     }
 
     private void updateTradePositionWithExitData(

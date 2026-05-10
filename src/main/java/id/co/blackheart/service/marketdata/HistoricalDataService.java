@@ -5,10 +5,12 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
@@ -29,8 +31,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class HistoricalDataService {
 
-    private static final String BINANCE_BASE_URL = "https://api.binance.com";
-    private static final String BINANCE_KLINES_PATH = "/api/v3/klines";
     private static final int BINANCE_MAX_LIMIT = 1000;
     private static final ZoneId UTC = ZoneId.of("UTC");
 
@@ -46,9 +46,18 @@ public class HistoricalDataService {
     @Qualifier("taskExecutor")
     private final Executor taskExecutor;
 
-    private final WebClient webClient = WebClient.builder()
-            .baseUrl(BINANCE_BASE_URL)
-            .build();
+    @Value("${binance.base-url:https://api.binance.com}")
+    private String binanceBaseUrl;
+
+    @Value("${binance.klines-path:/api/v3/klines}")
+    private String binanceKlinesPath;
+
+    private WebClient webClient;
+
+    @PostConstruct
+    void initWebClient() {
+        this.webClient = WebClient.builder().baseUrl(binanceBaseUrl).build();
+    }
 
     /**
      * Runs synchronously on the caller. The previous {@code @Async} returned
@@ -484,26 +493,22 @@ public class HistoricalDataService {
         int remaining = totalCandles;
         Long endTimeMs = null;
         List<JSONArray> allCandles = new ArrayList<>();
+        boolean stop = false;
 
-        while (remaining > 0) {
+        while (remaining > 0 && !stop) {
             int requestLimit = Math.min(remaining, BINANCE_MAX_LIMIT);
             JSONArray candles = fetchKlinesBackward(symbol, interval, requestLimit, endTimeMs);
 
             if (candles.isEmpty()) {
-                break;
-            }
-
-            for (int i = 0; i < candles.length(); i++) {
-                allCandles.add(candles.getJSONArray(i));
-            }
-
-            remaining -= candles.length();
-
-            long firstOpenTimeMs = candles.getJSONArray(0).getLong(0);
-            endTimeMs = firstOpenTimeMs - 1L;
-
-            if (candles.length() < requestLimit) {
-                break;
+                stop = true;
+            } else {
+                for (int i = 0; i < candles.length(); i++) {
+                    allCandles.add(candles.getJSONArray(i));
+                }
+                remaining -= candles.length();
+                long firstOpenTimeMs = candles.getJSONArray(0).getLong(0);
+                endTimeMs = firstOpenTimeMs - 1L;
+                stop = candles.length() < requestLimit;
             }
         }
 
@@ -521,33 +526,27 @@ public class HistoricalDataService {
         Long endTimeMs = endTime.atZone(UTC).toInstant().toEpochMilli();
 
         List<JSONArray> allCandles = new ArrayList<>();
+        boolean stop = false;
 
-        while (true) {
+        while (!stop) {
             JSONArray candles = fetchKlinesBackward(symbol, interval, BINANCE_MAX_LIMIT, endTimeMs);
 
             if (candles.isEmpty()) {
-                break;
-            }
-
-            boolean reachedBeforeStart = false;
-
-            for (int i = 0; i < candles.length(); i++) {
-                JSONArray candle = candles.getJSONArray(i);
-                long candleOpenTimeMs = candle.getLong(0);
-
-                if (candleOpenTimeMs < startTimeMs) {
-                    reachedBeforeStart = true;
-                    continue;
+                stop = true;
+            } else {
+                boolean reachedBeforeStart = false;
+                for (int i = 0; i < candles.length(); i++) {
+                    JSONArray candle = candles.getJSONArray(i);
+                    long candleOpenTimeMs = candle.getLong(0);
+                    if (candleOpenTimeMs < startTimeMs) {
+                        reachedBeforeStart = true;
+                        continue;
+                    }
+                    allCandles.add(candle);
                 }
-
-                allCandles.add(candle);
-            }
-
-            long firstOpenTimeMs = candles.getJSONArray(0).getLong(0);
-            endTimeMs = firstOpenTimeMs - 1L;
-
-            if (reachedBeforeStart || candles.length() < BINANCE_MAX_LIMIT) {
-                break;
+                long firstOpenTimeMs = candles.getJSONArray(0).getLong(0);
+                endTimeMs = firstOpenTimeMs - 1L;
+                stop = reachedBeforeStart || candles.length() < BINANCE_MAX_LIMIT;
             }
         }
 
@@ -573,7 +572,7 @@ public class HistoricalDataService {
         String response = webClient.get()
                 .uri(uriBuilder -> {
                     var builder = uriBuilder
-                            .path(BINANCE_KLINES_PATH)
+                            .path(binanceKlinesPath)
                             .queryParam("symbol", symbol)
                             .queryParam("interval", interval)
                             .queryParam("limit", limit);

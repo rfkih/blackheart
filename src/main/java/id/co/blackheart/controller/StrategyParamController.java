@@ -56,6 +56,8 @@ import java.util.UUID;
      description = "Saved parameter presets — one row per preset, ≤1 active per account_strategy")
 public class StrategyParamController {
 
+    private static final String NO_PARAM_MSG_PREFIX = "No strategy_param with paramId=";
+
     private final StrategyParamService paramService;
     private final AccountStrategyOwnershipGuard ownershipGuard;
     private final JwtService jwtService;
@@ -86,7 +88,7 @@ public class StrategyParamController {
 
         StrategyParam entity = paramService.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         ownershipGuard.assertOwned(extractUserId(authHeader), entity.getAccountStrategyId());
         return ok(toResponse(entity));
     }
@@ -122,7 +124,7 @@ public class StrategyParamController {
 
         StrategyParam existing = paramService.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         ownershipGuard.assertOwned(extractUserId(authHeader), existing.getAccountStrategyId());
 
         String email = extractEmail(authHeader);
@@ -140,7 +142,7 @@ public class StrategyParamController {
 
         StrategyParam existing = paramService.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         ownershipGuard.assertOwned(extractUserId(authHeader), existing.getAccountStrategyId());
 
         StrategyParam saved = paramService.activate(paramId, extractEmail(authHeader));
@@ -156,7 +158,7 @@ public class StrategyParamController {
 
         StrategyParam existing = paramService.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         ownershipGuard.assertOwned(extractUserId(authHeader), existing.getAccountStrategyId());
 
         StrategyParam saved = paramService.deactivate(paramId, extractEmail(authHeader));
@@ -172,7 +174,7 @@ public class StrategyParamController {
 
         StrategyParam existing = paramService.findById(paramId)
                 .orElseThrow(() -> new EntityNotFoundException(
-                        "No strategy_param with paramId=" + paramId));
+                        NO_PARAM_MSG_PREFIX + paramId));
         ownershipGuard.assertOwned(extractUserId(authHeader), existing.getAccountStrategyId());
 
         paramService.softDelete(paramId, extractEmail(authHeader));

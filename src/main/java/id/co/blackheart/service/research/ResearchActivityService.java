@@ -52,7 +52,14 @@ public class ResearchActivityService {
         //            significant_edge_count, no_edge_count, discard_count, goal_hit
         String[] codes = new String[0];
         if (row[5] instanceof java.sql.Array sqlArr) {
-            try { codes = (String[]) sqlArr.getArray(); } catch (java.sql.SQLException ignored) {}
+            try {
+                codes = (String[]) sqlArr.getArray();
+            } catch (java.sql.SQLException ignored) {
+                // Defensive fallback: keep the empty array when the JDBC
+                // driver fails to materialise strategy_codes. The session
+                // summary is informational, so a single column failure
+                // shouldn't fail the whole listing endpoint.
+            }
         }
         return new ResearchSessionSummaryResponse(
                 (String) row[0],

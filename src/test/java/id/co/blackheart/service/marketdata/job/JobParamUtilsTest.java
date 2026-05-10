@@ -114,9 +114,10 @@ class JobParamUtilsTest {
 
     @Test
     void requireString_missing_throws() {
+        ObjectNode p = params();
         assertThrows(
                 IllegalArgumentException.class,
-                () -> JobParamUtils.requireString(params(), "column")
+                () -> JobParamUtils.requireString(p, "column")
         );
     }
 

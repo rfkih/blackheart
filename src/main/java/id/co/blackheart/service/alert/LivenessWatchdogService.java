@@ -105,52 +105,55 @@ public class LivenessWatchdogService {
     void checkSchedulerHeartbeats() {
         List<SchedulerJob> enabled = schedulerJobRepository.findByStatus("1");
         for (SchedulerJob job : enabled) {
-            // A null lastRunAt means the job is configured but has never
-            // fired. The dashboard already surfaces that as a missing
-            // heartbeat; alerting here would noise up every fresh deploy.
-            if (job.getLastRunAt() == null) continue;
+            checkSchedulerHeartbeat(job);
+        }
+    }
 
-            CronExpression cron;
-            try {
-                cron = CronExpression.parse(job.getCronExpression());
-            } catch (IllegalArgumentException e) {
-                log.warn("[Watchdog] Invalid cron on job {}: {}",
-                        job.getJobName(), job.getCronExpression());
-                continue;
-            }
+    private void checkSchedulerHeartbeat(SchedulerJob job) {
+        // A null lastRunAt means the job is configured but has never fired —
+        // the dashboard already surfaces that as a missing heartbeat, and
+        // alerting here would noise up every fresh deploy.
+        if (job.getLastRunAt() == null) return;
 
-            // Mirror SchedulerService.buildCronTrigger: FUNDING_INGEST is
-            // UTC-zoned, every other job uses the JVM-default zone. The
-            // routeJob writer always stamps last_run_at via
-            // LocalDateTime.now() (JVM-default), so for UTC-zoned jobs we
-            // must convert before feeding the cron — otherwise next() walks
-            // forward from a wall-clock that's offset from the cron's grid.
-            ZoneId cronZone = "FUNDING_INGEST".equals(job.getJobType())
-                    ? ZoneOffset.UTC
-                    : ZoneId.systemDefault();
-            LocalDateTime lastRunInZone = job.getLastRunAt()
-                    .atZone(ZoneId.systemDefault())
-                    .withZoneSameInstant(cronZone)
-                    .toLocalDateTime();
-            LocalDateTime nowInZone = LocalDateTime.now(cronZone);
+        CronExpression cron;
+        try {
+            cron = CronExpression.parse(job.getCronExpression());
+        } catch (IllegalArgumentException e) {
+            log.warn("[Watchdog] Invalid cron on job {}: {}",
+                    job.getJobName(), job.getCronExpression());
+            return;
+        }
 
-            LocalDateTime expected = cron.next(lastRunInZone);
-            if (expected == null) continue;
-            LocalDateTime deadline = expected.plusMinutes(schedulerGraceMinutes);
-            if (nowInZone.isAfter(deadline)) {
-                long minutesLate = ChronoUnit.MINUTES.between(expected, nowInZone);
-                alertService.raise(
-                        AlertSeverity.CRITICAL,
-                        "SCHEDULER_DEAD_MAN",
-                        String.format(
-                                "Scheduler job '%s' (%s) hasn't fired since %s — expected %s, %d min late",
-                                job.getJobName(),
-                                job.getJobType(),
-                                job.getLastRunAt(),
-                                expected,
-                                minutesLate),
-                        "sched_dead_" + job.getJobName());
-            }
+        // Mirror SchedulerService.buildCronTrigger: FUNDING_INGEST is UTC-zoned,
+        // every other job uses the JVM-default zone. The routeJob writer stamps
+        // last_run_at using the JVM-default clock, so for UTC-zoned jobs we must
+        // convert before feeding the cron — otherwise next() walks forward from
+        // a wall-clock that's offset from the cron's grid.
+        ZoneId cronZone = "FUNDING_INGEST".equals(job.getJobType())
+                ? ZoneOffset.UTC
+                : ZoneId.systemDefault();
+        LocalDateTime lastRunInZone = job.getLastRunAt()
+                .atZone(ZoneId.systemDefault())
+                .withZoneSameInstant(cronZone)
+                .toLocalDateTime();
+        LocalDateTime nowInZone = LocalDateTime.now(cronZone);
+
+        LocalDateTime expected = cron.next(lastRunInZone);
+        if (expected == null) return;
+        LocalDateTime deadline = expected.plusMinutes(schedulerGraceMinutes);
+        if (nowInZone.isAfter(deadline)) {
+            long minutesLate = ChronoUnit.MINUTES.between(expected, nowInZone);
+            alertService.raise(
+                    AlertSeverity.CRITICAL,
+                    "SCHEDULER_DEAD_MAN",
+                    String.format(
+                            "Scheduler job '%s' (%s) hasn't fired since %s — expected %s, %d min late",
+                            job.getJobName(),
+                            job.getJobType(),
+                            job.getLastRunAt(),
+                            expected,
+                            minutesLate),
+                    "sched_dead_" + job.getJobName());
         }
     }
 
@@ -181,33 +184,36 @@ public class LivenessWatchdogService {
         if (!StringUtils.hasText(liveSymbol)) return;
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(ingestStalledMinutes);
         for (String raw : ingestIntervalsCsv.split(",")) {
-            String interval = raw.trim();
-            if (!StringUtils.hasText(interval)) continue;
+            checkIngestFreshnessForInterval(raw.trim(), cutoff);
+        }
+    }
 
-            MarketData latest = marketDataRepository.findLatestBySymbol(liveSymbol, interval);
-            if (latest == null) {
-                alertService.raise(
-                        AlertSeverity.CRITICAL,
-                        "INGEST_NO_DATA",
-                        String.format("No market_data rows at all for %s/%s", liveSymbol, interval),
-                        "ingest_nodata_" + liveSymbol + "_" + interval);
-                continue;
-            }
-            LocalDateTime startTime = latest.getStartTime();
-            if (startTime != null && startTime.isBefore(cutoff)) {
-                long minutesStale = ChronoUnit.MINUTES.between(startTime, LocalDateTime.now());
-                alertService.raise(
-                        AlertSeverity.CRITICAL,
-                        "INGEST_STALLED",
-                        String.format(
-                                "Ingest stalled for %s/%s — latest candle start_time=%s (%d min ago), threshold=%dmin",
-                                liveSymbol,
-                                interval,
-                                startTime,
-                                minutesStale,
-                                ingestStalledMinutes),
-                        "ingest_stalled_" + liveSymbol + "_" + interval);
-            }
+    private void checkIngestFreshnessForInterval(String interval, LocalDateTime cutoff) {
+        if (!StringUtils.hasText(interval)) return;
+
+        MarketData latest = marketDataRepository.findLatestBySymbol(liveSymbol, interval);
+        if (latest == null) {
+            alertService.raise(
+                    AlertSeverity.CRITICAL,
+                    "INGEST_NO_DATA",
+                    String.format("No market_data rows at all for %s/%s", liveSymbol, interval),
+                    "ingest_nodata_" + liveSymbol + "_" + interval);
+            return;
+        }
+        LocalDateTime startTime = latest.getStartTime();
+        if (startTime != null && startTime.isBefore(cutoff)) {
+            long minutesStale = ChronoUnit.MINUTES.between(startTime, LocalDateTime.now());
+            alertService.raise(
+                    AlertSeverity.CRITICAL,
+                    "INGEST_STALLED",
+                    String.format(
+                            "Ingest stalled for %s/%s — latest candle start_time=%s (%d min ago), threshold=%dmin",
+                            liveSymbol,
+                            interval,
+                            startTime,
+                            minutesStale,
+                            ingestStalledMinutes),
+                    "ingest_stalled_" + liveSymbol + "_" + interval);
         }
     }
 }

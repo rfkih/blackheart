@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.CollectionUtils;
 
@@ -298,57 +299,38 @@ public class TechnicalIndicatorService {
      * set stays aligned with the live single-bar path.
      */
     private static final class IndicatorBundle {
-        final BarSeries series;
-        final ClosePriceIndicator closePrice;
-        final EMAIndicator ema20;
-        final EMAIndicator ema50;
-        final EMAIndicator ema200;
-        final ADXIndicator adx;
-        final PlusDIIndicator plusDI;
-        final MinusDIIndicator minusDI;
-        final ATRIndicator atr;
-        final MACDIndicator macd;
-        final EMAIndicator macdSignal;
-        final RSIIndicator rsi;
-        final StandardDeviationIndicator stdDev20;
+        BarSeries series;
+        ClosePriceIndicator closePrice;
+        EMAIndicator ema20;
+        EMAIndicator ema50;
+        EMAIndicator ema200;
+        ADXIndicator adx;
+        PlusDIIndicator plusDI;
+        MinusDIIndicator minusDI;
+        ATRIndicator atr;
+        MACDIndicator macd;
+        EMAIndicator macdSignal;
+        RSIIndicator rsi;
+        StandardDeviationIndicator stdDev20;
 
-        private IndicatorBundle(BarSeries series, ClosePriceIndicator closePrice,
-                                EMAIndicator ema20, EMAIndicator ema50, EMAIndicator ema200,
-                                ADXIndicator adx, PlusDIIndicator plusDI, MinusDIIndicator minusDI,
-                                ATRIndicator atr, MACDIndicator macd, EMAIndicator macdSignal,
-                                RSIIndicator rsi, StandardDeviationIndicator stdDev20) {
-            this.series = series;
-            this.closePrice = closePrice;
-            this.ema20 = ema20;
-            this.ema50 = ema50;
-            this.ema200 = ema200;
-            this.adx = adx;
-            this.plusDI = plusDI;
-            this.minusDI = minusDI;
-            this.atr = atr;
-            this.macd = macd;
-            this.macdSignal = macdSignal;
-            this.rsi = rsi;
-            this.stdDev20 = stdDev20;
-        }
+        private IndicatorBundle() {}
 
         static IndicatorBundle build(BarSeries series) {
-            ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
-            MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);
-            return new IndicatorBundle(
-                    series, closePrice,
-                    new EMAIndicator(closePrice, 20),
-                    new EMAIndicator(closePrice, 50),
-                    new EMAIndicator(closePrice, 200),
-                    new ADXIndicator(series, 14),
-                    new PlusDIIndicator(series, 14),
-                    new MinusDIIndicator(series, 14),
-                    new ATRIndicator(series, 14),
-                    macd,
-                    new EMAIndicator(macd, 9),
-                    new RSIIndicator(closePrice, 14),
-                    new StandardDeviationIndicator(closePrice, 20)
-            );
+            IndicatorBundle b = new IndicatorBundle();
+            b.series = series;
+            b.closePrice = new ClosePriceIndicator(series);
+            b.ema20 = new EMAIndicator(b.closePrice, 20);
+            b.ema50 = new EMAIndicator(b.closePrice, 50);
+            b.ema200 = new EMAIndicator(b.closePrice, 200);
+            b.adx = new ADXIndicator(series, 14);
+            b.plusDI = new PlusDIIndicator(series, 14);
+            b.minusDI = new MinusDIIndicator(series, 14);
+            b.atr = new ATRIndicator(series, 14);
+            b.macd = new MACDIndicator(b.closePrice, 12, 26);
+            b.macdSignal = new EMAIndicator(b.macd, 9);
+            b.rsi = new RSIIndicator(b.closePrice, 14);
+            b.stdDev20 = new StandardDeviationIndicator(b.closePrice, 20);
+            return b;
         }
     }
 
@@ -735,20 +717,72 @@ public class TechnicalIndicatorService {
             log.info("Bulk backfill: no market_data in [{} → {}] for {}/{}", from, to, symbol, interval);
             return new BulkBackfillResult(0, 0, 0, 0);
         }
+        int totalCandidatesInt = (int) Math.min(totalCandidates, Integer.MAX_VALUE);
         if (ctx != null) {
             ctx.setPhase("bulk:walking_windows");
-            ctx.setProgress(0, (int) Math.min(totalCandidates, Integer.MAX_VALUE));
+            ctx.setProgress(0, totalCandidatesInt);
         }
         log.info("Bulk backfill: {} target candle(s) for {}/{} [{} → {}] (recompute={})",
                 totalCandidates, symbol, interval, from, to, recompute);
 
-        // Pre-flight: warn loudly if funding_rate_history is cold for this
-        // symbol. The bulk path does not auto-trigger the funding backfill —
-        // every feature_store row written here will have NULL funding
-        // columns, and the downstream PATCH_NULL_COLUMN job (or the
-        // chained patch in BACKFILL_FUNDING_HISTORY) will need to rescue
-        // them later. Surfacing this upfront prevents the silent-NULL
-        // class of bugs that masqueraded as "patch ran but did nothing".
+        warnIfFundingCold(symbol);
+
+        TransactionTemplate windowTx = new TransactionTemplate(transactionManager);
+        windowTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        BulkAccumulator acc = new BulkAccumulator();
+        WindowIterationContext wic = new WindowIterationContext(
+                symbol, interval, intervalMinutes, to, recompute, windowTx, ctx, totalCandidatesInt);
+        boolean cancelled = false;
+        LocalDateTime windowStart = from;
+        while (!cancelled && !windowStart.isAfter(to)) {
+            WindowAdvance advance = advanceWindow(wic, windowStart, acc);
+            cancelled = advance.cancelled();
+            windowStart = advance.nextStart();
+        }
+
+        if (ctx != null && !ctx.isCancellationRequested()) {
+            ctx.setProgress(totalCandidatesInt, totalCandidatesInt);
+        }
+
+        log.info("Bulk backfill complete: inserted={} skipped={} failed={} totalProcessed={} for {}/{} (recompute={})",
+                acc.totalInserted, acc.totalSkipped, acc.totalFailed, acc.totalProcessed,
+                symbol, interval, recompute);
+        return new BulkBackfillResult(acc.totalInserted, acc.totalSkipped, acc.totalFailed, totalCandidatesInt);
+    }
+
+    private WindowAdvance advanceWindow(WindowIterationContext wic, LocalDateTime windowStart, BulkAccumulator acc) {
+        if (wic.jobCtx() != null && wic.jobCtx().isCancellationRequested()) {
+            log.info("Bulk backfill cancelled before window starting at {} for {}/{}",
+                    windowStart, wic.symbol(), wic.interval());
+            return new WindowAdvance(windowStart, true);
+        }
+        LocalDateTime windowEnd = windowStart.plusMonths(WINDOW_MONTHS);
+        if (windowEnd.isAfter(wic.to())) windowEnd = wic.to();
+        WindowSpec spec = new WindowSpec(wic.symbol(), wic.interval(), windowStart, windowEnd,
+                wic.intervalMinutes(), wic.recompute());
+        ProgressTracker progress = new ProgressTracker(wic.jobCtx(), acc.totalProcessed, wic.totalCandidatesInt());
+        final LocalDateTime we = windowEnd;
+        WindowResult res = wic.windowTx().execute(status -> processBulkWindow(spec, progress, status));
+        if (res != null) {
+            acc.add(res);
+            if (res.cancelled) {
+                log.info("Bulk backfill: window [{} → {}] rolled back on cancel for {}/{}",
+                        windowStart, we, wic.symbol(), wic.interval());
+                return new WindowAdvance(we.plusNanos(1), true);
+            }
+        }
+        return new WindowAdvance(windowEnd.plusNanos(1), false);
+    }
+
+    // Pre-flight: warn loudly if funding_rate_history is cold for this
+    // symbol. The bulk path does not auto-trigger the funding backfill —
+    // every feature_store row written here will have NULL funding
+    // columns, and the downstream PATCH_NULL_COLUMN job (or the chained
+    // patch in BACKFILL_FUNDING_HISTORY) will need to rescue them later.
+    // Surfacing this upfront prevents the silent-NULL class of bugs that
+    // masqueraded as "patch ran but did nothing".
+    private void warnIfFundingCold(String symbol) {
         if (fundingRateRepository.countBySymbol(symbol) == 0) {
             log.warn("Bulk backfill: funding_rate_history is cold for symbol={} — feature_store rows " +
                             "will be written with NULL funding columns. Run BACKFILL_FUNDING_HISTORY " +
@@ -756,177 +790,230 @@ public class TechnicalIndicatorService {
                             "after the next funding-history backfill will fill them retroactively.",
                     symbol, symbol);
         }
-
-        TransactionTemplate windowTx = new TransactionTemplate(transactionManager);
-        windowTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-
-        int totalInserted = 0;
-        int totalSkipped = 0;
-        int totalFailed = 0;
-        int totalProcessed = 0;
-
-        LocalDateTime windowStart = from;
-        while (!windowStart.isAfter(to)) {
-            if (ctx != null && ctx.isCancellationRequested()) {
-                log.info("Bulk backfill cancelled before window starting at {} for {}/{}",
-                        windowStart, symbol, interval);
-                break;
-            }
-            LocalDateTime windowEnd = windowStart.plusMonths(WINDOW_MONTHS);
-            if (windowEnd.isAfter(to)) windowEnd = to;
-            final LocalDateTime ws = windowStart;
-            final LocalDateTime we = windowEnd;
-            final int progressBaseline = totalProcessed;
-
-            WindowResult res = windowTx.execute(status -> processBulkWindow(
-                    symbol, interval, ws, we, intervalMinutes, recompute, ctx,
-                    progressBaseline, (int) Math.min(totalCandidates, Integer.MAX_VALUE),
-                    status));
-
-            if (res != null) {
-                totalInserted += res.inserted;
-                totalSkipped += res.skipped;
-                totalFailed += res.failed;
-                totalProcessed += res.processed;
-                if (res.cancelled) {
-                    log.info("Bulk backfill: window [{} → {}] rolled back on cancel for {}/{}",
-                            ws, we, symbol, interval);
-                    break;
-                }
-            }
-
-            windowStart = windowEnd.plusNanos(1);
-        }
-
-        if (ctx != null && !(ctx.isCancellationRequested())) {
-            ctx.setProgress((int) Math.min(totalCandidates, Integer.MAX_VALUE),
-                    (int) Math.min(totalCandidates, Integer.MAX_VALUE));
-        }
-
-        log.info("Bulk backfill complete: inserted={} skipped={} failed={} totalProcessed={} for {}/{} (recompute={})",
-                totalInserted, totalSkipped, totalFailed, totalProcessed, symbol, interval, recompute);
-        return new BulkBackfillResult(totalInserted, totalSkipped, totalFailed,
-                (int) Math.min(totalCandidates, Integer.MAX_VALUE));
     }
 
     /**
-     * Processes one 1-month window inside the caller's
-     * {@code REQUIRES_NEW} transaction. Returns a {@link WindowResult};
-     * sets the transaction status to rollback when cancellation is observed
-     * mid-window, so partial deletes/inserts are reverted.
+     * Processes one 1-month window inside the caller's {@code REQUIRES_NEW}
+     * transaction. Returns a {@link WindowResult}; sets the transaction
+     * status to rollback when cancellation is observed mid-window, so partial
+     * deletes/inserts are reverted.
      */
-    private WindowResult processBulkWindow(String symbol, String interval,
-                                           LocalDateTime windowStart, LocalDateTime windowEnd,
-                                           long intervalMinutes, boolean recompute,
-                                           JobContext ctx, int progressBaseline, int progressTotal,
-                                           org.springframework.transaction.TransactionStatus txStatus) {
-        if (ctx != null) {
-            ctx.setPhase("bulk:" + windowStart.toLocalDate());
-        }
+    private WindowResult processBulkWindow(WindowSpec spec, ProgressTracker progress, TransactionStatus txStatus) {
+        progress.setPhase("bulk:" + spec.windowStart().toLocalDate());
 
-        // Per-window delete (when recompute=true) so cancel rolls back THIS
-        // window's deletes too — not just inserts. Avoids leaving "deleted
-        // but not yet recomputed" gaps when a recompute is cancelled.
-        if (recompute) {
-            int deleted = featureStoreRepository.deleteBySymbolAndIntervalInRange(
-                    symbol, interval, windowStart, windowEnd);
-            log.debug("Bulk backfill (recompute) window [{} → {}]: deleted {} rows",
-                    windowStart, windowEnd, deleted);
-        }
+        deleteWindowIfRecompute(spec);
 
-        // Load the per-window data with LIVE_WARMUP_BARS bars of warmup
-        // before windowStart — matches the live single-bar path's lookback,
-        // so indicator values stay parity.
-        // Use the start_time-range variant so the bar AT exactly
-        // windowEnd is included (otherwise its end_time spills past
-        // windowEnd and findBySymbolIntervalAndRange would drop it,
-        // leaving feature_store gaps at every window boundary).
-        LocalDateTime warmupStart = windowStart.minusMinutes((long) LIVE_WARMUP_BARS * intervalMinutes);
-        List<MarketData> data = marketDataRepository.findBySymbolIntervalAndStartTimeRange(
-                symbol, interval, warmupStart, windowEnd);
+        List<MarketData> data = loadWindowData(spec);
         if (CollectionUtils.isEmpty(data)) {
             return new WindowResult(0, 0, 0, 0, false);
         }
-        data.sort(Comparator.comparing(MarketData::getStartTime));
 
-        // Existing rows in window (post-delete in recompute mode → empty).
-        Set<LocalDateTime> existing = new HashSet<>(featureStoreRepository
-                .findExistingStartTimesInRange(symbol, interval, windowStart, windowEnd)
+        Set<LocalDateTime> existing = loadExistingStartTimes(spec);
+        BarSeries series = convertToBarSeries(data, spec.interval());
+        IndicatorBundle ind = IndicatorBundle.build(series);
+        List<FundingRate> fundingSeries = loadFundingSeries(spec);
+
+        return processCandles(spec, data, existing, ind, fundingSeries, progress, txStatus);
+    }
+
+    // Per-window delete (when recompute=true) so cancel rolls back THIS
+    // window's deletes too — not just inserts. Avoids leaving "deleted but
+    // not yet recomputed" gaps when a recompute is cancelled.
+    private void deleteWindowIfRecompute(WindowSpec spec) {
+        if (!spec.recompute()) return;
+        int deleted = featureStoreRepository.deleteBySymbolAndIntervalInRange(
+                spec.symbol(), spec.interval(), spec.windowStart(), spec.windowEnd());
+        log.debug("Bulk backfill (recompute) window [{} → {}]: deleted {} rows",
+                spec.windowStart(), spec.windowEnd(), deleted);
+    }
+
+    // Load the per-window data with LIVE_WARMUP_BARS bars of warmup before
+    // windowStart — matches the live single-bar path's lookback, so indicator
+    // values stay parity. Use the start_time-range variant so the bar AT
+    // exactly windowEnd is included (otherwise its end_time spills past
+    // windowEnd and findBySymbolIntervalAndRange would drop it, leaving
+    // feature_store gaps at every window boundary).
+    private List<MarketData> loadWindowData(WindowSpec spec) {
+        LocalDateTime warmupStart = spec.windowStart()
+                .minusMinutes(LIVE_WARMUP_BARS * spec.intervalMinutes());
+        List<MarketData> data = marketDataRepository.findBySymbolIntervalAndStartTimeRange(
+                spec.symbol(), spec.interval(), warmupStart, spec.windowEnd());
+        if (data != null) data.sort(Comparator.comparing(MarketData::getStartTime));
+        return data;
+    }
+
+    private Set<LocalDateTime> loadExistingStartTimes(WindowSpec spec) {
+        return featureStoreRepository
+                .findExistingStartTimesInRange(spec.symbol(), spec.interval(), spec.windowStart(), spec.windowEnd())
                 .stream()
                 .map(Timestamp::toLocalDateTime)
-                .collect(Collectors.toSet()));
+                .collect(Collectors.toCollection(HashSet::new));
+    }
 
-        BarSeries series = convertToBarSeries(data, interval);
-        IndicatorBundle ind = IndicatorBundle.build(series);
+    // Funding history up to (windowEnd + interval) — Spot symbols see empty.
+    // The +interval overshoot covers the bar at start_time = windowEnd whose
+    // end_time crosses into the next window; without it a funding event
+    // landing on the boundary would be missed and the bulk row's funding
+    // columns would diverge from the live single-bar path's findLatest()
+    // semantics (which uses <= on end_time).
+    private List<FundingRate> loadFundingSeries(WindowSpec spec) {
+        LocalDateTime fundingBoundary = spec.windowEnd().plusMinutes(spec.intervalMinutes());
+        return fundingRateRepository.findAllUpTo(spec.symbol(), fundingBoundary);
+    }
 
-        // Funding history up to (windowEnd + interval) — Spot symbols see empty.
-        // The +interval overshoot covers the bar at start_time = windowEnd whose
-        // end_time crosses into the next window; without it a funding event
-        // landing on the boundary would be missed and the bulk row's funding
-        // columns would diverge from the live single-bar path's findLatest()
-        // semantics (which uses <= on end_time).
-        LocalDateTime fundingBoundary = windowEnd.plusMinutes(intervalMinutes);
-        List<FundingRate> fundingSeries = fundingRateRepository.findAllUpTo(symbol, fundingBoundary);
+    private WindowResult processCandles(WindowSpec spec, List<MarketData> data,
+                                        Set<LocalDateTime> existing, IndicatorBundle ind,
+                                        List<FundingRate> fundingSeries, ProgressTracker progress,
+                                        TransactionStatus txStatus) {
+        int firstIdx = firstIndexAtOrAfter(data, spec.windowStart());
+        int lastIdx = lastIndexAtOrBefore(data, spec.windowEnd());
 
-        int inserted = 0;
-        int skipped = 0;
-        int failed = 0;
-        int processed = 0;
+        CandleAccumulator acc = new CandleAccumulator();
         List<FeatureStore> buffer = new ArrayList<>(CHUNK_SIZE);
+        CandleWriteContext cwc = new CandleWriteContext(spec, data, ind, fundingSeries, buffer, progress);
 
-        for (int idx = 0; idx < data.size(); idx++) {
+        for (int idx = firstIdx; idx <= lastIdx; idx++) {
             MarketData md = data.get(idx);
-            if (md.getStartTime().isBefore(windowStart)) continue;
-            if (md.getStartTime().isAfter(windowEnd)) break;
-            processed++;
-
+            acc.processed++;
             if (existing.contains(md.getStartTime())) {
-                skipped++;
-                continue;
-            }
-
-            if (ctx != null && ctx.isCancellationRequested()) {
-                // Roll the WHOLE window back so a recompute doesn't leave
-                // a half-replaced window and a fill-missing doesn't leave
-                // a half-filled chunk that the operator can't easily detect.
+                acc.skipped++;
+            } else if (progress.isCancellationRequested()) {
+                // Roll the WHOLE window back so a recompute doesn't leave a
+                // half-replaced window and a fill-missing doesn't leave a
+                // half-filled chunk that the operator can't easily detect.
                 txStatus.setRollbackOnly();
                 log.info("Bulk backfill window [{} → {}] rolling back on cancel for {}/{}",
-                        windowStart, windowEnd, symbol, interval);
-                return new WindowResult(0, 0, 0, processed, true);
-            }
-
-            try {
-                FundingFeatureSnapshot funding = fundingRateService
-                        .computeFundingFeaturesFromSeries(fundingSeries, md.getEndTime());
-                FeatureStore row = buildFeatureRowFromPrecomputed(
-                        idx, symbol, interval, data.subList(0, idx + 1), ind, funding);
-                buffer.add(row);
-                inserted++;
-
-                if (buffer.size() >= CHUNK_SIZE) {
-                    featureStoreRepository.saveAll(buffer);
-                    featureStoreRepository.flush();
-                    // Evict managed entities from the L1 cache. Without this,
-                    // a wide window keeps every saved row in memory until
-                    // commit, defeating chunked saves.
-                    entityManager.clear();
-                    buffer.clear();
-                    if (ctx != null) ctx.setProgress(progressBaseline + processed, progressTotal);
-                }
-            } catch (RuntimeException e) {
-                failed++;
-                log.error("Bulk backfill failed at idx={} startTime={} for {}/{}: {}",
-                        idx, md.getStartTime(), symbol, interval, e.getMessage());
+                        spec.windowStart(), spec.windowEnd(), spec.symbol(), spec.interval());
+                return new WindowResult(0, 0, 0, acc.processed, true);
+            } else {
+                processOneCandle(idx, md, cwc, acc);
             }
         }
-        if (!buffer.isEmpty()) {
-            featureStoreRepository.saveAll(buffer);
-            featureStoreRepository.flush();
-            entityManager.clear();
-            buffer.clear();
+        flushBufferIfAny(buffer);
+        progress.report(acc.processed);
+        return new WindowResult(acc.inserted, acc.skipped, acc.failed, acc.processed, false);
+    }
+
+    private void processOneCandle(int idx, MarketData md, CandleWriteContext cwc, CandleAccumulator acc) {
+        try {
+            FundingFeatureSnapshot funding = fundingRateService
+                    .computeFundingFeaturesFromSeries(cwc.fundingSeries(), md.getEndTime());
+            FeatureStore row = buildFeatureRowFromPrecomputed(
+                    idx, cwc.spec().symbol(), cwc.spec().interval(), cwc.data().subList(0, idx + 1), cwc.ind(), funding);
+            cwc.buffer().add(row);
+            acc.inserted++;
+            if (cwc.buffer().size() >= CHUNK_SIZE) {
+                flushBufferIfAny(cwc.buffer());
+                cwc.progress().report(acc.processed);
+            }
+        } catch (RuntimeException e) {
+            acc.failed++;
+            log.error("Bulk backfill failed at idx={} startTime={} for {}/{}: {}",
+                    idx, md.getStartTime(), cwc.spec().symbol(), cwc.spec().interval(), e.getMessage());
         }
-        if (ctx != null) ctx.setProgress(progressBaseline + processed, progressTotal);
-        return new WindowResult(inserted, skipped, failed, processed, false);
+    }
+
+    // Evict managed entities from the L1 cache after each chunked save.
+    // Without this, a wide window keeps every saved row in memory until
+    // commit, defeating the purpose of chunked saves.
+    private void flushBufferIfAny(List<FeatureStore> buffer) {
+        if (buffer.isEmpty()) return;
+        featureStoreRepository.saveAll(buffer);
+        featureStoreRepository.flush();
+        entityManager.clear();
+        buffer.clear();
+    }
+
+    private static int firstIndexAtOrAfter(List<MarketData> data, LocalDateTime t) {
+        for (int i = 0; i < data.size(); i++) {
+            if (!data.get(i).getStartTime().isBefore(t)) return i;
+        }
+        return data.size();
+    }
+
+    private static int lastIndexAtOrBefore(List<MarketData> data, LocalDateTime t) {
+        for (int i = data.size() - 1; i >= 0; i--) {
+            if (!data.get(i).getStartTime().isAfter(t)) return i;
+        }
+        return -1;
+    }
+
+    /** Cohesive view of one bulk window's identity + processing flags. */
+    private record WindowSpec(
+            String symbol,
+            String interval,
+            LocalDateTime windowStart,
+            LocalDateTime windowEnd,
+            long intervalMinutes,
+            boolean recompute
+    ) {}
+
+    /** Constant inputs shared across every window in one bulk run. */
+    private record WindowIterationContext(
+            String symbol, String interval, long intervalMinutes,
+            LocalDateTime to, boolean recompute,
+            TransactionTemplate windowTx, JobContext jobCtx, int totalCandidatesInt
+    ) {}
+
+    /** Outcome of one window iteration: where to continue and whether to stop. */
+    private record WindowAdvance(LocalDateTime nextStart, boolean cancelled) {}
+
+    /** Per-window invariants passed to each candle during processing. */
+    private record CandleWriteContext(
+            WindowSpec spec,
+            List<MarketData> data,
+            IndicatorBundle ind,
+            List<FundingRate> fundingSeries,
+            List<FeatureStore> buffer,
+            ProgressTracker progress
+    ) {}
+
+    /** Null-safe bridge to {@link JobContext} for progress + cancellation. */
+    private static final class ProgressTracker {
+        private final JobContext ctx;
+        private final int baseline;
+        private final int total;
+
+        ProgressTracker(JobContext ctx, int baseline, int total) {
+            this.ctx = ctx;
+            this.baseline = baseline;
+            this.total = total;
+        }
+
+        void setPhase(String phase) {
+            if (ctx != null) ctx.setPhase(phase);
+        }
+
+        boolean isCancellationRequested() {
+            return ctx != null && ctx.isCancellationRequested();
+        }
+
+        void report(int processed) {
+            if (ctx != null) ctx.setProgress(baseline + processed, total);
+        }
+    }
+
+    /** Per-window candle counters mutated through the inner loop. */
+    private static final class CandleAccumulator {
+        int inserted;
+        int skipped;
+        int failed;
+        int processed;
+    }
+
+    /** Cross-window totals mutated by {@link #bulkComputeAndStoreInRange}. */
+    private static final class BulkAccumulator {
+        int totalInserted;
+        int totalSkipped;
+        int totalFailed;
+        int totalProcessed;
+
+        void add(WindowResult res) {
+            totalInserted += res.inserted;
+            totalSkipped += res.skipped;
+            totalFailed += res.failed;
+            totalProcessed += res.processed;
+        }
     }
 
     /** Per-window outcome aggregated by {@link #bulkComputeAndStoreInRange}. */

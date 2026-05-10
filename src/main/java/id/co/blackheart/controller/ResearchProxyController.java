@@ -23,7 +23,6 @@ import java.net.http.HttpResponse.BodyHandlers;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Collections;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -121,50 +120,69 @@ public class ResearchProxyController {
             "/research-actuator", "/research-actuator/**"
     })
     public ResponseEntity<byte[]> proxy(HttpServletRequest req) throws IOException {
-        String path = req.getRequestURI();
-        // Rewrite /research-actuator/** → /actuator/** before forwarding.
-        if (path.startsWith(ACTUATOR_PROXY_PREFIX)) {
-            path = "/actuator" + path.substring(ACTUATOR_PROXY_PREFIX.length());
-        }
-
-        String query = req.getQueryString();
+        String method = req.getMethod().toUpperCase(Locale.ROOT);
+        String path = rewritePath(req.getRequestURI());
         URI target = URI.create(stripTrailingSlash(researchBaseUrl) + path
-                + (query != null ? "?" + query : ""));
+                + (req.getQueryString() != null ? "?" + req.getQueryString() : ""));
+        HttpRequest request = buildUpstreamRequest(req, method, target);
+        return sendAndForward(request, method, path);
+    }
 
+    private static String rewritePath(String uri) {
+        // Rewrite /research-actuator/** → /actuator/** before forwarding.
+        return uri.startsWith(ACTUATOR_PROXY_PREFIX)
+                ? "/actuator" + uri.substring(ACTUATOR_PROXY_PREFIX.length())
+                : uri;
+    }
+
+    private HttpRequest buildUpstreamRequest(HttpServletRequest req, String method, URI target) throws IOException {
         HttpRequest.Builder builder = HttpRequest.newBuilder(target)
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds));
 
         // Method + body. HttpRequest.Builder rejects bodies on GET/DELETE/HEAD
         // by default; use the no-body publisher for those.
-        String method = req.getMethod().toUpperCase(Locale.ROOT);
         boolean bodyAllowed = !("GET".equals(method) || "HEAD".equals(method));
         byte[] body = bodyAllowed ? req.getInputStream().readAllBytes() : new byte[0];
         builder.method(method, bodyAllowed && body.length > 0
                 ? BodyPublishers.ofByteArray(body)
                 : BodyPublishers.noBody());
 
-        // Forward headers except the hop-by-hop set. Cookie + Authorization
-        // ride here, which is how the research JVM sees the same auth.
+        forwardRequestHeaders(builder, req);
+        return builder.build();
+    }
+
+    /**
+     * Forward headers except the hop-by-hop set. Cookie + Authorization ride
+     * here, which is how the research JVM sees the same auth.
+     */
+    private void forwardRequestHeaders(HttpRequest.Builder builder, HttpServletRequest req) {
         Enumeration<String> names = req.getHeaderNames();
         while (names.hasMoreElements()) {
             String name = names.nextElement();
-            if (HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) continue;
-            Enumeration<String> values = req.getHeaders(name);
-            while (values.hasMoreElements()) {
-                try {
-                    builder.header(name, values.nextElement());
-                } catch (IllegalArgumentException ignored) {
-                    // HttpRequest restricts a small set of headers (e.g.
-                    // "Host", "Content-Length"). Already filtered above; if
-                    // a new restricted header appears, drop it silently
-                    // rather than 500ing the whole proxy.
-                }
+            if (!HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
+                copyRequestHeader(builder, req, name);
             }
         }
+    }
 
+    private void copyRequestHeader(HttpRequest.Builder builder, HttpServletRequest req, String name) {
+        Enumeration<String> values = req.getHeaders(name);
+        while (values.hasMoreElements()) {
+            try {
+                builder.header(name, values.nextElement());
+            } catch (IllegalArgumentException ignored) {
+                // HttpRequest restricts a small set of headers (e.g. "Host",
+                // "Content-Length"). Already filtered above; if a new
+                // restricted header appears, drop it silently rather than
+                // 500ing the whole proxy.
+            }
+        }
+    }
+
+    private ResponseEntity<byte[]> sendAndForward(HttpRequest request, String method, String path) {
         HttpResponse<byte[]> upstream;
         try {
-            upstream = http.send(builder.build(), BodyHandlers.ofByteArray());
+            upstream = http.send(request, BodyHandlers.ofByteArray());
         } catch (ConnectException e) {
             log.warn("Research JVM unreachable at {}: {}", researchBaseUrl, e.getMessage());
             return jsonError(HttpStatus.BAD_GATEWAY,
@@ -178,34 +196,39 @@ public class ResearchProxyController {
                             + "check thread state (CLOSE_WAIT count, jstack) and consider restarting.");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return jsonError(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Proxy interrupted.");
+            return jsonError(HttpStatus.SERVICE_UNAVAILABLE, "Proxy interrupted.");
         } catch (IOException e) {
             log.warn("Research JVM I/O error for {} {}: {}", method, path, e.getMessage());
-            return jsonError(HttpStatus.BAD_GATEWAY,
-                    "Research service connection error.");
+            return jsonError(HttpStatus.BAD_GATEWAY, "Research service connection error.");
         }
+        return ResponseEntity
+                .status(upstream.statusCode())
+                .headers(copyResponseHeaders(upstream))
+                .body(upstream.body());
+    }
 
+    private static HttpHeaders copyResponseHeaders(HttpResponse<?> upstream) {
         HttpHeaders responseHeaders = new HttpHeaders();
         for (Map.Entry<String, java.util.List<String>> entry : upstream.headers().map().entrySet()) {
             String name = entry.getKey();
-            if (name == null) continue;
-            if (HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) continue;
-            // CORS headers from the upstream are dropped — the trading JVM's
-            // own CorsConfigurationSource adds them on the way out, and
-            // duplicate `Access-Control-Allow-Origin` headers fail browser
-            // CORS checks.
-            String lower = name.toLowerCase(Locale.ROOT);
-            if (lower.startsWith("access-control-")) continue;
-            for (String v : entry.getValue()) {
-                responseHeaders.add(name, v);
+            if (shouldForwardResponseHeader(name)) {
+                for (String v : entry.getValue()) responseHeaders.add(name, v);
             }
         }
+        return responseHeaders;
+    }
 
-        return ResponseEntity
-                .status(upstream.statusCode())
-                .headers(responseHeaders)
-                .body(upstream.body());
+    /**
+     * Drop hop-by-hop headers and CORS headers from the upstream response —
+     * the trading JVM's own CorsConfigurationSource adds CORS on the way out,
+     * and duplicate {@code Access-Control-Allow-Origin} headers fail browser
+     * CORS checks.
+     */
+    private static boolean shouldForwardResponseHeader(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (HOP_BY_HOP.contains(lower)) return false;
+        return !lower.startsWith("access-control-");
     }
 
     private static String stripTrailingSlash(String s) {

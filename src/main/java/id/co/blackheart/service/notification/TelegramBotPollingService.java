@@ -98,29 +98,31 @@ public class TelegramBotPollingService {
 
             JsonNode updates = root.path("result");
             for (JsonNode update : updates) {
-                long updateId = update.path("update_id").asLong();
-                updateOffset.set(updateId + 1);
-
-                JsonNode message = update.path("message");
-                if (message.isMissingNode()) {
-                    continue;
-                }
-
-                String text = message.path("text").asText("").trim();
-                long chatId = message.path("chat").path("id").asLong();
-
-                if (!allowedChatIds.contains(chatId)) {
-                    log.warn("[TelegramBot] Rejected message from unauthorized chat {}", chatId);
-                    continue;
-                }
-
-                if (text.equalsIgnoreCase(queryKey)) {
-                    log.info("[TelegramBot] IP query key received from chat {}", chatId);
-                    handleIpQuery(chatId);
-                }
+                handleUpdate(update);
             }
         } catch (Exception e) {
             log.error("[TelegramBot] Error polling updates", e);
+        }
+    }
+
+    private void handleUpdate(JsonNode update) {
+        long updateId = update.path("update_id").asLong();
+        updateOffset.set(updateId + 1);
+
+        JsonNode message = update.path("message");
+        if (message.isMissingNode()) return;
+
+        String text = message.path("text").asText("").trim();
+        long chatId = message.path("chat").path("id").asLong();
+
+        if (!allowedChatIds.contains(chatId)) {
+            log.warn("[TelegramBot] Rejected message from unauthorized chat {}", chatId);
+            return;
+        }
+
+        if (text.equalsIgnoreCase(queryKey)) {
+            log.info("[TelegramBot] IP query key received from chat {}", chatId);
+            handleIpQuery(chatId);
         }
     }
 

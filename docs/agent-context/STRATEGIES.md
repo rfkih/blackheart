@@ -34,7 +34,7 @@
 | **DCB** | `DonchianBreakoutEngine` | `src/main/java/id/co/blackheart/engine/DonchianBreakoutEngine.java` | Donchian-N breakout with ADX/volume confirmation; break-even shift + timed exit. Generalises the discarded DCT. |
 | **MRO** | `MeanReversionOscillatorEngine` | `src/main/java/id/co/blackheart/engine/MeanReversionOscillatorEngine.java` | Outer-band mean reversion with RSI exhaustion gate; exits at EMA20 mid. Generalises the discarded BBR. |
 | **MMR** | `MomentumMeanReversionEngine` | `src/main/java/id/co/blackheart/engine/MomentumMeanReversionEngine.java` | EMA-anchored momentum mean reversion (e.g. close >2·ATR below EMA200) back to a target EMA. Anchor + target configurable in spec body. |
-| **TPB** | `TrendPullbackEngine` | `src/main/java/id/co/blackheart/engine/TrendPullbackEngine.java` | Trend pullback with candle-quality gates (body ratio, CLV, volume); TP1 break-even shift then ATR runner. V2 risk-based sizing (`riskPerTradePct` / `maxAllocationPct` spec params; legacy fallback retained). Generalises the legacy TPR. |
+| **TPB** | `TrendPullbackEngine` | `src/main/java/id/co/blackheart/engine/TrendPullbackEngine.java` | Trend pullback with candle-quality gates (body ratio, CLV, volume); TP1 break-even shift then ATR runner. V2 risk-based sizing (`riskPerTradePct` / `maxAllocationPct` spec params; legacy fallback retained). Manage-position helpers (`tryBreakEvenShift`, `tryRunnerTrail`, `computeRunnerCandidate`) share a `MgmtState` record. Generalises the legacy TPR. |
 
 ## Discarded (kept for archival reference)
 

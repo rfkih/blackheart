@@ -28,6 +28,8 @@ import static id.co.blackheart.util.TradeConstant.*;
 @Slf4j
 public class TradeOpenService {
 
+    private static final String POSITION_ROLE_RUNNER = "RUNNER";
+
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
     private final TradeExecutionService tradeExecutionService;
@@ -271,7 +273,7 @@ public class TradeOpenService {
             return PreTradeValidationResult.invalid("No valid exit structure can be generated for estimated quantity");
         }
 
-        return PreTradeValidationResult.valid(
+        return PreTradeValidationResult.accepted(
                 estimatedQty,
                 normalizedQty,
                 bufferedPrice,
@@ -580,7 +582,7 @@ public class TradeOpenService {
                                 decision.getTakeProfitPrice2()
                         ),
                         PlannedPosition.of(
-                                "RUNNER",
+                                POSITION_ROLE_RUNNER,
                                 runnerQty,
                                 decision.getStopLossPrice(),
                                 decision.getStopLossPrice(),
@@ -630,7 +632,7 @@ public class TradeOpenService {
                                 decision.getTakeProfitPrice1()
                         ),
                         PlannedPosition.of(
-                                "RUNNER",
+                                POSITION_ROLE_RUNNER,
                                 runnerQty,
                                 decision.getStopLossPrice(),
                                 decision.getStopLossPrice(),
@@ -656,7 +658,7 @@ public class TradeOpenService {
                 EXIT_STRUCTURE_RUNNER_ONLY,
                 List.of(
                         PlannedPosition.of(
-                                "RUNNER",
+                                POSITION_ROLE_RUNNER,
                                 runnerQty,
                                 decision.getStopLossPrice(),
                                 decision.getStopLossPrice(),
@@ -836,7 +838,7 @@ public class TradeOpenService {
             this.plannedMode = plannedMode;
         }
 
-        static PreTradeValidationResult valid(
+        static PreTradeValidationResult accepted(
                 BigDecimal estimatedQty,
                 BigDecimal normalizedQty,
                 BigDecimal estimatedPrice,

@@ -4,19 +4,14 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.backtest.BacktestExecutionSummary;
 import id.co.blackheart.model.BacktestRun;
-import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.service.strategy.BacktestParamOverrideContext;
 import id.co.blackheart.service.strategy.BacktestParamPresetContext;
-import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.Map;
 import java.util.UUID;
@@ -35,9 +30,10 @@ import java.util.UUID;
  *   FAILED   — coordinator threw; progress frozen at last reported value
  * </pre>
  *
- * <p>Each transition is written in its own REQUIRES_NEW transaction so the
- * status is visible to polling clients as soon as it flips — we don't want a
- * long-running outer transaction to hide the state from readers.
+ * <p>Each transition is written via {@link BacktestRunLifecycle} in its own
+ * REQUIRES_NEW transaction so the status is visible to polling clients as
+ * soon as it flips — we don't want a long-running outer transaction to hide
+ * the state from readers.
  */
 @Slf4j
 @Service
@@ -45,16 +41,13 @@ import java.util.UUID;
 public class BacktestAsyncRunner {
 
     private static final String STATUS_PENDING = "PENDING";
-    private static final String STATUS_RUNNING = "RUNNING";
-    private static final String STATUS_COMPLETED = "COMPLETED";
-    private static final String STATUS_FAILED = "FAILED";
 
     /** JSON shape stored in {@code backtest_run.config_snapshot}: string-keyed outer map of
      *  strategy codes, values are override key/value maps. */
     private static final TypeReference<Map<String, Map<String, Object>>> OVERRIDES_TYPE =
             new TypeReference<>() {};
 
-    private final BacktestRunRepository runRepository;
+    private final BacktestRunLifecycle lifecycle;
     private final BacktestCoordinatorService backtestCoordinatorService;
     private final BacktestProgressTracker progressTracker;
     private final ObjectMapper objectMapper;
@@ -65,33 +58,43 @@ public class BacktestAsyncRunner {
         log.info("Backtest worker started | runId={}", backtestRunId);
         Map<String, Map<String, Object>> overrides = Collections.emptyMap();
         try {
-            BacktestRun run = markRunning(backtestRunId);
+            BacktestRun run = lifecycle.markRunning(backtestRunId);
             overrides = readOverrides(run);
-            try {
-                BacktestParamOverrideContext.enter(overrides);
-                BacktestParamPresetContext.enter(run.getStrategyParamIds());
-                BacktestExecutionSummary summary = backtestCoordinatorService.execute(run);
-                markCompleted(backtestRunId, summary);
-                progressTracker.complete(backtestRunId);
-
-                // Auto-analyze: persist diagnostics to backtest_run.analysis_snapshot
-                // so the frontend + research loop have everything ready without a
-                // separate trigger. Swallow errors — a bug in the analyzer shouldn't
-                // mark a successfully-completed run as FAILED.
-                try {
-                    analysisService.analyze(backtestRunId);
-                } catch (Exception analysisEx) {
-                    log.error("Post-run analysis failed | runId={}", backtestRunId, analysisEx);
-                }
-            } finally {
-                BacktestParamOverrideContext.exit();
-                BacktestParamPresetContext.exit();
-            }
+            executeWithContext(backtestRunId, run, overrides);
         } catch (Exception e) {
             log.error("Backtest failed | runId={} overrides={}", backtestRunId,
                     overrides.keySet(), e);
-            markFailed(backtestRunId, e);
+            lifecycle.markFailed(backtestRunId, e);
             progressTracker.fail(backtestRunId);
+        }
+    }
+
+    private void executeWithContext(UUID backtestRunId, BacktestRun run,
+                                    Map<String, Map<String, Object>> overrides) {
+        try {
+            BacktestParamOverrideContext.enter(overrides);
+            BacktestParamPresetContext.enter(run.getStrategyParamIds());
+            BacktestExecutionSummary summary = backtestCoordinatorService.execute(run);
+            lifecycle.markCompleted(backtestRunId, summary);
+            progressTracker.complete(backtestRunId);
+            runPostRunAnalysis(backtestRunId);
+        } finally {
+            BacktestParamOverrideContext.exit();
+            BacktestParamPresetContext.exit();
+        }
+    }
+
+    /**
+     * Auto-analyze: persist diagnostics to {@code backtest_run.analysis_snapshot}
+     * so the frontend + research loop have everything ready without a separate
+     * trigger. Swallow errors — a bug in the analyzer shouldn't mark a
+     * successfully-completed run as FAILED.
+     */
+    private void runPostRunAnalysis(UUID backtestRunId) {
+        try {
+            analysisService.analyze(backtestRunId);
+        } catch (Exception analysisEx) {
+            log.error("Post-run analysis failed | runId={}", backtestRunId, analysisEx);
         }
     }
 
@@ -112,55 +115,6 @@ public class BacktestAsyncRunner {
                     run.getBacktestRunId(), e.getMessage());
             return Collections.emptyMap();
         }
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public BacktestRun markRunning(UUID runId) {
-        BacktestRun run = runRepository.findById(runId)
-                .orElseThrow(() -> new EntityNotFoundException("Backtest run not found: " + runId));
-        run.setStatus(STATUS_RUNNING);
-        return runRepository.save(run);
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markCompleted(UUID runId, BacktestExecutionSummary summary) {
-        BacktestRun run = runRepository.findById(runId).orElse(null);
-        if (run == null) {
-            log.warn("markCompleted: backtest run not found | runId={}", runId);
-            return;
-        }
-        run.setStatus(STATUS_COMPLETED);
-        run.setProgressPercent(100);
-        if (summary != null) {
-            run.setEndingBalance(summary.getFinalCapital());
-            run.setTotalTrades(summary.getTotalTrades());
-            run.setTotalWins(summary.getWinningTrades());
-            run.setTotalLosses(summary.getLosingTrades());
-            run.setWinRate(summary.getWinRate());
-            run.setMaxDrawdownPct(summary.getMaxDrawdownPercent());
-            run.setGrossProfit(summary.getGrossProfit());
-            run.setGrossLoss(summary.getGrossLoss());
-            run.setNetProfit(summary.getNetProfit());
-        }
-        runRepository.save(run);
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markFailed(UUID runId, Throwable cause) {
-        BacktestRun run = runRepository.findById(runId).orElse(null);
-        if (run == null) {
-            log.warn("markFailed: backtest run not found | runId={}", runId);
-            return;
-        }
-        run.setStatus(STATUS_FAILED);
-        // Keep the last reported percent — useful to see where it died.
-        String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
-
-        if (message.length() > 950) {
-            message = message.substring(0, 950) + "…";
-        }
-        run.setNotes(message);
-        runRepository.save(run);
     }
 
     public String statusPending() { return STATUS_PENDING; }

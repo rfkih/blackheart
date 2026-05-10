@@ -47,10 +47,10 @@ public class StrategyDefinitionHistoryService {
      * @param reason           free-form rationale; nullable.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public void record(StrategyDefinition def,
-                       String operation,
-                       UUID changedByUserId,
-                       String reason) {
+    public void recordChange(StrategyDefinition def,
+                             String operation,
+                             UUID changedByUserId,
+                             String reason) {
         try {
             StrategyDefinitionHistory row = StrategyDefinitionHistory.builder()
                     .historyId(UUID.randomUUID())
@@ -70,10 +70,5 @@ public class StrategyDefinitionHistoryService {
             log.warn("Failed to record strategy_definition_history | op={} strategyCode={} defId={} actor={}",
                     operation, def.getStrategyCode(), def.getStrategyDefinitionId(), changedByUserId, e);
         }
-    }
-
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void record(StrategyDefinition def, String operation, UUID changedByUserId) {
-        record(def, operation, changedByUserId, null);
     }
 }

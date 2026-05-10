@@ -63,6 +63,9 @@ public class FundingCarryStrategyService implements StrategyExecutor {
     private static final String EXIT_STRUCTURE_SINGLE = "SINGLE";
     private static final String TARGET_ALL = "ALL";
 
+    /** Diagnostic key carrying the funding-rate z-score on every FCARRY decision. */
+    private static final String DIAG_FUNDING_RATE_Z = "fundingRateZ";
+
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal ONE  = BigDecimal.ONE;
 
@@ -112,19 +115,28 @@ public class FundingCarryStrategyService implements StrategyExecutor {
             return managePosition(context, md, f, snap, p);
         }
 
+        StrategyDecision entry = tryEntry(context, md, f, p);
+        return entry != null ? entry : hold(context, "No qualified FCARRY setup");
+    }
+
+    /**
+     * Try a SHORT then a LONG carry entry, respecting the per-side allow
+     * flags. Returns the first qualified decision, or null when no setup
+     * fires — caller emits a HOLD in that case.
+     */
+    private StrategyDecision tryEntry(
+            EnrichedStrategyContext context, MarketData md, FeatureStore f, FundingCarryParams p) {
         // Entry: SHORT when longs are paying premium (z > +entryZ, rate > 0).
         if (context.isShortAllowed() && Boolean.TRUE.equals(p.getAllowShort())) {
             StrategyDecision d = tryShortEntry(context, md, f, p);
             if (d != null) return d;
         }
-
         // Entry: LONG when shorts are paying premium (z < -entryZ, rate < 0).
         if (context.isLongAllowed() && Boolean.TRUE.equals(p.getAllowLong())) {
             StrategyDecision d = tryLongEntry(context, md, f, p);
             if (d != null) return d;
         }
-
-        return hold(context, "No qualified FCARRY setup");
+        return null;
     }
 
     // ── Entries ───────────────────────────────────────────────────────────────
@@ -184,7 +196,7 @@ public class FundingCarryStrategyService implements StrategyExecutor {
                 .tags(List.of("ENTRY", STRATEGY_CODE, SIDE_LONG, STRATEGY_VERSION))
                 .diagnostics(Map.of(
                         "module", "FundingCarryStrategyService",
-                        "fundingRateZ", z,
+                        DIAG_FUNDING_RATE_Z, z,
                         "fundingRate8h", rate8h,
                         "fundingRate7dAvg", strategyHelper.safe(f.getFundingRate7dAvg()),
                         "atr", atr,
@@ -246,7 +258,7 @@ public class FundingCarryStrategyService implements StrategyExecutor {
                 .tags(List.of("ENTRY", STRATEGY_CODE, SIDE_SHORT, STRATEGY_VERSION))
                 .diagnostics(Map.of(
                         "module", "FundingCarryStrategyService",
-                        "fundingRateZ", z,
+                        DIAG_FUNDING_RATE_Z, z,
                         "fundingRate8h", rate8h,
                         "fundingRate7dAvg", strategyHelper.safe(f.getFundingRate7dAvg()),
                         "atr", atr,
@@ -270,7 +282,7 @@ public class FundingCarryStrategyService implements StrategyExecutor {
             return closeDecision(ctx, side,
                     "FCARRY exit: |z|=" + z.abs() + " < exitZ=" + p.getExitZ(),
                     SETUP_EXIT_Z,
-                    Map.of("fundingRateZ", z, "exitZ", p.getExitZ(), "trigger", "Z_NORMALISED"),
+                    Map.of(DIAG_FUNDING_RATE_Z, z, "exitZ", p.getExitZ(), "trigger", "Z_NORMALISED"),
                     isLong);
         }
 

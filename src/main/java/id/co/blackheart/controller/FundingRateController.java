@@ -53,7 +53,7 @@ public class FundingRateController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
             @RequestParam(defaultValue = "200") int limit
     ) {
-        int safeLimit = Math.min(Math.max(limit, 1), MAX_RECENT);
+        int safeLimit = Math.clamp(limit, 1, MAX_RECENT);
         // findInWindow is (lower-exclusive, upper-inclusive]; nudging the lower
         // bound back by a microsecond so the caller's [startTime, endTime] is
         // treated inclusively without changing the underlying repo contract.

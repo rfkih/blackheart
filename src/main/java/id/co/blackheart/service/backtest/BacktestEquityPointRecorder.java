@@ -14,12 +14,13 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
 public class BacktestEquityPointRecorder {
 
-    public void record(
+    public void recordPoint(
             BacktestState state,
             BacktestRun backtestRun,
             MarketData monitorCandle
@@ -108,23 +109,21 @@ public class BacktestEquityPointRecorder {
      * runs / pre-B1 path) so the count is correct in both regimes.
      */
     private int countOpenPositions(BacktestState state) {
-        java.util.Map<String, List<BacktestTradePosition>> byStrategy =
-                state.getActiveTradePositionsByStrategy();
-        int count = 0;
+        Map<String, List<BacktestTradePosition>> byStrategy = state.getActiveTradePositionsByStrategy();
         if (!CollectionUtils.isEmpty(byStrategy)) {
+            int count = 0;
             for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
-                if (perStrategy == null) continue;
-                for (BacktestTradePosition position : perStrategy) {
-                    if (position != null && "OPEN".equalsIgnoreCase(position.getStatus())) {
-                        count++;
-                    }
-                }
+                count += countOpenIn(perStrategy);
             }
             return count;
         }
-        List<BacktestTradePosition> legacy = state.getActiveTradePositions();
-        if (legacy == null) return 0;
-        for (BacktestTradePosition position : legacy) {
+        return countOpenIn(state.getActiveTradePositions());
+    }
+
+    private int countOpenIn(List<BacktestTradePosition> positions) {
+        if (positions == null) return 0;
+        int count = 0;
+        for (BacktestTradePosition position : positions) {
             if (position != null && "OPEN".equalsIgnoreCase(position.getStatus())) {
                 count++;
             }

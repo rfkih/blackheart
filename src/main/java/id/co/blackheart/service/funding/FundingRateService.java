@@ -196,7 +196,9 @@ public class FundingRateService {
     }
 
     private static int upperBoundIndex(List<FundingRate> ordered, LocalDateTime boundary) {
-        int lo = 0, hi = ordered.size() - 1, ans = -1;
+        int lo = 0;
+        int hi = ordered.size() - 1;
+        int ans = -1;
         while (lo <= hi) {
             int mid = (lo + hi) >>> 1;
             if (!ordered.get(mid).getFundingTime().isAfter(boundary)) {
@@ -275,7 +277,7 @@ public class FundingRateService {
             }
             // Clamp to ±20: extreme z-scores carry no extra signal and values beyond
             // ~8 digits integer part overflow NUMERIC(18,10).
-            z = Math.max(-20.0, Math.min(20.0, z));
+            z = Math.clamp(z, -20.0, 20.0);
             BigDecimal zBd = BigDecimal.valueOf(z).setScale(10, java.math.RoundingMode.HALF_UP);
             return new FundingFeatureSnapshot(rate8h, mean, zBd);
         }

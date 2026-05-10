@@ -1,7 +1,6 @@
 package id.co.blackheart.controller;
 
 import id.co.blackheart.dto.response.ResponseDto;
-import id.co.blackheart.model.ServerIpLog;
 import id.co.blackheart.repository.ServerIpLogRepository;
 import id.co.blackheart.service.notification.IpMonitorService;
 import id.co.blackheart.service.notification.TelegramNotificationService;

@@ -37,8 +37,13 @@ public class ExecutionTestService implements StrategyExecutor {
     private static final String EXIT_STRUCTURE_RUNNER_ONLY = "RUNNER_ONLY";
 
     private static final String TARGET_ALL = "ALL";
-    private static final String TARGET_SINGLE = "SINGLE";
+    // Same string value as EXIT_STRUCTURE_SINGLE — different semantic namespace
+    // (target position role vs exit structure). Linked here to satisfy S1192.
+    private static final String TARGET_SINGLE = EXIT_STRUCTURE_SINGLE;
     private static final String TARGET_RUNNER = "RUNNER";
+
+    private static final String SIGNAL_TYPE_EXECUTION_TEST = "EXECUTION_TEST";
+    private static final String KEY_EXIT_STRUCTURE = "exitStructure";
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal LONG_STOP_ATR = new BigDecimal("1.5");
@@ -112,85 +117,111 @@ public class ExecutionTestService implements StrategyExecutor {
             FeatureStore featureStore,
             String exitStructure
     ) {
-        if (context.isLongAllowed()) {
-            BigDecimal stopLoss = closePrice.subtract(atr.multiply(LONG_STOP_ATR));
-            BigDecimal tp1 = closePrice.add(atr.multiply(SINGLE_TP_ATR));
-            BigDecimal tp2 = closePrice.add(atr.multiply(TP2_ATR));
-
-            return StrategyDecision.builder()
-                    .decisionType(DecisionType.OPEN_LONG)
-                    .strategyCode(STRATEGY_CODE)
-                    .strategyName(STRATEGY_NAME)
-                    .strategyVersion(STRATEGY_VERSION)
-                    .strategyInterval(context.getInterval())
-                    .signalType("EXECUTION_TEST")
-                    .setupType("TEST_OPEN_LONG")
-                    .side(SIDE_LONG)
-                    .reason("Execution test open long with structure " + exitStructure)
-                    .positionSize(BigDecimal.ONE)
-                    .stopLossPrice(stopLoss)
-                    .trailingStopPrice(null)
-                    .takeProfitPrice1(resolveTakeProfit1(exitStructure, tp1))
-                    .takeProfitPrice2(resolveTakeProfit2(exitStructure, tp2))
-                    .takeProfitPrice3(null)
-                    .exitStructure(exitStructure)
-                    .targetPositionRole(TARGET_ALL)
-                    .entryAtr(atr)
-                    .entryAdx(featureStore != null ? featureStore.getAdx() : null)
-                    .entryRsi(featureStore != null ? featureStore.getRsi() : null)
-                    .entryTrendRegime(featureStore != null ? featureStore.getTrendRegime() : null)
-                    .regimeLabel(featureStore != null ? featureStore.getTrendRegime() : null)
-                    .signalScore(BigDecimal.ONE)
-                    .confidenceScore(BigDecimal.ONE)
-                    .decisionTime(LocalDateTime.now())
-                    .tags(List.of("TEST", "ENTRY", "LONG"))
-                    .diagnostics(Map.of(
-                            "module", "ExecutionTestService",
-                            "exitStructure", exitStructure
-                    ))
-                    .build();
-        }
-
-        if (context.isShortAllowed()) {
-            BigDecimal stopLoss = closePrice.add(atr.multiply(SHORT_STOP_ATR));
-            BigDecimal tp1 = closePrice.subtract(atr.multiply(SINGLE_TP_ATR));
-            BigDecimal tp2 = closePrice.subtract(atr.multiply(TP2_ATR));
-
-            return StrategyDecision.builder()
-                    .decisionType(DecisionType.OPEN_SHORT)
-                    .strategyCode(STRATEGY_CODE)
-                    .strategyName(STRATEGY_NAME)
-                    .strategyVersion(STRATEGY_VERSION)
-                    .strategyInterval(context.getInterval())
-                    .signalType("EXECUTION_TEST")
-                    .setupType("TEST_OPEN_SHORT")
-                    .side(SIDE_SHORT)
-                    .reason("Execution test open short with structure " + exitStructure)
-                    .positionSize(BigDecimal.ONE)
-                    .stopLossPrice(stopLoss)
-                    .trailingStopPrice(null)
-                    .takeProfitPrice1(resolveTakeProfit1(exitStructure, tp1))
-                    .takeProfitPrice2(resolveTakeProfit2(exitStructure, tp2))
-                    .takeProfitPrice3(null)
-                    .exitStructure(exitStructure)
-                    .targetPositionRole(TARGET_ALL)
-                    .entryAtr(atr)
-                    .entryAdx(featureStore != null ? featureStore.getAdx() : null)
-                    .entryRsi(featureStore != null ? featureStore.getRsi() : null)
-                    .entryTrendRegime(featureStore != null ? featureStore.getTrendRegime() : null)
-                    .regimeLabel(featureStore != null ? featureStore.getTrendRegime() : null)
-                    .signalScore(BigDecimal.ONE)
-                    .confidenceScore(BigDecimal.ONE)
-                    .decisionTime(LocalDateTime.now())
-                    .tags(List.of("TEST", "ENTRY", "SHORT"))
-                    .diagnostics(Map.of(
-                            "module", "ExecutionTestService",
-                            "exitStructure", exitStructure
-                    ))
-                    .build();
-        }
-
+        if (context.isLongAllowed()) return buildLongEntry(context, closePrice, atr, featureStore, exitStructure);
+        if (context.isShortAllowed()) return buildShortEntry(context, closePrice, atr, featureStore, exitStructure);
         return hold(context, "Both long and short disabled");
+    }
+
+    private StrategyDecision buildLongEntry(
+            EnrichedStrategyContext context,
+            BigDecimal closePrice,
+            BigDecimal atr,
+            FeatureStore featureStore,
+            String exitStructure
+    ) {
+        BigDecimal stopLoss = closePrice.subtract(atr.multiply(LONG_STOP_ATR));
+        BigDecimal tp1 = closePrice.add(atr.multiply(SINGLE_TP_ATR));
+        BigDecimal tp2 = closePrice.add(atr.multiply(TP2_ATR));
+
+        return StrategyDecision.builder()
+                .decisionType(DecisionType.OPEN_LONG)
+                .strategyCode(STRATEGY_CODE)
+                .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
+                .strategyInterval(context.getInterval())
+                .signalType(SIGNAL_TYPE_EXECUTION_TEST)
+                .setupType("TEST_OPEN_LONG")
+                .side(SIDE_LONG)
+                .reason("Execution test open long with structure " + exitStructure)
+                .positionSize(BigDecimal.ONE)
+                .stopLossPrice(stopLoss)
+                .trailingStopPrice(null)
+                .takeProfitPrice1(resolveTakeProfit1(exitStructure, tp1))
+                .takeProfitPrice2(resolveTakeProfit2(exitStructure, tp2))
+                .takeProfitPrice3(null)
+                .exitStructure(exitStructure)
+                .targetPositionRole(TARGET_ALL)
+                .entryAtr(atr)
+                .entryAdx(adxOrNull(featureStore))
+                .entryRsi(rsiOrNull(featureStore))
+                .entryTrendRegime(regimeOrNull(featureStore))
+                .regimeLabel(regimeOrNull(featureStore))
+                .signalScore(BigDecimal.ONE)
+                .confidenceScore(BigDecimal.ONE)
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("TEST", "ENTRY", SIDE_LONG))
+                .diagnostics(Map.of(
+                        "module", "ExecutionTestService",
+                        KEY_EXIT_STRUCTURE, exitStructure
+                ))
+                .build();
+    }
+
+    private StrategyDecision buildShortEntry(
+            EnrichedStrategyContext context,
+            BigDecimal closePrice,
+            BigDecimal atr,
+            FeatureStore featureStore,
+            String exitStructure
+    ) {
+        BigDecimal stopLoss = closePrice.add(atr.multiply(SHORT_STOP_ATR));
+        BigDecimal tp1 = closePrice.subtract(atr.multiply(SINGLE_TP_ATR));
+        BigDecimal tp2 = closePrice.subtract(atr.multiply(TP2_ATR));
+
+        return StrategyDecision.builder()
+                .decisionType(DecisionType.OPEN_SHORT)
+                .strategyCode(STRATEGY_CODE)
+                .strategyName(STRATEGY_NAME)
+                .strategyVersion(STRATEGY_VERSION)
+                .strategyInterval(context.getInterval())
+                .signalType(SIGNAL_TYPE_EXECUTION_TEST)
+                .setupType("TEST_OPEN_SHORT")
+                .side(SIDE_SHORT)
+                .reason("Execution test open short with structure " + exitStructure)
+                .positionSize(BigDecimal.ONE)
+                .stopLossPrice(stopLoss)
+                .trailingStopPrice(null)
+                .takeProfitPrice1(resolveTakeProfit1(exitStructure, tp1))
+                .takeProfitPrice2(resolveTakeProfit2(exitStructure, tp2))
+                .takeProfitPrice3(null)
+                .exitStructure(exitStructure)
+                .targetPositionRole(TARGET_ALL)
+                .entryAtr(atr)
+                .entryAdx(adxOrNull(featureStore))
+                .entryRsi(rsiOrNull(featureStore))
+                .entryTrendRegime(regimeOrNull(featureStore))
+                .regimeLabel(regimeOrNull(featureStore))
+                .signalScore(BigDecimal.ONE)
+                .confidenceScore(BigDecimal.ONE)
+                .decisionTime(LocalDateTime.now())
+                .tags(List.of("TEST", "ENTRY", SIDE_SHORT))
+                .diagnostics(Map.of(
+                        "module", "ExecutionTestService",
+                        KEY_EXIT_STRUCTURE, exitStructure
+                ))
+                .build();
+    }
+
+    private static BigDecimal adxOrNull(FeatureStore fs) {
+        return fs == null ? null : fs.getAdx();
+    }
+
+    private static BigDecimal rsiOrNull(FeatureStore fs) {
+        return fs == null ? null : fs.getRsi();
+    }
+
+    private static String regimeOrNull(FeatureStore fs) {
+        return fs == null ? null : fs.getTrendRegime();
     }
 
     private StrategyDecision handleActiveTrade(
@@ -210,14 +241,14 @@ public class ExecutionTestService implements StrategyExecutor {
                         .strategyName(STRATEGY_NAME)
                         .strategyVersion(STRATEGY_VERSION)
                         .strategyInterval(context.getInterval())
-                        .signalType("EXECUTION_TEST")
+                        .signalType(SIGNAL_TYPE_EXECUTION_TEST)
                         .setupType("TEST_FORCE_CLOSE_LONG")
                         .side(SIDE_LONG)
                         .exitReason(EXIT_TEST_MANUAL_CLOSE)
                         .reason("Execution test close long")
                         .targetPositionRole(TARGET_ALL)
                         .decisionTime(LocalDateTime.now())
-                        .tags(List.of("TEST", "EXIT", "LONG"))
+                        .tags(List.of("TEST", "EXIT", SIDE_LONG))
                         .build();
             }
 
@@ -232,14 +263,14 @@ public class ExecutionTestService implements StrategyExecutor {
                         .strategyName(STRATEGY_NAME)
                         .strategyVersion(STRATEGY_VERSION)
                         .strategyInterval(context.getInterval())
-                        .signalType("EXECUTION_TEST")
+                        .signalType(SIGNAL_TYPE_EXECUTION_TEST)
                         .setupType("TEST_FORCE_CLOSE_SHORT")
                         .side(SIDE_SHORT)
                         .exitReason(EXIT_TEST_MANUAL_CLOSE)
                         .reason("Execution test close short")
                         .targetPositionRole(TARGET_ALL)
                         .decisionTime(LocalDateTime.now())
-                        .tags(List.of("TEST", "EXIT", "SHORT"))
+                        .tags(List.of("TEST", "EXIT", SIDE_SHORT))
                         .build();
             }
 
@@ -285,7 +316,7 @@ public class ExecutionTestService implements StrategyExecutor {
             updatedTp = closePrice.add(atr.multiply(EXTEND_TP_ATR));
         } else if ("TP2".equalsIgnoreCase(positionSnapshot.getPositionRole())) {
             updatedTp = closePrice.add(atr.multiply(new BigDecimal("1.5")));
-        } else if ("RUNNER".equalsIgnoreCase(positionSnapshot.getPositionRole())) {
+        } else if (TARGET_RUNNER.equalsIgnoreCase(positionSnapshot.getPositionRole())) {
             updatedTp = null;
         }
 
@@ -295,7 +326,7 @@ public class ExecutionTestService implements StrategyExecutor {
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
-                .signalType("EXECUTION_TEST")
+                .signalType(SIGNAL_TYPE_EXECUTION_TEST)
                 .setupType("TEST_LONG_MANAGEMENT")
                 .side(SIDE_LONG)
                 .reason("Execution test long management update")
@@ -306,12 +337,12 @@ public class ExecutionTestService implements StrategyExecutor {
                 .takeProfitPrice3(null)
                 .targetPositionRole(resolveTargetRole(positionSnapshot, exitStructure))
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("TEST", "MANAGEMENT", "LONG"))
+                .tags(List.of("TEST", "MANAGEMENT", SIDE_LONG))
                 .diagnostics(Map.of(
                         "entryPrice", entryPrice,
                         "closePrice", closePrice,
                         "atr", atr,
-                        "exitStructure", exitStructure
+                        KEY_EXIT_STRUCTURE, exitStructure
                 ))
                 .build();
     }
@@ -352,7 +383,7 @@ public class ExecutionTestService implements StrategyExecutor {
             updatedTp = closePrice.subtract(atr.multiply(EXTEND_TP_ATR));
         } else if ("TP2".equalsIgnoreCase(positionSnapshot.getPositionRole())) {
             updatedTp = closePrice.subtract(atr.multiply(new BigDecimal("1.5")));
-        } else if ("RUNNER".equalsIgnoreCase(positionSnapshot.getPositionRole())) {
+        } else if (TARGET_RUNNER.equalsIgnoreCase(positionSnapshot.getPositionRole())) {
             updatedTp = null;
         }
 
@@ -362,7 +393,7 @@ public class ExecutionTestService implements StrategyExecutor {
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context.getInterval())
-                .signalType("EXECUTION_TEST")
+                .signalType(SIGNAL_TYPE_EXECUTION_TEST)
                 .setupType("TEST_SHORT_MANAGEMENT")
                 .side(SIDE_SHORT)
                 .reason("Execution test short management update")
@@ -373,12 +404,12 @@ public class ExecutionTestService implements StrategyExecutor {
                 .takeProfitPrice3(null)
                 .targetPositionRole(resolveTargetRole(positionSnapshot, exitStructure))
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("TEST", "MANAGEMENT", "SHORT"))
+                .tags(List.of("TEST", "MANAGEMENT", SIDE_SHORT))
                 .diagnostics(Map.of(
                         "entryPrice", entryPrice,
                         "closePrice", closePrice,
                         "atr", atr,
-                        "exitStructure", exitStructure
+                        KEY_EXIT_STRUCTURE, exitStructure
                 ))
                 .build();
     }
@@ -419,7 +450,7 @@ public class ExecutionTestService implements StrategyExecutor {
             return TARGET_SINGLE;
         }
 
-        if ("RUNNER".equalsIgnoreCase(snapshot.getPositionRole())) {
+        if (TARGET_RUNNER.equalsIgnoreCase(snapshot.getPositionRole())) {
             return TARGET_RUNNER;
         }
 
@@ -432,7 +463,7 @@ public class ExecutionTestService implements StrategyExecutor {
         }
 
         return switch (snapshot.getPositionRole().toUpperCase()) {
-            case "SINGLE", "TP1" -> updatedTp;
+            case EXIT_STRUCTURE_SINGLE, "TP1" -> updatedTp;
             default -> null;
         };
     }
@@ -481,7 +512,7 @@ public class ExecutionTestService implements StrategyExecutor {
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(context != null ? context.getInterval() : null)
-                .signalType("EXECUTION_TEST")
+                .signalType(SIGNAL_TYPE_EXECUTION_TEST)
                 .reason(reason)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("TEST", "HOLD"))

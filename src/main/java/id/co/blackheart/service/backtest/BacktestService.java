@@ -138,12 +138,12 @@ public class BacktestService {
                 // optional; null means "no run-level cap" / "fall back to
                 // account_strategy.capital_allocation_pct" respectively.
                 .maxConcurrentStrategies(request.getMaxConcurrentStrategies())
-                .strategyAllocations(canonicaliseAllocations(request.getStrategyAllocations()))
-                .strategyIntervals(canonicaliseIntervals(request.getStrategyIntervals()))
+                .strategyAllocations(nullIfEmpty(canonicaliseAllocations(request.getStrategyAllocations())))
+                .strategyIntervals(nullIfEmpty(canonicaliseIntervals(request.getStrategyIntervals())))
                 // Origin tag — RESEARCHER when the autonomous orchestrator
-                // submits, USER for everything else (wizard, scripts). Trust
-                // model: this is a UI/operational label not a security gate;
-                // the V32 CHECK constraint bounds the value space.
+                // submits, USER for everything else (wizard, scripts). This
+                // is a UI/operational label not a security gate, so the V32
+                // CHECK constraint is what actually bounds the value space.
                 .triggeredBy(resolveTriggeredBy(request))
                 .build();
 
@@ -201,39 +201,53 @@ public class BacktestService {
      * Validate + uppercase-normalize the per-strategy allocation map. Each
      * value must be in (0, 100]. Strategy codes are stored uppercase so
      * lookups inside the executor don't need case-insensitive matching.
-     * Returns null on null/empty input.
+     * Returns an empty map for null/empty/all-blank input — the call site
+     * passes the result through {@link #nullIfEmpty} so the JSONB column
+     * stays SQL NULL (not {@code '{}'}) when nothing was supplied.
      */
     private Map<String, BigDecimal> canonicaliseAllocations(Map<String, BigDecimal> raw) {
-        if (CollectionUtils.isEmpty(raw)) return null;
         Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
         for (Map.Entry<String, BigDecimal> e : raw.entrySet()) {
-            if (!StringUtils.hasText(e.getKey())) continue;
             BigDecimal v = e.getValue();
-            if (v == null) continue;
-            if (v.signum() <= 0 || v.compareTo(new BigDecimal("100")) > 0) {
-                throw new IllegalArgumentException(
-                        "strategyAllocations[" + e.getKey() + "] must be in (0, 100], got " + v);
+            if (StringUtils.hasText(e.getKey()) && v != null) {
+                if (v.signum() <= 0 || v.compareTo(new BigDecimal("100")) > 0) {
+                    throw new IllegalArgumentException(
+                            "strategyAllocations[" + e.getKey() + "] must be in (0, 100], got " + v);
+                }
+                out.put(e.getKey().toUpperCase().trim(), v);
             }
-            out.put(e.getKey().toUpperCase().trim(), v);
         }
-        return out.isEmpty() ? null : out;
+        return out;
     }
 
     /**
      * Validate + uppercase-normalize the per-strategy interval map. The
      * @Pattern annotation on the DTO already validates each value matches
-     * a known interval; here we only canonicalize keys.
+     * a known interval; here we only canonicalize keys. Returns an empty
+     * map for null/empty input — see {@link #canonicaliseAllocations} for
+     * the rationale on the empty-vs-null contract.
      */
     private Map<String, String> canonicaliseIntervals(Map<String, String> raw) {
-        if (CollectionUtils.isEmpty(raw)) return null;
         Map<String, String> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
         for (Map.Entry<String, String> e : raw.entrySet()) {
-            if (!StringUtils.hasText(e.getKey())) continue;
             String v = e.getValue();
-            if (!StringUtils.hasText(v)) continue;
-            out.put(e.getKey().toUpperCase().trim(), v.trim());
+            if (StringUtils.hasText(e.getKey()) && StringUtils.hasText(v)) {
+                out.put(e.getKey().toUpperCase().trim(), v.trim());
+            }
         }
-        return out.isEmpty() ? null : out;
+        return out;
+    }
+
+    /**
+     * Builder-side bridge between the canonicalise helpers (which return
+     * empty maps to satisfy Sonar S1168) and the JSONB columns (which want
+     * SQL NULL — not {@code '{}'} — when nothing was supplied, so the
+     * detail-read path can skip JSON parsing on absent values).
+     */
+    private static <K, V> Map<K, V> nullIfEmpty(Map<K, V> m) {
+        return (m == null || m.isEmpty()) ? null : m;
     }
 
     /**

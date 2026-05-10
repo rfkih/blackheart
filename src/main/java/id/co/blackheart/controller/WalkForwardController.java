@@ -67,7 +67,7 @@ public class WalkForwardController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size
     ) {
-        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        int safeSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(safePage, safeSize);
 
@@ -120,7 +120,7 @@ public class WalkForwardController {
             @RequestParam String intervalName,
             @RequestParam(defaultValue = "5") int limit
     ) {
-        int safeLimit = Math.min(Math.max(limit, 1), 50);
+        int safeLimit = Math.clamp(limit, 1, 50);
         List<WalkForwardRun> rows = repository.findRecentForStrategy(
                 strategyCode, instrument, intervalName, PageRequest.of(0, safeLimit));
         List<Map<String, Object>> content = rows.stream()
