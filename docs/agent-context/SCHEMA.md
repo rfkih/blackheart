@@ -25,7 +25,7 @@
 |---|---|---|
 | `strategy_definition` | `V1__baseline.sql:115` | Strategy archetype registry (`archetype`, `archetype_version`, `spec_jsonb`). `enabled` + `simulated` (V40 definition-scope) gate live execution. |
 | `strategy_param` | redesigned in V29 | 1:N saved presets per `account_strategy`. `is_active` flags the live preset; soft-deleted presets remain resolvable for backtest reproducibility. PK `param_id`. |
-| `account_strategy` | search the file | Per-account strategy enablement; `simulated` flag (V15) diverts OPEN_LONG/OPEN_SHORT only — see WORKING_RULES.md. |
+| `account_strategy` | search the file | Per-account strategy enablement; `simulated` flag (V15) diverts OPEN_LONG/OPEN_SHORT only — see WORKING_RULES.md. `visibility` (V54) is `PRIVATE` (default) or `PUBLIC`; PUBLIC rows are listed to every user for browse-and-clone (research-agent's catalogue is PUBLIC). Backtest/edit/enable still gated on ownership regardless of visibility. |
 
 ## Research plane
 

@@ -15,9 +15,11 @@ import id.co.blackheart.service.alert.AlertService;
 import id.co.blackheart.service.alert.AlertSeverity;
 import id.co.blackheart.service.audit.AuditService;
 import id.co.blackheart.service.risk.KellySizingService;
+import id.co.blackheart.util.AppConstant;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -25,9 +27,13 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -45,22 +51,43 @@ public class AccountStrategyService {
     private final KellySizingService kellySizingService;
 
     /**
-     * Returns all account strategies belonging to every account owned by the given user.
+     * V54 — pinned UUID of the dedicated research-agent user (Flyway V54).
+     * Strategies created on accounts owned by this user default to
+     * visibility=PUBLIC so the autonomous loop's catalogue is browsable
+     * platform-wide without operators having to remember the flag.
+     * Overridable in tests via {@code blackheart.research-agent.user-id}.
+     */
+    @Value("${blackheart.research-agent.user-id:99999999-9999-9999-9999-000000000001}")
+    private String researchAgentUserId;
+
+    /**
+     * V54 — returns every strategy visible to the user: their own (any
+     * visibility) plus every PUBLIC strategy from other accounts. Each row
+     * is decorated with {@code ownedByCurrentUser} and {@code ownerLabel} so
+     * the frontend can render "edit/delete" vs "clone" affordances without a
+     * second round-trip and without leaking foreign userIds.
      */
     @Transactional(readOnly = true)
     public List<AccountStrategyResponse> getStrategiesByUser(UUID userId) {
-        List<Account> accounts = accountRepository.findByUserId(userId);
-        if (accounts.isEmpty()) {
-            log.debug("No accounts found for userId={}", userId);
+        List<AccountStrategy> visible = accountStrategyRepository.findAllVisibleToUser(userId);
+        if (visible.isEmpty()) {
             return List.of();
         }
-
-        return accounts.stream()
-                .flatMap(account -> accountStrategyRepository
-                        .findByAccountId(account.getAccountId())
-                        .stream())
-                .map(this::toResponse)
+        Map<UUID, Account> ownerByAccountId = loadOwnerAccounts(visible);
+        return visible.stream()
+                .map(s -> toResponse(s, userId, ownerByAccountId.get(s.getAccountId())))
                 .toList();
+    }
+
+    private Map<UUID, Account> loadOwnerAccounts(List<AccountStrategy> rows) {
+        Set<UUID> accountIds = rows.stream()
+                .map(AccountStrategy::getAccountId)
+                .collect(Collectors.toSet());
+        Map<UUID, Account> result = HashMap.newHashMap(accountIds.size());
+        for (UUID id : accountIds) {
+            accountRepository.findByAccountId(id).ifPresent(a -> result.put(id, a));
+        }
+        return result;
     }
 
     /**
@@ -167,6 +194,12 @@ public class AccountStrategyService {
         // it" is then recorded. Direct UPDATE on simulated still works
         // for emergency operations but bypasses the workflow. (Bug 5 fix,
         // 2026-04-28.)
+        // V54 — research-agent-owned strategies default to PUBLIC so the
+        // autonomous loop's catalogue is browsable to all tenants without
+        // manual flag-flipping. Everyone else defaults PRIVATE (entity
+        // builder default).
+        String visibility = isResearchAgentAccount(account) ? "PUBLIC" : "PRIVATE";
+
         AccountStrategy entity = AccountStrategy.builder()
                 .accountStrategyId(UUID.randomUUID())
                 .accountId(account.getAccountId())
@@ -185,6 +218,7 @@ public class AccountStrategyService {
                 .currentStatus("STOPPED")
                 .isDeleted(false)
                 .deletedAt(null)
+                .visibility(visibility)
                 .build();
 
         AccountStrategy saved = accountStrategyRepository.save(entity);
@@ -208,7 +242,7 @@ public class AccountStrategyService {
         log.info("Created account strategy id={} code={} preset={} account={} enabled={}",
                 saved.getAccountStrategyId(), saved.getStrategyCode(),
                 saved.getPresetName(), saved.getAccountId(), saved.getEnabled());
-        auditService.record(userId, "STRATEGY_CREATED", "AccountStrategy",
+        auditService.recordEvent(userId, "STRATEGY_CREATED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
                 saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
     }
@@ -261,7 +295,7 @@ public class AccountStrategyService {
                 saved.getAccountStrategyId(), saved.getPresetName(),
                 currentActive.map(AccountStrategy::getAccountStrategyId).orElse(null));
 
-        auditService.record(userId, "STRATEGY_ACTIVATED", "AccountStrategy",
+        auditService.recordEvent(userId, "STRATEGY_ACTIVATED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
                 saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
     }
@@ -288,7 +322,7 @@ public class AccountStrategyService {
         log.info("Deactivated preset id={} name={}",
                 saved.getAccountStrategyId(), saved.getPresetName());
 
-        auditService.record(userId, "STRATEGY_DEACTIVATED", "AccountStrategy",
+        auditService.recordEvent(userId, "STRATEGY_DEACTIVATED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
                 saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
     }
@@ -326,7 +360,7 @@ public class AccountStrategyService {
         }
         log.info("Re-armed kill switch | userId={} accountStrategyId={}",
                 userId, accountStrategyId);
-        auditService.record(userId, "KILL_SWITCH_REARMED", "AccountStrategy",
+        auditService.recordEvent(userId, "KILL_SWITCH_REARMED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
                 saved.getAccountStrategyId(), null, saved);
         alertService.raise(
                 AlertSeverity.INFO,
@@ -357,47 +391,63 @@ public class AccountStrategyService {
         AccountStrategySnapshot before = AccountStrategySnapshot.of(strategy);
 
         boolean dirty = false;
+        dirty |= applyIntervalChange(strategy, req, accountStrategyId);
+        dirty |= applyPriorityOrderChange(strategy, req);
+        dirty |= applyRegimeGateChange(strategy, req);
+        dirty |= applyKellyChange(strategy, req);
 
-        // ── Interval change (optional) ──────────────────────────────────
-        if (StringUtils.hasText(req.getIntervalName())) {
-            String newInterval = req.getIntervalName().trim();
-            if (!newInterval.equalsIgnoreCase(strategy.getIntervalName())) {
-                long openTrades = tradesRepository.countOpenByAccountStrategyId(accountStrategyId);
-                if (openTrades > 0) {
-                    throw new IllegalStateException(
-                            "Cannot change interval — strategy has " + openTrades
-                                    + " open trade(s). Close positions first.");
-                }
-
-                if (Boolean.TRUE.equals(strategy.getEnabled())) {
-                    // Moving an active preset into a new tuple: the new tuple may
-                    // already have an active sibling that we'd collide with at the
-                    // partial-unique-index level. Deactivate it atomically here.
-                    deactivateActiveSibling(
-                            strategy.getAccountId(),
-                            strategy.getStrategyDefinitionId(),
-                            strategy.getSymbol(),
-                            newInterval);
-                }
-
-                strategy.setIntervalName(newInterval);
-                dirty = true;
-                log.info("Updated strategy id={} interval -> {}", strategy.getAccountStrategyId(), newInterval);
-            }
+        if (!dirty) {
+            return toResponse(strategy);
         }
+        AccountStrategy saved = accountStrategyRepository.save(strategy);
+        auditService.recordEvent(userId, "STRATEGY_UPDATED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
+                saved.getAccountStrategyId(), before, AccountStrategySnapshot.of(saved));
+        return toResponse(saved);
+    }
 
-        // ── Priority order (optional) ───────────────────────────────────
-        // No open-trade guard needed: priority only affects future entry
-        // fan-out, not in-flight position management.
-        if (req.getPriorityOrder() != null
-                && !req.getPriorityOrder().equals(strategy.getPriorityOrder())) {
-            strategy.setPriorityOrder(req.getPriorityOrder());
-            dirty = true;
-            log.info("Updated strategy id={} priorityOrder -> {}",
-                    strategy.getAccountStrategyId(), req.getPriorityOrder());
+    private boolean applyIntervalChange(
+            AccountStrategy strategy, UpdateAccountStrategyRequest req, UUID accountStrategyId) {
+        if (!StringUtils.hasText(req.getIntervalName())) return false;
+        String newInterval = req.getIntervalName().trim();
+        if (newInterval.equalsIgnoreCase(strategy.getIntervalName())) return false;
+
+        long openTrades = tradesRepository.countOpenByAccountStrategyId(accountStrategyId);
+        if (openTrades > 0) {
+            throw new IllegalStateException(
+                    "Cannot change interval — strategy has " + openTrades
+                            + " open trade(s). Close positions first.");
         }
+        if (Boolean.TRUE.equals(strategy.getEnabled())) {
+            // Moving an active preset into a new tuple: the new tuple may
+            // already have an active sibling that we'd collide with at the
+            // partial-unique-index level. Deactivate it atomically here.
+            deactivateActiveSibling(
+                    strategy.getAccountId(),
+                    strategy.getStrategyDefinitionId(),
+                    strategy.getSymbol(),
+                    newInterval);
+        }
+        strategy.setIntervalName(newInterval);
+        log.info("Updated strategy id={} interval -> {}", strategy.getAccountStrategyId(), newInterval);
+        return true;
+    }
 
-        // ── Regime gate (optional, V43) ─────────────────────────────────
+    // No open-trade guard needed: priority only affects future entry
+    // fan-out, not in-flight position management.
+    private boolean applyPriorityOrderChange(AccountStrategy strategy, UpdateAccountStrategyRequest req) {
+        if (req.getPriorityOrder() == null
+                || req.getPriorityOrder().equals(strategy.getPriorityOrder())) {
+            return false;
+        }
+        strategy.setPriorityOrder(req.getPriorityOrder());
+        log.info("Updated strategy id={} priorityOrder -> {}",
+                strategy.getAccountStrategyId(), req.getPriorityOrder());
+        return true;
+    }
+
+    // V43 — regime gate fields.
+    private boolean applyRegimeGateChange(AccountStrategy strategy, UpdateAccountStrategyRequest req) {
+        boolean dirty = false;
         if (req.getRegimeGateEnabled() != null
                 && !req.getRegimeGateEnabled().equals(strategy.getRegimeGateEnabled())) {
             strategy.setRegimeGateEnabled(req.getRegimeGateEnabled());
@@ -406,19 +456,23 @@ public class AccountStrategyService {
                     strategy.getAccountStrategyId(), req.getRegimeGateEnabled());
         }
         if (req.getAllowedTrendRegimes() != null) {
-            String val = req.getAllowedTrendRegimes().isBlank() ? null
-                    : req.getAllowedTrendRegimes().trim().toUpperCase();
-            strategy.setAllowedTrendRegimes(val);
+            strategy.setAllowedTrendRegimes(normalizeRegimeCsv(req.getAllowedTrendRegimes()));
             dirty = true;
         }
         if (req.getAllowedVolatilityRegimes() != null) {
-            String val = req.getAllowedVolatilityRegimes().isBlank() ? null
-                    : req.getAllowedVolatilityRegimes().trim().toUpperCase();
-            strategy.setAllowedVolatilityRegimes(val);
+            strategy.setAllowedVolatilityRegimes(normalizeRegimeCsv(req.getAllowedVolatilityRegimes()));
             dirty = true;
         }
+        return dirty;
+    }
 
-        // ── Kelly / bankroll sizing (optional, V45) ─────────────────────
+    private static String normalizeRegimeCsv(String raw) {
+        return raw.isBlank() ? null : raw.trim().toUpperCase();
+    }
+
+    // V45 — Kelly / bankroll sizing fields.
+    private boolean applyKellyChange(AccountStrategy strategy, UpdateAccountStrategyRequest req) {
+        boolean dirty = false;
         if (req.getKellySizingEnabled() != null
                 && !req.getKellySizingEnabled().equals(strategy.getKellySizingEnabled())) {
             strategy.setKellySizingEnabled(req.getKellySizingEnabled());
@@ -433,14 +487,7 @@ public class AccountStrategyService {
             log.info("Updated strategy id={} kellyMaxFraction -> {}",
                     strategy.getAccountStrategyId(), req.getKellyMaxFraction());
         }
-
-        if (!dirty) {
-            return toResponse(strategy);
-        }
-        AccountStrategy saved = accountStrategyRepository.save(strategy);
-        auditService.record(userId, "STRATEGY_UPDATED", "AccountStrategy",
-                saved.getAccountStrategyId(), before, AccountStrategySnapshot.of(saved));
-        return toResponse(saved);
+        return dirty;
     }
 
     /**
@@ -493,11 +540,28 @@ public class AccountStrategyService {
         accountStrategyRepository.save(strategy);
 
         log.info("Soft-deleted account strategy id={} by userId={}", accountStrategyId, userId);
-        auditService.record(userId, "STRATEGY_DELETED", "AccountStrategy",
+        auditService.recordEvent(userId, "STRATEGY_DELETED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
                 accountStrategyId, before, null);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * V54 — true when the account belongs to the dedicated research-agent
+     * user. Used to default new strategies on that account to PUBLIC so the
+     * autonomous loop's catalogue stays visible cross-tenant.
+     */
+    private boolean isResearchAgentAccount(Account account) {
+        if (account == null || account.getUserId() == null) return false;
+        try {
+            UUID agentUuid = UUID.fromString(researchAgentUserId);
+            return agentUuid.equals(account.getUserId());
+        } catch (IllegalArgumentException e) {
+            // Misconfigured property — fail closed (treat as not-agent).
+            log.warn("blackheart.research-agent.user-id is not a valid UUID: {}", researchAgentUserId);
+            return false;
+        }
+    }
 
     private AccountStrategy loadOwnedActive(UUID userId, UUID accountStrategyId) {
         AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
@@ -556,6 +620,40 @@ public class AccountStrategyService {
     }
 
     private AccountStrategyResponse toResponse(AccountStrategy s) {
+        // Single-row paths (read by id, mutate, return) — caller already
+        // owns the row so the V54 decorations resolve trivially. Avoids a
+        // second account round-trip in the hot single-row paths.
+        return toResponse(s, null, null);
+    }
+
+    /**
+     * V54 — full response with ownership decoration. Pass {@code currentUserId}
+     * (the JWT user) and the {@code ownerAccount} for the row's account_id;
+     * either may be null on legacy single-row paths where ownership is implicit.
+     */
+    private AccountStrategyResponse toResponse(AccountStrategy s, UUID currentUserId, Account ownerAccount) {
+        boolean owned;
+        String ownerLabel;
+        if (ownerAccount == null) {
+            owned = true;
+            ownerLabel = "You";
+        } else {
+            owned = currentUserId != null && currentUserId.equals(ownerAccount.getUserId());
+            if (owned) {
+                ownerLabel = "You";
+            } else if (isResearchAgentAccount(ownerAccount)) {
+                // Stable, non-leaking label for the agent's catalogue.
+                ownerLabel = "Research Agent";
+            } else {
+                // V54 — collapse all other foreign owners to a generic label
+                // so accidentally-PUBLIC rows from other tenants don't leak
+                // their account.username (which can carry intent like
+                // "aggressive-leveraged-X"). Only the agent's catalogue
+                // surfaces a recognisable label; everything else is
+                // anonymised at the API boundary.
+                ownerLabel = "Other Trader";
+            }
+        }
         return AccountStrategyResponse.builder()
                 .accountStrategyId(s.getAccountStrategyId())
                 .accountId(s.getAccountId())
@@ -583,6 +681,9 @@ public class AccountStrategyService {
                 .allowedVolatilityRegimes(s.getAllowedVolatilityRegimes())
                 .kellySizingEnabled(s.getKellySizingEnabled())
                 .kellyMaxFraction(s.getKellyMaxFraction())
+                .visibility(s.getVisibility())
+                .ownedByCurrentUser(owned)
+                .ownerLabel(ownerLabel)
                 .build();
     }
 }

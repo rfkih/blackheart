@@ -1,8 +1,10 @@
 package id.co.blackheart.controller;
 
+import id.co.blackheart.dto.request.CloneAccountStrategyRequest;
 import id.co.blackheart.dto.request.CreateAccountStrategyRequest;
 import id.co.blackheart.dto.request.UpdateAccountStrategyRequest;
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.service.strategy.AccountStrategyCloneService;
 import id.co.blackheart.service.strategy.AccountStrategyService;
 import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.util.AuthHeaderUtil;
@@ -28,6 +30,7 @@ import java.util.UUID;
 public class AccountStrategyController {
 
     private final AccountStrategyService accountStrategyService;
+    private final AccountStrategyCloneService accountStrategyCloneService;
     private final JwtService jwtService;
 
     @GetMapping
@@ -78,6 +81,35 @@ public class AccountStrategyController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()
                 .responseCode(HttpStatus.CREATED.value() + ResponseCode.SUCCESS.getCode())
                 .data(accountStrategyService.createStrategy(userId, request))
+                .build());
+    }
+
+    /**
+     * V54 — clone a (typically PUBLIC, research-agent-owned) strategy into one
+     * of the calling user's accounts, copying the active strategy_param preset
+     * alongside it. The clone lands as PRIVATE / disabled / simulated /
+     * STOPPED so the user explicitly opts in before any capital is at risk.
+     *
+     * <p>If {@code targetAccountId} is omitted, the clone lands in the user's
+     * first account (oldest by created_time). The endpoint is idempotent only
+     * insofar as a duplicate (same definition + symbol + interval on the
+     * target account) is rejected with 409 — re-issuing the same clone after
+     * a successful one will collide deliberately.
+     */
+    @PostMapping("/{accountStrategyId}/clone")
+    @Operation(summary = "Clone a public (or owned) strategy into the caller's account, copying the active preset.",
+               security = @SecurityRequirement(name = "bearerAuth"))
+    public ResponseEntity<ResponseDto> cloneStrategy(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountStrategyId,
+            @RequestBody(required = false) CloneAccountStrategyRequest request) {
+        UUID userId = extractUserId(authHeader);
+        UUID targetAccountId = request == null ? null : request.getTargetAccountId();
+        String createdBy = jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
+        UUID newId = accountStrategyCloneService.clone(userId, accountStrategyId, targetAccountId, createdBy);
+        return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()
+                .responseCode(HttpStatus.CREATED.value() + ResponseCode.SUCCESS.getCode())
+                .data(Map.of("accountStrategyId", newId))
                 .build());
     }
 

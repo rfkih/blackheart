@@ -45,7 +45,8 @@ import java.util.Set;
 public class AlertEventController {
 
     private static final int MAX_PAGE_SIZE = 200;
-    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of("createdAt", "severity");
+    private static final String CREATED_AT = "createdAt";
+    private static final Set<String> ALLOWED_SORT_FIELDS = Set.of(CREATED_AT, "severity");
 
     private final AlertEventRepository alertEventRepository;
 
@@ -61,11 +62,11 @@ public class AlertEventController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime since,
             @RequestParam(defaultValue = "true") boolean includeSuppressed,
             @RequestParam(required = false) String search,
-            @RequestParam(defaultValue = "createdAt,desc") String sort,
+            @RequestParam(defaultValue = CREATED_AT + ",desc") String sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size
     ) {
-        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        int safeSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(safePage, safeSize);
 
@@ -74,11 +75,12 @@ public class AlertEventController {
         String searchFilter = StringUtils.hasText(search) ? search.trim() : null;
 
         String[] parts = sort.split(",", 2);
-        String sortColumn = ALLOWED_SORT_FIELDS.contains(parts[0].trim()) ? parts[0].trim() : "createdAt";
+        String sortColumn = ALLOWED_SORT_FIELDS.contains(parts[0].trim()) ? parts[0].trim() : CREATED_AT;
         String sortDir = (parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim())) ? "ASC" : "DESC";
+        String sortKey = sortColumn + ":" + sortDir;
 
         Page<AlertEvent> events = alertEventRepository.findFiltered(
-                sevFilter, kindFilter, since, includeSuppressed, searchFilter, sortColumn, sortDir, pageable);
+                sevFilter, kindFilter, since, includeSuppressed, searchFilter, sortKey, pageable);
 
         List<Map<String, Object>> rows = events.getContent().stream()
                 .map(AlertEventController::toRow)
@@ -141,7 +143,7 @@ public class AlertEventController {
         row.put("suppressed", e.isSuppressed());
         row.put("sentTelegram", e.getSentTelegram());
         row.put("sentEmail", e.getSentEmail());
-        row.put("createdAt", e.getCreatedAt() == null ? null : e.getCreatedAt().toString());
+        row.put(CREATED_AT, e.getCreatedAt() == null ? null : e.getCreatedAt().toString());
         return row;
     }
 }

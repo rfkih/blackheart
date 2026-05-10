@@ -40,6 +40,30 @@ Don't simplify execution/fill/fee/P&L without explaining consequences. Preserve 
 ## Logging / Observability
 Clear logs for strategy decisions, order execution, fills, stop updates, reconciliation. No noisy logs in high-frequency paths.
 
+## Sonar hygiene
+Track the IDE SonarLint rules; don't ship code that knowingly trips them. The three that bite us most:
+
+**S1192 — duplicated string literal.** Threshold: 3+ occurrences. Workflow before adding a new literal:
+1. `grep -r '"the literal"' src/main/java` first.
+2. **0–1 existing copies:** inline the literal at the new site.
+3. **2+ existing copies (your addition makes 3):** promote to a constant *before* committing.
+   - **Cross-cutting / used by 3+ unrelated classes** → `id.co.blackheart.util.AppConstant` (or the matching focused class: `TradeConstant`, `HeaderName`, `ResponseCode`). Add a Javadoc explaining intent — `AppConstant` is global vocabulary, not a junk drawer.
+   - **Single class, repeated within it** → `private static final` inside that class.
+   - **Single package, 2–3 classes** → package-private constant in a small holder class in that package; do *not* lift to `AppConstant` until a third package needs it.
+4. Identical-by-text but different-by-intent literals stay separate (e.g. an SQL keyword that happens to read `"NOT FOUND"` is not the same as a 404 error message). The constant name encodes the intent.
+
+**S3776 — cognitive complexity.** Cap: 15. When a method drifts past, decompose by extracting named helper methods that describe *what* the block decides ("`isLabelChanged`", "`enforceConcurrencyCap`"), not *how* ("`block1`", "`step2`"). Don't suppress the rule with `@SuppressWarnings("java:S3776")` unless the user explicitly asks — the prefer-decomposition default applies even for "obvious" switch ladders.
+
+**S1541 — cyclomatic complexity.** Cap: 10. Same fix shape as S3776 — extract.
+
+**Other recurring offenders to keep clean while you're in a file:**
+- **S138** — method length ≤ 100 lines. Same decompose-don't-suppress rule.
+- **S4276** — prefer specialized functional interfaces (`IntConsumer` over `Consumer<Integer>`, `LongPredicate` over `Predicate<Long>`, etc.) when the parameter is a primitive wrapper.
+- **S2293** — use `<>` (diamond) for generic constructors when the LHS already declares the type argument.
+- **S125** — delete commented-out code. Git history is the archive.
+
+If a Sonar finding genuinely doesn't apply (e.g. the literal looks duplicated but encodes different intents), say so in the PR description rather than silently `@SuppressWarnings`-ing it. Suppressions need a one-line reason.
+
 ## Architecture Discipline
 Strategy logic in strategy modules; orchestration in coordinators; exchange-specific in client/services. Don't move business logic into controllers. Strategy param services follow a fixed pattern — reuse it for new parameterized strategies.
 

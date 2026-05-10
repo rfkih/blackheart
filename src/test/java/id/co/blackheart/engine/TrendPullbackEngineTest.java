@@ -113,6 +113,70 @@ class TrendPullbackEngineTest {
         assertTrue(d.getTags().contains("BREAK_EVEN"));
     }
 
+    // ── Risk-based sizing + fallback chain (V2) ──────────────────────────
+
+    /**
+     * Risk-based sizing default: spec params {@code {}} → engine reads
+     * {@code D_RISK_PER_TRADE_PCT=0.02}, {@code D_MAX_ALLOCATION_PCT=1.00}.
+     * Long-entry fixture has stop ~0.21% wide; ideal = 10000 × 0.02 / 0.0021
+     * exceeds 100% cap → notional saturates at cashBalance × 1.0 = 10000.
+     */
+    @Test
+    void longEntry_defaultRiskBasedSizing_saturatesAt100pctCap() {
+        EnrichedStrategyContext ctx = longEntryContext();
+        StrategyDecision d = engine.evaluate(spec(), ctx);
+
+        assertEquals(DecisionType.OPEN_LONG, d.getDecisionType());
+        assertBdEq("10000", d.getNotionalSize());   // cashBalance × 1.0 cap
+    }
+
+    /**
+     * Fallback chain: when spec sets {@code riskPerTradePct=0} the helper
+     * returns ZERO and the engine must fall through to
+     * {@code calculateEntryNotional}. With cashBalance=10000 and
+     * capitalAllocationPct=50, expected notional = 5000.
+     */
+    @Test
+    void longEntry_riskPerTradeDisabled_fallsBackToLegacyNotional() {
+        StrategySpec withDisabledRisk = specWithParams(Map.of(
+                "riskPerTradePct", BigDecimal.ZERO));
+        EnrichedStrategyContext ctx = longEntryContext();
+        StrategyDecision d = engine.evaluate(withDisabledRisk, ctx);
+
+        assertEquals(DecisionType.OPEN_LONG, d.getDecisionType());
+        assertBdEq("5000", d.getNotionalSize());   // 10000 × 50% legacy alloc
+    }
+
+    /**
+     * SHORT fallback: when {@code riskPerTradePct=0} the engine falls back
+     * to {@code calculateShortPositionSize}, which returns
+     * {@code assetBalance × allocFraction = 0.1 × 0.50 = 0.05} BTC.
+     */
+    @Test
+    void shortEntry_riskPerTradeDisabled_fallsBackToLegacyPositionSize() {
+        StrategySpec withDisabledRisk = specWithParams(Map.of(
+                "riskPerTradePct", BigDecimal.ZERO));
+        EnrichedStrategyContext ctx = shortEntryContext();
+        StrategyDecision d = engine.evaluate(withDisabledRisk, ctx);
+
+        assertEquals(DecisionType.OPEN_SHORT, d.getDecisionType());
+        assertBdEq("0.05", d.getPositionSize());   // assetBalance × allocFraction
+    }
+
+    /**
+     * SHORT default risk-based: stop ~0.21% wide; ideal saturates 100% cap
+     * at $10,000 USDT notional. Conversion to BTC qty = 10000 / 99700.
+     */
+    @Test
+    void shortEntry_defaultRiskBasedSizing_convertsUsdtToBtcQty() {
+        EnrichedStrategyContext ctx = shortEntryContext();
+        StrategyDecision d = engine.evaluate(spec(), ctx);
+
+        assertEquals(DecisionType.OPEN_SHORT, d.getDecisionType());
+        // 10000 / 99700 = 0.10030090 (8-dp HALF_UP). Exact match to engine math.
+        assertBdEq("0.10030090", d.getPositionSize());
+    }
+
     @Test
     void runnerPhase2Trail_locksAtLeastOneR() {
         // Runner @ +2.0R => phase-2 trail kicks in. Entry=100000 init risk=1000.
@@ -142,15 +206,22 @@ class TrendPullbackEngineTest {
     // ── Fixtures ─────────────────────────────────────────────────────────────
 
     private static StrategySpec spec() {
+        return specWithParams(new HashMap<>());
+    }
+
+    /** Build a TPR spec with explicit param overrides. Used by sizing tests
+     *  that need to pin {@code riskPerTradePct} or {@code maxAllocationPct}
+     *  to a specific value rather than relying on engine defaults. */
+    private static StrategySpec specWithParams(Map<String, Object> params) {
         Map<String, Object> body = new HashMap<>();
-        body.put("params", new HashMap<>());
+        body.put("params", new HashMap<>(params));
         return StrategySpec.builder()
                 .strategyCode("TPR")
                 .strategyName("TPR")
                 .archetype(TrendPullbackEngine.ARCHETYPE)
                 .archetypeVersion(TrendPullbackEngine.VERSION)
                 .specSchemaVersion(1)
-                .params(new HashMap<>())
+                .params(new HashMap<>(params))
                 .body(body)
                 .build();
     }

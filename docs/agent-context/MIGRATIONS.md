@@ -40,6 +40,7 @@
 - **V38** — `cross_window_run` (regime-labeled epochs; ROBUST_CROSS_WINDOW = ≥80% windows net-positive after +20bps slippage; window defs in `research-orchestrator/config/regime_windows.yml`).
 - **V39** — `alert_event` append-only log for `AlertService.raise()` (Phase 7.1; logged even when dedup suppresses outbound).
 - **V40** — Promotes lifecycle from per-account to definition-scope: adds `strategy_definition.enabled`/`.simulated` (CHECK matches account-scope); makes `strategy_promotion_log.account_strategy_id` nullable + adds `.strategy_definition_id` w/ `chk_promotion_log_scope` (exactly one of the two set per row); backfills `strategy_definition` from most-permissive existing `account_strategy` state per `strategy_code`.
+- **V54** — Dedicated research-agent user (`research-agent@blackheart.local`, pinned UUID `99999999-…-001`) + account (pinned UUID `99999999-…-002`); adds `account_strategy.visibility` (`PRIVATE`|`PUBLIC`, default `PRIVATE`) + partial index `idx_account_strategy_public`. Copies every `(strategy_code, symbol, interval_name)` referenced by `research_iteration_log ∪ research_queue` onto the agent's account as `visibility=PUBLIC` / `simulated=true` / `enabled=false` clones (admin's originals untouched). Active `strategy_param` rows are copied alongside. Idempotent. Orchestrator authenticates as the agent user via `service_account` in prod (set `ORCH_RESEARCH_ACCOUNT_ID` to the pinned account UUID).
 
 ## Strategy Promotion Pipeline (V15 account-scope, V40 definition-scope)
 

@@ -23,9 +23,10 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
      * nullable — null means "no filter on this dimension". {@code since} is
      * inclusive. {@code search} does ILIKE across message and kind.
      *
-     * {@code sortColumn} must be pre-validated by the caller against an
-     * allowlist (supported: {@code createdAt}, {@code severity}).
-     * {@code sortDir} must be {@code "ASC"} or {@code "DESC"}.
+     * {@code sortKey} must be pre-validated by the caller against the
+     * allowlist of {@code "createdAt:ASC"}, {@code "createdAt:DESC"},
+     * {@code "severity:ASC"}, {@code "severity:DESC"} (combined column +
+     * direction so the JPA method stays under the 7-parameter limit).
      * Severity sort uses an ordinal CASE (CRITICAL=3 > WARN=2 > INFO=1).
      *
      * Native query required: PostgreSQL cannot infer the type of a null
@@ -41,12 +42,12 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
                    OR a.message ILIKE CONCAT('%', CAST(:search AS text), '%')
                    OR a.kind    ILIKE CONCAT('%', CAST(:search AS text), '%'))
             ORDER BY
-              CASE WHEN :sortColumn = 'createdAt' AND UPPER(:sortDir) = 'ASC'  THEN a.created_at END ASC  NULLS LAST,
-              CASE WHEN :sortColumn = 'createdAt' AND UPPER(:sortDir) = 'DESC' THEN a.created_at END DESC NULLS LAST,
-              CASE WHEN :sortColumn = 'severity'  AND UPPER(:sortDir) = 'ASC'
+              CASE WHEN :sortKey = 'createdAt:ASC'  THEN a.created_at END ASC  NULLS LAST,
+              CASE WHEN :sortKey = 'createdAt:DESC' THEN a.created_at END DESC NULLS LAST,
+              CASE WHEN :sortKey = 'severity:ASC'
                    THEN CASE a.severity WHEN 'INFO' THEN 1 WHEN 'WARN' THEN 2 WHEN 'CRITICAL' THEN 3 ELSE 0 END
               END ASC  NULLS LAST,
-              CASE WHEN :sortColumn = 'severity'  AND UPPER(:sortDir) = 'DESC'
+              CASE WHEN :sortKey = 'severity:DESC'
                    THEN CASE a.severity WHEN 'INFO' THEN 1 WHEN 'WARN' THEN 2 WHEN 'CRITICAL' THEN 3 ELSE 0 END
               END DESC NULLS LAST,
               a.created_at DESC
@@ -68,8 +69,7 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, UUID> {
             @Param("since") LocalDateTime since,
             @Param("includeSuppressed") boolean includeSuppressed,
             @Param("search") String search,
-            @Param("sortColumn") String sortColumn,
-            @Param("sortDir") String sortDir,
+            @Param("sortKey") String sortKey,
             Pageable pageable);
 
     /**

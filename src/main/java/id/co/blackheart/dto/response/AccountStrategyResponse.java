@@ -51,4 +51,10 @@ public class AccountStrategyResponse {
     /** Kelly/bankroll sizing (V45) — PSR-discounted half-Kelly multiplier. */
     private Boolean kellySizingEnabled;
     private BigDecimal kellyMaxFraction;
+    /** Tenant visibility (V54): PRIVATE = listed only to the owner; PUBLIC = listed to all users for browse-and-clone. */
+    private String visibility;
+    /** True iff the calling user owns the account this strategy belongs to. Drives "edit/delete vs clone" UI branching. */
+    private Boolean ownedByCurrentUser;
+    /** Display label for the owning account: "You", "Research Agent", or another tenant's account username. */
+    private String ownerLabel;
 }

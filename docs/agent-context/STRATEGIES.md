@@ -24,7 +24,7 @@
 
 | Code | Class | Path | One-liner |
 |---|---|---|---|
-| **TPR** | `TrendPullbackStrategyService` | `src/main/java/id/co/blackheart/service/strategy/TrendPullbackStrategyService.java` | Trend pullback to EMA20 inside confirmed trend. Not yet profitable; see TrendPullbackEngine for the spec-driven successor. |
+| **TPR** | `TrendPullbackStrategyService` | `src/main/java/id/co/blackheart/service/strategy/TrendPullbackStrategyService.java` | Trend pullback to EMA20 inside confirmed trend. V2 sizing: risk-based notional (`riskPerTradePct` × capital, capped by `maxAllocationPct`); falls back to legacy capital-allocation flat sizing when the params are unset. Not yet profitable; see TrendPullbackEngine for the spec-driven successor. |
 | **FCARRY** | `FundingCarryStrategyService` | `src/main/java/id/co/blackheart/service/strategy/FundingCarryStrategyService.java` | Funding-rate carry trade. Seeded by Flyway V36 (`LEGACY_JAVA` archetype). |
 
 ## Research — spec-driven archetype engines (`engine/`)
@@ -34,7 +34,7 @@
 | **DCB** | `DonchianBreakoutEngine` | `src/main/java/id/co/blackheart/engine/DonchianBreakoutEngine.java` | Donchian-N breakout with ADX/volume confirmation; break-even shift + timed exit. Generalises the discarded DCT. |
 | **MRO** | `MeanReversionOscillatorEngine` | `src/main/java/id/co/blackheart/engine/MeanReversionOscillatorEngine.java` | Outer-band mean reversion with RSI exhaustion gate; exits at EMA20 mid. Generalises the discarded BBR. |
 | **MMR** | `MomentumMeanReversionEngine` | `src/main/java/id/co/blackheart/engine/MomentumMeanReversionEngine.java` | EMA-anchored momentum mean reversion (e.g. close >2·ATR below EMA200) back to a target EMA. Anchor + target configurable in spec body. |
-| **TPB** | `TrendPullbackEngine` | `src/main/java/id/co/blackheart/engine/TrendPullbackEngine.java` | Trend pullback with candle-quality gates (body ratio, CLV, volume); TP1 break-even shift then ATR runner. Generalises the legacy TPR. |
+| **TPB** | `TrendPullbackEngine` | `src/main/java/id/co/blackheart/engine/TrendPullbackEngine.java` | Trend pullback with candle-quality gates (body ratio, CLV, volume); TP1 break-even shift then ATR runner. V2 risk-based sizing (`riskPerTradePct` / `maxAllocationPct` spec params; legacy fallback retained). Generalises the legacy TPR. |
 
 ## Discarded (kept for archival reference)
 

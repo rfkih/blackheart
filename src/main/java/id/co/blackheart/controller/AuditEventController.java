@@ -21,7 +21,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -58,7 +57,7 @@ public class AuditEventController {
             @RequestParam(defaultValue = "25") int size
     ) {
         UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
-        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        int safeSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
         Pageable pageable = PageRequest.of(safePage, safeSize);
 

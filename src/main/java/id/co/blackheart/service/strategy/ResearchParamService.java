@@ -50,13 +50,21 @@ public class ResearchParamService {
      * Load persisted params on boot. If a file doesn't exist or is unreadable,
      * fall through to the baked-in {@code defaults()} so the strategy still
      * runs correctly from a cold install.
+     *
+     * <p>When a disk file IS present, we merge it OVER {@code defaults()}
+     * rather than replacing them — so JSON files written before a new param
+     * was added still pick up the new field's default value. Without the
+     * merge, every schema-evolution adds a silent regression for existing
+     * installs (e.g. V2 risk-based sizing fields would deserialize to null
+     * and the strategy would fall back to legacy notional sizing).
      */
     @PostConstruct
     public void init() {
-        TrendPullbackStrategyService.Params tpr =
-                loadFromDisk(tprParamsPath, TrendPullbackStrategyService.Params.class);
-        tprParams.set(tpr != null ? tpr : TrendPullbackStrategyService.Params.defaults());
-        log.info("TPR research params initialised (source={})", tpr != null ? "disk" : "defaults");
+        TrendPullbackStrategyService.Params merged = mergeOverDefaults(
+                tprParamsPath, TrendPullbackStrategyService.Params.defaults());
+        tprParams.set(merged);
+        boolean fromDisk = java.nio.file.Files.exists(java.nio.file.Path.of(tprParamsPath));
+        log.info("TPR research params initialised (source={})", fromDisk ? "disk+defaults" : "defaults");
     }
 
     // ── TPR ──────────────────────────────────────────────────────────────────
@@ -98,6 +106,31 @@ public class ResearchParamService {
         } catch (IOException e) {
             log.warn("Could not read params from {} — falling back to defaults", pathStr, e);
             return null;
+        }
+    }
+
+    /**
+     * Update {@code defaults} with any non-null fields present in the on-disk
+     * JSON, returning the merged value. Keys absent from the JSON keep their
+     * default — the schema-evolution-friendly behaviour. If the file is
+     * missing or unreadable, returns {@code defaults} unchanged.
+     *
+     * <p>Implementation: {@code ObjectMapper.readerForUpdating(defaults)}
+     * mutates the seed instance in place with non-null values from the JSON.
+     * Jackson treats absent keys as no-op and explicit nulls as no-op too
+     * (default {@code SetterInfo} behaviour), so a partial JSON cannot
+     * accidentally erase a default with a null overlay.
+     */
+    private <T> T mergeOverDefaults(String pathStr, T defaults) {
+        try {
+            Path path = Path.of(pathStr);
+            if (!Files.exists(path)) return defaults;
+            byte[] bytes = Files.readAllBytes(path);
+            if (bytes.length == 0) return defaults;
+            return objectMapper.readerForUpdating(defaults).readValue(bytes);
+        } catch (IOException e) {
+            log.warn("Could not merge params from {} — keeping defaults", pathStr, e);
+            return defaults;
         }
     }
 

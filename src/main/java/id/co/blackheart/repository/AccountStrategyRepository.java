@@ -140,4 +140,59 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
             @Param("strategyDefinitionId") UUID strategyDefinitionId,
             @Param("symbol") String symbol,
             @Param("intervalName") String intervalName);
+
+    /**
+     * V54 — every row visible to the calling user: their own (any visibility)
+     * plus every other user's PUBLIC rows. The `visibility='PUBLIC'` half is
+     * what surfaces the research-agent's strategy catalogue to all tenants
+     * for browse-and-clone. Soft-deleted rows are excluded on both sides.
+     *
+     * <p>No DISTINCT needed: the FK guarantees one accounts row per
+     * account_strategy row, so the join can never multiply.
+     */
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            JOIN accounts a ON a.account_id = acs.account_id
+            WHERE acs.is_deleted = false
+              AND (a.user_id = :userId OR acs.visibility = 'PUBLIC')
+            ORDER BY acs.priority_order ASC, acs.created_time ASC
+            """, nativeQuery = true)
+    List<AccountStrategy> findAllVisibleToUser(@Param("userId") UUID userId);
+
+    /**
+     * Highest existing priority_order for the account — used by clone to slot
+     * the new row at the bottom of the user's preset list rather than colliding
+     * with whatever priority the source row had.
+     */
+    @Query(value = """
+            SELECT COALESCE(MAX(acs.priority_order), 0)
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+              AND acs.is_deleted = false
+            """, nativeQuery = true)
+    Integer findMaxPriorityOrderByAccountId(@Param("accountId") UUID accountId);
+
+    /**
+     * V54 — same-tuple lookup that *includes* soft-deleted rows. Used by clone
+     * pre-check: a soft-deleted row still occupies the unique-constraint slot
+     * (the constraint isn't partial), so an INSERT against the same tuple
+     * trips a DataIntegrityViolation. We surface a friendlier "previously
+     * deleted, restore it instead" message before that happens.
+     */
+    @Query(value = """
+        SELECT acs.*
+        FROM account_strategy acs
+        WHERE acs.account_id = :accountId
+          AND acs.strategy_definition_id = :strategyDefinitionId
+          AND acs.symbol = :symbol
+          AND acs.interval_name = :intervalName
+        ORDER BY acs.is_deleted ASC, acs.created_time DESC
+        LIMIT 1
+        """, nativeQuery = true)
+    Optional<AccountStrategy> findByUniqueKeyIncludingDeleted(
+            @Param("accountId") UUID accountId,
+            @Param("strategyDefinitionId") UUID strategyDefinitionId,
+            @Param("symbol") String symbol,
+            @Param("intervalName") String intervalName);
 }

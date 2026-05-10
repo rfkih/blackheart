@@ -19,6 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.IntConsumer;
+
+import static id.co.blackheart.util.AppConstant.ACCOUNT_NOT_FOUND_PREFIX;
 
 /**
  * Queries + creation for a user's exchange accounts.
@@ -66,6 +69,12 @@ public class AccountQueryService {
     private static final boolean    DEFAULT_VOL_TARGETING_ENABLED = false;
     private static final BigDecimal DEFAULT_BOOK_VOL_TARGET_PCT   = new BigDecimal("15.00");
 
+    /** Upper bound on per-direction and total concurrency caps. */
+    private static final int MAX_CONCURRENT_CAP = 20;
+    /** Upper bound (inclusive) for {@code book_vol_target_pct}. The lower
+     *  bound is open (>0) — see {@link #applyBookVolTarget}. */
+    private static final BigDecimal MAX_BOOK_VOL_TARGET_PCT = new BigDecimal("50");
+
     @Transactional(readOnly = true)
     public List<AccountSummaryResponse> getAccountsByUser(UUID userId) {
         return accountRepository.findByUserId(userId)
@@ -76,12 +85,7 @@ public class AccountQueryService {
 
     @Transactional(readOnly = true)
     public AccountSummaryResponse getAccountForUser(UUID userId, UUID accountId) {
-        Account account = accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
-        if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Account not found: " + accountId);
-        }
-        return toSummary(account);
+        return toSummary(loadOwned(userId, accountId));
     }
 
     /**
@@ -147,11 +151,7 @@ public class AccountQueryService {
      */
     @Transactional
     public AccountSummaryResponse updateAccount(UUID userId, UUID accountId, UpdateAccountRequest req) {
-        Account account = accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
-        if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Account not found: " + accountId);
-        }
+        Account account = loadOwned(userId, accountId);
 
         boolean changed = false;
         if (req.getUsername() != null) {
@@ -200,11 +200,7 @@ public class AccountQueryService {
      */
     @Transactional
     public void softDeleteAccount(UUID userId, UUID accountId) {
-        Account account = accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
-        if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Account not found: " + accountId);
-        }
+        Account account = loadOwned(userId, accountId);
         long openTrades = tradesRepository.countOpenByAccountId(accountId);
         if (openTrades > 0) {
             throw new IllegalStateException(
@@ -231,11 +227,7 @@ public class AccountQueryService {
     @Transactional
     public AccountSummaryResponse rotateCredentials(
             UUID userId, UUID accountId, RotateAccountCredentialsRequest request) {
-        Account account = accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
-        if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Account not found: " + accountId);
-        }
+        Account account = loadOwned(userId, accountId);
 
         log.info("Rotating credentials: userId={} accountId={}", userId, accountId);
         account.setApiKey(request.getApiKey());
@@ -267,52 +259,86 @@ public class AccountQueryService {
      */
     @Transactional
     public AccountSummaryResponse updateRiskConfig(UUID userId, UUID accountId, RiskConfigRequest req) {
-        Account account = accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Account not found: " + accountId));
-        if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Account not found: " + accountId);
-        }
+        Account account = loadOwned(userId, accountId);
         // Snapshot the risk fields BEFORE we mutate so the audit JSON shows
         // the diff. Cloning the whole entity would also drag in API keys
         // we never want in the audit log; the inline record keeps the
         // payload narrow and forensics-friendly.
         RiskConfigSnapshot before = RiskConfigSnapshot.of(account);
-        if (req.getMaxConcurrentLongs() != null) {
-            if (req.getMaxConcurrentLongs() < 0 || req.getMaxConcurrentLongs() > 20) {
-                throw new IllegalArgumentException("maxConcurrentLongs must be between 0 and 20");
-            }
-            account.setMaxConcurrentLongs(req.getMaxConcurrentLongs());
-        }
-        if (req.getMaxConcurrentShorts() != null) {
-            if (req.getMaxConcurrentShorts() < 0 || req.getMaxConcurrentShorts() > 20) {
-                throw new IllegalArgumentException("maxConcurrentShorts must be between 0 and 20");
-            }
-            account.setMaxConcurrentShorts(req.getMaxConcurrentShorts());
-        }
-        if (req.getMaxConcurrentTrades() != null) {
-            // Sentinel value 0 from the wire could mean "unset" — treat any
-            // value < 1 as "clear the cap" (null in DB). Upper bound mirrors
-            // the per-direction caps.
-            int t = req.getMaxConcurrentTrades();
-            if (t > 20) {
-                throw new IllegalArgumentException("maxConcurrentTrades must be between 0 and 20");
-            }
-            account.setMaxConcurrentTrades(t < 1 ? null : t);
-        }
+
+        applyIntCap(req.getMaxConcurrentLongs(), "maxConcurrentLongs", account::setMaxConcurrentLongs);
+        applyIntCap(req.getMaxConcurrentShorts(), "maxConcurrentShorts", account::setMaxConcurrentShorts);
+        applyTradesCap(req.getMaxConcurrentTrades(), account);
         if (req.getVolTargetingEnabled() != null) {
             account.setVolTargetingEnabled(req.getVolTargetingEnabled());
         }
-        if (req.getBookVolTargetPct() != null) {
-            BigDecimal t = req.getBookVolTargetPct();
-            if (t.signum() <= 0 || t.compareTo(new BigDecimal("50")) > 0) {
-                throw new IllegalArgumentException("bookVolTargetPct must be in (0, 50]");
-            }
-            account.setBookVolTargetPct(t);
-        }
+        applyBookVolTarget(req.getBookVolTargetPct(), account);
+
         Account saved = accountRepository.save(account);
-        auditService.record(userId, "ACCOUNT_RISK_UPDATED", "Account",
+        auditService.recordEvent(userId, "ACCOUNT_RISK_UPDATED", "Account",
                 accountId, before, RiskConfigSnapshot.of(saved));
         return toSummary(saved);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    /**
+     * Resolve an account by id and confirm ownership in one shot.
+     *
+     * <p>Both "row missing" and "wrong owner" raise the same
+     * {@link EntityNotFoundException} with the same message — preserves the
+     * existence-oracle invariant documented on
+     * {@link id.co.blackheart.util.AppConstant#ACCOUNT_NOT_FOUND_PREFIX}.
+     * Replaces five copies of the same find-then-check pattern.
+     */
+    private Account loadOwned(UUID userId, UUID accountId) {
+        Account account = accountRepository.findByAccountId(accountId)
+                .orElseThrow(() -> new EntityNotFoundException(ACCOUNT_NOT_FOUND_PREFIX + accountId));
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException(ACCOUNT_NOT_FOUND_PREFIX + accountId);
+        }
+        return account;
+    }
+
+    /**
+     * Validate-and-set for an Integer concurrency cap. {@code null} value is
+     * a no-op (request didn't touch the field). Out-of-range values raise
+     * {@link IllegalArgumentException} with the message format the existing
+     * API contract uses ({@code "<field> must be between 0 and 20"}).
+     */
+    private static void applyIntCap(Integer value, String fieldName, IntConsumer setter) {
+        if (value == null) return;
+        if (value < 0 || value > MAX_CONCURRENT_CAP) {
+            throw new IllegalArgumentException(
+                    fieldName + " must be between 0 and " + MAX_CONCURRENT_CAP);
+        }
+        setter.accept(value);
+    }
+
+    /**
+     * Validate-and-set for the total {@code maxConcurrentTrades} cap. Differs
+     * from {@link #applyIntCap} because values {@code < 1} clear the cap
+     * (stored as DB NULL) instead of being rejected — this is the wire-level
+     * sentinel the frontend uses to "remove the limit". Upper bound mirrors
+     * the per-direction caps.
+     */
+    private static void applyTradesCap(Integer value, Account account) {
+        if (value == null) return;
+        if (value > MAX_CONCURRENT_CAP) {
+            throw new IllegalArgumentException(
+                    "maxConcurrentTrades must be between 0 and " + MAX_CONCURRENT_CAP);
+        }
+        account.setMaxConcurrentTrades(value < 1 ? null : value);
+    }
+
+    /** Validate-and-set for {@code bookVolTargetPct}. Range is (0, 50]. */
+    private static void applyBookVolTarget(BigDecimal value, Account account) {
+        if (value == null) return;
+        if (value.signum() <= 0 || value.compareTo(MAX_BOOK_VOL_TARGET_PCT) > 0) {
+            throw new IllegalArgumentException(
+                    "bookVolTargetPct must be in (0, " + MAX_BOOK_VOL_TARGET_PCT.toPlainString() + "]");
+        }
+        account.setBookVolTargetPct(value);
     }
 
     /** Narrow snapshot of audit-relevant risk fields — never includes credentials. */

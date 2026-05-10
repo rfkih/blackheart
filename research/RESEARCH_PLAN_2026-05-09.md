@@ -1,32 +1,30 @@
-# RESEARCH_PLAN_2026-05-09 — TPB BTCUSDT 1h (Spec-Driven Engine, Session 3)
+# RESEARCH_PLAN_2026-05-09 — DCB BTCUSDT 4h (Session 4 — DCB Primary Focus)
 
 ## Session Context
 
-**Date**: 2026-05-09 (session 3 — continuation from context compaction)
+**Date**: 2026-05-09 (session 4 — continuation from context compaction)
 **Goal**: Find 4th profitable strategy >= 10%/yr net of fees+slippage, walk-forward ROBUST.
-**DB state**: strategy_definitions created for FCARRY, LSR, TPR, VBO, VCB, TPB (just created).
-**Infra**: Orchestrator healthy. TPB account_strategy created: 19cb0d7c (BTCUSDT 1h).
+**DB state**: strategy_definitions for FCARRY, LSR, TPR, VBO, VCB, TPB, DCB, MRO (all created).
+**Infra**: Orchestrator healthy. DCB account_strategy bbb64ce7 (BTCUSDT 4h), MRO account_strategy 07d5810d (BTCUSDT 1h).
 
 ## Session Brief
 
-1. **What's winning**: Zero SIGNIFICANT_EDGE in this DB cycle.
+1. **What's winning**: Zero SIGNIFICANT_EDGE in this DB cycle. DCB 4h exploratory shows promise.
 2. **Discarded archetypes** (live journal evidence):
-   - TPR BTCUSDT 4h: NO_EDGE (PF=0.0, n=0-3)
-   - TPR BTCUSDT 15m: NO_EDGE (PF=0.12-0.47, n=7-42)
-   - TPR BTCUSDT 5m: 31 trades, PF=0.46 (frequency-starved by 4h bias filter)
-   - TPR BTCUSDT 1h: EDGE_PRESENT null-screen but n=5-32 per draw (frequency-starved)
-   - FCARRY BTC 1h: null-screen invalid (param bug — all 8 draws used default params)
+   - TPR BTCUSDT all intervals: DISCARDED (4h NO_EDGE PF=0.0, 15m NO_EDGE, 5m PF=0.46, 1h frequency-starved n=5-32)
+   - FCARRY BTC 1h: NO_EDGE (null-screen bug: all draws identical PF=0.702 — param override not applied)
+   - TPB BTCUSDT 1h: EDGE_PRESENT null-screen (P75=2.15) BUT n=5-32 per draw — DISCARDED (frequency-starved by requireBiasTimeframe=true)
+   - MRO BTCUSDT 1h: DISCARDED (PF=0.165, win_rate=10.2% — BTC 1h is trending; mean-reversion anti-edge)
    - DCB2 ETH all intervals: VBO Spearman corr=0.70 (portfolio gate, prior session)
    - BBR BTC 1h: NO_EDGE (PF=0.13-0.23, prior session)
    - MMR BTC 1h: NO_EDGE (PF=0.53, prior session)
    - DCB2 BTC 1h: NO_EDGE (PF=0.53-0.75, prior session)
 3. **ARCHETYPE_EXHAUSTION** journaled at 2026-05-09T15:51 (journal_id: 100968ba).
-4. **Current action**: TPB null-screen running (background task bwqk5qr0p)
-   - strategy_definition: c63b603d (archetype=trend_pullback, SpecDrivenExecutorAdapter)
-   - account_strategy: 19cb0d7c (BTCUSDT 1h, enabled=false, simulated=true)
-   - Axes: adxEntryMin x biasAdxMin x biasAdxMax x tp1R (4D, n_draws=8, seed=42)
-   - KEY CHANGE vs TPR: SpecDrivenExecutorAdapter.execute() correctly uses BacktestParamOverrideContext
-5. **Standing hypothesis**: TPB BTCUSDT 1h — hypothesis_id `628218a6-c5aa-4f32-bb96-0793f6507547`
+4. **Current primary**: DCB BTCUSDT 4h — hypothesis_id `dd43547e-862b-4751-88d7-4977da2fdb33`
+   - strategy_definition: 31ad9b0b (archetype=donchian_breakout, SpecDrivenExecutorAdapter)
+   - account_strategy: bbb64ce7 (BTCUSDT 4h, enabled=false, simulated=true)
+   - Exploratory result: adxEntryMin=15, rvolMin=1.1, tpR=3.0, stopAtrMult=2.5 → 121 trades, PF=1.25, +2.18%
+   - Null-screen RUNNING (background task btcaldz9f): axes adxEntryMin [12,25] x rvolMin [1.0,1.5] x tpR [1.5,3.5] x stopAtrMult [2.0,4.0]
 
 ## Constraints Reaffirmed
 
@@ -38,56 +36,58 @@
 - No deploy-from-spec.sh (operator-only; not needed — strategy_definitions created via API)
 - Reviewer approval mandatory before /queue and before /walk-forward
 
-## Experiment 1: TPB BTCUSDT 1h (PRIMARY — NOW RUNNING)
+## Experiment 1: DCB BTCUSDT 4h (PRIMARY — NULL-SCREEN RUNNING)
 
-**Hypothesis ID**: `628218a6-c5aa-4f32-bb96-0793f6507547` (ACTIVE, pre-registered 2026-05-09T13:50)
-**Strategy Definition ID**: `c63b603d-0775-4a54-9532-a4b5cc81cd5b` (archetype=trend_pullback)
-**Account Strategy ID**: `19cb0d7c-5cba-4a10-817d-c95406f73bb4` (BTCUSDT 1h)
-**Mechanism**: EMA50>EMA200 trend stack, pullback to EMA20 within pullbackTouchAtr*ATR,
-reclaim candle with body+CLV+volume quality filters, composite score>=0.55.
-Two-leg exit: TP1 break-even shift, runner ATR-phase trail. 4h bias filter on 1h entries.
+**Hypothesis ID**: `dd43547e-862b-4751-88d7-4977da2fdb33` (ACTIVE, pre-registered 2026-05-09T16:05)
+**Strategy Definition ID**: `31ad9b0b-7eb2-42a5-9d95-df8c63636b32` (archetype=donchian_breakout)
+**Account Strategy ID**: `bbb64ce7-f167-4ded-9d4d-56b156373978` (BTCUSDT 4h)
+**Mechanism**: Donchian-N channel breakout, ADX trend confirmation, RVOL surge confirmation,
+break-even shift, single TP. requireBiasTimeframe=false — NO cross-TF frequency bottleneck.
 
-**Critical fix vs TPR**: SpecDrivenExecutorAdapter.execute() correctly reads
-BacktestParamOverrideContext.forStrategy() at line 66, so sweep params ARE honored.
-TPR had frequency starvation because the 4h bias filter with ADX 25-40 was too narrow.
-This null-screen includes biasAdxMin/biasAdxMax in sweep ranges to widen the filter.
+**Exploratory evidence**: adxEntryMin=15, rvolMin=1.1, tpR=3.0, stopAtrMult=2.5 → 121 trades, PF=1.25, win_rate=41.3%, return=+2.18% — first archetype to clear n>=100 with PF>1.0.
 
-**Null-screen** (4D: adxEntryMin x biasAdxMin x biasAdxMax x tp1R, n_draws=8, seed=42):
-- adxEntryMin: [20, 35] — trend quality gate
-- biasAdxMin: [10, 20] — lower 4h ADX bias bound (widened from default 25)
-- biasAdxMax: [50, 70] — upper 4h ADX bias bound (widened from default 40)
-- tp1R: [1.5, 3.0] — reward-to-risk first TP leg
-**Status**: RUNNING (background task bwqk5qr0p, started ~2026-05-09T22:54)
+**Null-screen** (4D: adxEntryMin x rvolMin x tpR x stopAtrMult, n_draws=8, seed=42):
+- adxEntryMin: [12, 25] — trend quality gate
+- rvolMin: [1.0, 1.5] — RVOL surge confirmation
+- tpR: [1.5, 3.5] — reward-to-risk TP
+- stopAtrMult: [2.0, 4.0] — stop loss ATR multiplier
+**Status**: RUNNING (background task btcaldz9f, started ~2026-05-09T16:16)
 
 **Decision branches**:
-- EDGE_PRESENT (P75>=1.2, share>=0.25 AND n>=20/draw): proceed to plan review -> sweep
-- INSUFFICIENT_DATA (n<20 per draw): pivot to TPB BTCUSDT 4h
-- NO_EDGE_DETECTED: journal discard, pivot to Experiment 2 (DCB2 BTC 4h)
+- EDGE_PRESENT (P75>=1.2, share>=0.25): proceed to plan review -> sweep
+- INCONCLUSIVE: extend null-screen to n_draws=16 on same axes
+- NO_EDGE_DETECTED: journal discard, pivot to DCB 15m or alternative archetype
 
-**Anti-correlation**: TPB fires on PULLBACK to EMA20; VBO fires on breakout expansion.
-Structurally opposite entry conditions. Expected Spearman corr with VBO < 0.30.
+**Anti-correlation**: DCB fires on fresh breakout EXPANSION; LSR fades extreme RSI; VBO fades ATR expansion. Different regimes. Expected Spearman corr < 0.40.
 
-**Sweep design** (if null-screen EDGE_PRESENT, n>=20/draw):
-- Grid or TPE: adxEntryMin x biasAdxMin x biasAdxMax x tp1R (4 axes)
-- Values: adxEntryMin=[20,25,30] x biasAdxMin=[10,15,20] x biasAdxMax=[50,60,70] x tp1R=[1.5,2.0,3.0] = 81 cells
-- Interval: 1h, Instrument: BTCUSDT
-- iter_budget: 5 (V11 gates applied at each tick)
+**Sweep design** (to execute after EDGE_PRESENT + plan review APPROVED):
+- 4D grid: adxEntryMin=[15,20,25] x rvolMin=[1.0,1.2,1.4] x tpR=[2.0,2.5,3.0] x stopAtrMult=[2.0,2.5,3.0]
+- 81 cells (3^4), V11 gates at each tick
+- Interval: 4h, Instrument: BTCUSDT
+- iter_budget: 5 per tick
 
-## Experiment 2: DCB2 BTCUSDT 4h (BACKUP if TPB 1h fails)
+## Experiment 2: DCB BTCUSDT 15m (BACKUP if 4h sweep fails)
 
-**Rationale**: DCB2 BTC 1h was NO_EDGE. BTC 4h is genuinely different — fewer but
-higher-quality breakout signals, less noise. Prior DISCARD on 1h ≠ 4h.
-**Pre-req**: Create strategy_definition for DCB2 (archetype=donchian_breakout) and
-account_strategy for BTCUSDT 4h via API.
-**Null-screen dimensions**: adxMaxForChop x breakoutN x tp1R (3D)
+**Rationale**: DCB 4h at loose params gives 121 trades; tighter params may cut below n>=100.
+15m gives ~10x more bars — more entries, can apply tighter ADX/RVOL filters for quality.
+**Pre-req**: Create new account_strategy for DCB BTCUSDT 15m (reuse strategy_definition 31ad9b0b).
+**Null-screen dimensions**: adxEntryMin x rvolMin x tpR x stopAtrMult (same axes, different freq).
 
-## Experiment 3: FCARRY BTCUSDT 1h (TERTIARY — blocked by param bug)
+## Blocked archetypes
 
-**BLOCKER**: FundingCarryStrategyService.java line 91-94 uses strategyParamService.getActiveOverrides()
-instead of BacktestParamOverrideContext.forStrategy(). Null-screen invalid. Fix requires
-operator to edit Java source and redeploy research JVM.
-**Action when unblocked**: POST /null-screen with entryZ=[0.5,1.5], entryZExit=[0.5,2.5],
-positionSizePct=[0.5,5.0] (3D, n_draws=8).
+**TPB** (blocked): requireBiasTimeframe=true limits 1h to n<=32. Fix: operator edits TrendPullbackEngine.java.
+**MRO** (discarded): BTC trending market makes mean-reversion anti-edge. Rescue via ETH blocked (no feature_store).
+**FCARRY** (discarded): param bug — BacktestParamOverrideContext not read. Rescue via operator fix.
+
+## Blockers Requiring Operator Action
+
+1. **FCARRY param bug**: `FundingCarryStrategyService.java` lines 91-94. Fix: replace
+   `strategyParamService.getActiveOverrides(accountStrategyId)` with
+   `BacktestParamOverrideContext.isActive() ? BacktestParamOverrideContext.forStrategy(STRATEGY_CODE) : strategyParamService.getActiveOverrides(accountStrategyId)`
+2. **ETH feature_store empty**: 0 rows for ETHUSDT. All ETH research blocked.
+   Fix: trigger RECOMPUTE_FEATURE_STORE job for ETHUSDT 5m/15m/1h/4h.
+3. **TPB frequency fix**: TrendPullbackEngine.java `requireBiasTimeframe` must be set to false
+   OR bias filter must be redesigned so it counts entries from the native interval only.
 
 ## Blockers Requiring Operator Action
 
@@ -97,18 +97,18 @@ positionSizePct=[0.5,5.0] (3D, n_draws=8).
 2. **ETH feature_store empty**: 0 rows for ETHUSDT. All ETH research blocked.
    Fix: trigger RECOMPUTE_FEATURE_STORE job for ETHUSDT 5m/15m/1h/4h.
 
-## Execution Order (current session)
+## Execution Order (session 4)
 
 1. COMPLETED: TPR exhausted (5m/15m/1h/4h) — journaled ANTI_PATTERN + ARCHETYPE_EXHAUSTION
-2. COMPLETED: TPB strategy_definition created (c63b603d) + account_strategy (19cb0d7c)
-3. RUNNING: POST /null-screen for TPB BTCUSDT 1h (background task bwqk5qr0p)
-4. PENDING: Based on null-screen result:
-   a. EDGE_PRESENT: POST /reviews/request -> reviewer -> APPROVED -> POST /queue
-   b. INSUFFICIENT_DATA (n<20): pivot to TPB BTCUSDT 4h null-screen
-   c. NO_EDGE_DETECTED: pivot to DCB2 BTC 4h (create strategy_definition, run null-screen)
-5. PENDING: POST /tick loop until SIGNIFICANT_EDGE or sweep_exhausted
-6. On SIGNIFICANT_EDGE: POST /reviews/request (graduation) -> reviewer -> /walk-forward
-7. ROBUST + >= 10%/yr: GOAL HIT
+2. COMPLETED: TPB null-screen EDGE_PRESENT but frequency-starved (n=5-32) — journaled DISCARD
+3. COMPLETED: MRO exploratory — 118 trades, PF=0.165 — journaled DISCARD (structural anti-edge)
+4. COMPLETED: DCB strategy_definition (31ad9b0b) + account_strategy bbb64ce7 (BTCUSDT 4h) created
+5. COMPLETED: DCB exploratory backtests — 121 trades, PF=1.25 at adxEntryMin=15, rvolMin=1.1, tpR=3.0
+6. RUNNING: DCB 4h null-screen (background task btcaldz9f, 4 axes)
+7. PENDING: If EDGE_PRESENT: POST /reviews/request -> reviewer -> APPROVED -> POST /queue
+8. PENDING: POST /tick loop until SIGNIFICANT_EDGE or sweep_exhausted
+9. On SIGNIFICANT_EDGE: POST /reviews/request (graduation) -> reviewer -> /walk-forward
+10. ROBUST + >= 10%/yr: GOAL HIT
 
 ## V11 Success Criteria
 

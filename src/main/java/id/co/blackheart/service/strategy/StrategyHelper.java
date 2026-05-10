@@ -7,16 +7,23 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Component
 public class StrategyHelper {
+
+    /** Latch — log the leverage-clamp warning once per JVM lifetime. We don't
+     *  want this firing per tick across a 100-cell sweep with maxAlloc=5.0;
+     *  one WARN at first occurrence is enough for the operator to notice. */
+    private static final AtomicBoolean LEVERAGE_CLAMP_WARNED = new AtomicBoolean(false);
 
     private static final String SIDE_LONG = "LONG";
     private static final String SIDE_SHORT = "SHORT";
     private static final String SOURCE_LIVE = "live";
     private static final String SOURCE_BACKTEST = "backtest";
     private static final BigDecimal ZERO = BigDecimal.ZERO;
+    private static final BigDecimal ONE = BigDecimal.ONE;
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100");
 
     /**
@@ -89,6 +96,94 @@ public class StrategyHelper {
         if (assetBalance == null || assetBalance.compareTo(ZERO) <= 0) return ZERO;
 
         return assetBalance.multiply(allocFraction).setScale(8, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Risk-based USDT notional. Sizes the position so the loss when price
+     * reaches {@code stopLossPrice} equals approximately
+     * {@code riskPct × cashBalance}, then caps at
+     * {@code maxAllocationPct × cashBalance} so the trade still executes
+     * when the ideal notional would exceed available balance.
+     *
+     * <p>Concretely:
+     * <pre>
+     *   stopDistancePct = |entry − stop| / entry
+     *   ideal           = cashBalance × riskPct / stopDistancePct
+     *   cap             = cashBalance × min(maxAllocationPct, 1.0)
+     *   notional        = min(ideal, cap)
+     * </pre>
+     *
+     * <p>Returns ZERO when:
+     * <ul>
+     *   <li>{@code riskPct} is null or non-positive — caller should fall back
+     *       to {@link #calculateEntryNotional} (legacy notional sizing).</li>
+     *   <li>Entry, stop, or stop-distance are non-positive (degenerate setup).</li>
+     *   <li>{@code cashBalance} is non-positive (no capital to risk).</li>
+     * </ul>
+     *
+     * <p>When {@code maxAllocationPct} is null/non-positive, the existing
+     * {@code account_strategy.capital_allocation_pct} (capped at 100%) is
+     * used as the cap fraction — preserves the balance-safe behaviour for
+     * accounts that haven't opted into a separate cap value.
+     *
+     * <p><b>Hard cap at 1.0:</b> the backtest engine is cash-1× and the spot
+     * executors check the actual balance, so a notional above {@code cashBalance}
+     * would just fail the balance check downstream — no leverage is gained.
+     * Inputs above 1.0 are silently clamped here. When futures-leverage
+     * support lands in the backtest engine, lift this clamp.
+     *
+     * <p><b>SHORT-on-spot caveat:</b> the cap is computed from {@code cashBalance}
+     * (USDT). For futures and backtest this is correct — USDT is the margin
+     * currency. For LIVE SPOT SHORT, the executor sells from
+     * {@code assetBalance} (BTC) and would reject a USDT-sized notional that
+     * doesn't translate back to a coin balance the user actually owns.
+     * Strategies that may run on spot live should leave {@code riskPct} null
+     * for the SHORT path, or the caller should size against
+     * {@code assetBalance × entryPrice} explicitly.
+     */
+    public BigDecimal calculateRiskBasedNotional(
+            EnrichedStrategyContext context,
+            BigDecimal entryPrice,
+            BigDecimal stopLossPrice,
+            BigDecimal riskPct,
+            BigDecimal maxAllocationPct) {
+        if (context == null) return ZERO;
+        if (riskPct == null || riskPct.signum() <= 0) return ZERO;
+        if (entryPrice == null || entryPrice.signum() <= 0) return ZERO;
+        if (stopLossPrice == null || stopLossPrice.signum() <= 0) return ZERO;
+
+        BigDecimal stopDistance = entryPrice.subtract(stopLossPrice).abs();
+        if (stopDistance.signum() <= 0) return ZERO;
+
+        BigDecimal stopDistancePct = stopDistance.divide(entryPrice, 8, RoundingMode.HALF_UP);
+        if (stopDistancePct.signum() <= 0) return ZERO;
+
+        BigDecimal capital = safe(context.getCashBalance());
+        if (capital.signum() <= 0) return ZERO;
+
+        BigDecimal idealNotional = capital.multiply(riskPct)
+                .divide(stopDistancePct, 8, RoundingMode.HALF_UP);
+
+        BigDecimal capFraction = (maxAllocationPct != null && maxAllocationPct.signum() > 0)
+                ? maxAllocationPct
+                : resolveCapitalAllocationFraction(context);
+        if (capFraction.signum() <= 0) return ZERO;
+        // Backtest is cash-1×; spot executors balance-check against
+        // cashBalance. Allowing >1.0 yields no leverage, just a downstream
+        // rejection. Clamp + warn once so the operator notices a misconfigured
+        // sweep that's silently flat-lining at the cap.
+        if (capFraction.compareTo(ONE) > 0) {
+            if (LEVERAGE_CLAMP_WARNED.compareAndSet(false, true)) {
+                log.warn("Risk-based sizing: maxAllocationPct={} clamped to 1.0 — "
+                        + "backtest engine is cash-1× (no leverage). Sweeps over [1.0, N] "
+                        + "will produce identical results above 1.0 until futures-leverage "
+                        + "support lands. Suppressing further occurrences.", capFraction);
+            }
+            capFraction = ONE;
+        }
+
+        BigDecimal cap = capital.multiply(capFraction);
+        return idealNotional.min(cap).setScale(8, RoundingMode.HALF_UP);
     }
 
     /**

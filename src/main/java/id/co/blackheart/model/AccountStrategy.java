@@ -156,4 +156,19 @@ public class AccountStrategy extends BaseEntity {
     @Builder.Default
     private BigDecimal kellyMaxFraction = new BigDecimal("0.2500");
 
+    /**
+     * Tenant-visibility flag (V54). PRIVATE means the row is only listed to
+     * the owning user; PUBLIC means it is also listed to every other user so
+     * they can clone the preset into their own account. Backtest, edit,
+     * enable, and delete still require ownership regardless of visibility —
+     * PUBLIC is read-and-clone, never write-through.
+     *
+     * <p>The research-agent account seeds its rows as PUBLIC so the autonomous
+     * loop's strategy catalogue is browsable platform-wide; user-created rows
+     * default to PRIVATE.
+     */
+    @Column(name = "visibility", nullable = false, length = 16)
+    @Builder.Default
+    private String visibility = "PRIVATE";
+
 }

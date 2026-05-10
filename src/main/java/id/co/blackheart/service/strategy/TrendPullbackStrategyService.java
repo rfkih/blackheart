@@ -137,6 +137,8 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
             case "stopAtrBuffer" -> p.setStopAtrBuffer(v);
             case "maxEntryRiskPct" -> p.setMaxEntryRiskPct(v);
             case "tp1R" -> p.setTp1R(v);
+            case "riskPerTradePct" -> p.setRiskPerTradePct(v);
+            case "maxAllocationPct" -> p.setMaxAllocationPct(v);
             case "breakEvenR" -> p.setBreakEvenR(v);
             case "runnerBreakEvenR" -> p.setRunnerBreakEvenR(v);
             case "runnerPhase2R" -> p.setRunnerPhase2R(v);
@@ -347,12 +349,24 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notional = strategyHelper.calculateEntryNotional(ctx, SIDE_LONG);
+        // Sizing: risk-based when riskPerTradePct is set (V2 default), else
+        // fall back to legacy capital-allocation notional. The risk-based path
+        // is capped at maxAllocationPct × capital so the executor's balance
+        // check passes even when the ideal size would exceed cash.
+        BigDecimal notional = strategyHelper.calculateRiskBasedNotional(
+                ctx, entry, stop, p.getRiskPerTradePct(), p.getMaxAllocationPct());
+        if (notional.compareTo(ZERO) <= 0) {
+            notional = strategyHelper.calculateEntryNotional(ctx, SIDE_LONG);
+        }
         if (notional.compareTo(ZERO) <= 0) return hold(ctx, "TPR long notional zero");
 
-        log.info("TPR LONG ENTRY | time={} close={} ema20={} stop={} tp1={} risk%={} score={}",
+        // stopDist% is the stop distance from entry as % (the strategy's
+        // structural risk-per-unit). Distinct from `riskPerTradePct` which
+        // is the % of capital risked per trade — the V2 sizing knob.
+        log.info("TPR LONG ENTRY | time={} close={} ema20={} stop={} tp1={} stopDist%={} riskPerTradePct={} notional={} score={}",
                 md.getEndTime(), entry, ema20, stop, tp1,
-                riskPerUnit.divide(entry, 4, RoundingMode.HALF_UP).multiply(HUNDRED), score);
+                riskPerUnit.divide(entry, 4, RoundingMode.HALF_UP).multiply(HUNDRED),
+                p.getRiskPerTradePct(), notional, score);
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_LONG)
@@ -466,14 +480,24 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
         BigDecimal score = calculateShortSignalScore(f, p);
         if (score.compareTo(p.getMinSignalScore()) < 0) return null;
 
-        // SHORT executor reads `positionSize` (BTC qty) — switch to the BTC
-        // helper so the value is in the right currency.
-        BigDecimal positionSize = strategyHelper.calculateShortPositionSize(ctx);
+        // SHORT executor reads `positionSize` (BTC qty). Try risk-based sizing
+        // first — the helper returns USDT notional which we convert to BTC qty
+        // by dividing by entry price. Falls back to the legacy BTC-allocation
+        // path when riskPerTradePct is unset or the inputs are degenerate.
+        BigDecimal positionSize;
+        BigDecimal riskNotionalUsdt = strategyHelper.calculateRiskBasedNotional(
+                ctx, entry, stop, p.getRiskPerTradePct(), p.getMaxAllocationPct());
+        if (riskNotionalUsdt.compareTo(ZERO) > 0) {
+            positionSize = riskNotionalUsdt.divide(entry, 8, RoundingMode.HALF_UP);
+        } else {
+            positionSize = strategyHelper.calculateShortPositionSize(ctx);
+        }
         if (positionSize.compareTo(ZERO) <= 0) return hold(ctx, "TPR short position size zero");
 
-        log.info("TPR SHORT ENTRY | time={} close={} ema20={} stop={} tp1={} risk%={} score={}",
+        log.info("TPR SHORT ENTRY | time={} close={} ema20={} stop={} tp1={} stopDist%={} riskPerTradePct={} positionSize={} score={}",
                 md.getEndTime(), entry, ema20, stop, tp1,
-                riskPerUnit.divide(entry, 4, RoundingMode.HALF_UP).multiply(HUNDRED), score);
+                riskPerUnit.divide(entry, 4, RoundingMode.HALF_UP).multiply(HUNDRED),
+                p.getRiskPerTradePct(), positionSize, score);
 
         return StrategyDecision.builder()
                 .decisionType(DecisionType.OPEN_SHORT)
@@ -883,6 +907,31 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
         /** TP1 target as R-multiple. */
         private BigDecimal tp1R;
 
+        // ── Position sizing (V2 — risk-based) ──
+        /** Fraction of cash balance to risk per trade (e.g. 0.02 = 2%).
+         *  Position size is computed so the loss at stopLossPrice equals
+         *  approximately riskPerTradePct × capital, then capped at
+         *  {@link #maxAllocationPct} so the trade always executes.
+         *  When null or non-positive, falls back to the legacy
+         *  capital_allocation_pct flat sizing.
+         *
+         *  <p>Note: when this strategy graduates to live and is hydrated from
+         *  the {@code strategy_param} JSONB column, rows persisted before the
+         *  V2 sizing change won't have this key — the field will be null and
+         *  the strategy reverts to legacy sizing. Re-publish the row (or
+         *  add a Flyway data migration) to opt those accounts in. */
+        private BigDecimal riskPerTradePct;
+        /** Cap on position notional as fraction of cash balance.
+         *  <b>Effective range is [0, 1.0]:</b> values above 1.0 are silently
+         *  clamped at 1.0 by {@link StrategyHelper#calculateRiskBasedNotional}
+         *  because the current backtest engine is cash-1× — leverage isn't
+         *  modelled, so >1.0 would fail the balance check rather than
+         *  amplifying the position. Lift the clamp once futures-leverage
+         *  backtest is implemented. When null, the AccountStrategy's
+         *  capital_allocation_pct (÷100) is used. Only consulted when
+         *  {@link #riskPerTradePct} is set. */
+        private BigDecimal maxAllocationPct;
+
         // ── Position management ──
         /** R-multiple at which the TP1 leg moves to break-even. */
         private BigDecimal breakEvenR;
@@ -937,6 +986,12 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
                     .stopAtrBuffer(new BigDecimal("0.55"))
                     .maxEntryRiskPct(new BigDecimal("0.04"))
                     .tp1R(new BigDecimal("2.00"))
+                    // Sizing — v0.5: risk-based notional. Position is sized so
+                    // hitting the stop = ~2% of capital, capped at 100% of cash
+                    // (no leverage) so the trade always clears the balance check.
+                    // Researcher can sweep these to find the right risk profile.
+                    .riskPerTradePct(new BigDecimal("0.02"))
+                    .maxAllocationPct(new BigDecimal("1.00"))
                     // Management — v0.4: loosened runner trail. v0.3 winners hit MFE-R of
                     // 2.04 and 3.42 but only realized 0.92 and 1.61 — the 1.80/1.20 ATR
                     // trail was catching normal BTC-1h breathing before moves extended.

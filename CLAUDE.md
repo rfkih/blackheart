@@ -52,6 +52,7 @@ Tick returns `verdict=PASS` only when **all**: n_trades≥100, PF 95% CI lower>1
 - **Persistence:** `@JdbcTypeCode(SqlTypes.JSON)` for JSONB (NOT `AttributeConverter`); evict Redis cache via `afterCommit()`.
 - **Migrations are immutable once applied.** New schema = new V<N>.
 - **Update catalogs in the same PR as the code change** — see WORKING_RULES.md "Catalog maintenance". If you add/rename/delete a strategy class, JobType, handler, or important table, update `STRATEGIES.md` / `JOBS.md` / `SCHEMA.md` accordingly. The catalogs exist to save the next agent's tokens; stale entries cost more than no entries.
+- **Sonar hygiene (S1192 / S3776 / S1541):** before introducing a string literal, grep for it; if it already appears in 2+ files, promote to `id.co.blackheart.util.AppConstant` (or the matching domain constant class) instead of inlining. Class-local literals stay as `private static final`. Keep methods under Sonar's complexity ceilings — cognitive complexity ≤ 15, cyclomatic complexity ≤ 10, method length ≤ 100 lines. If a method would breach, decompose into named helpers in the same class rather than disabling the rule. Full text in `WORKING_RULES.md` § "Sonar hygiene".
 - **If uncertain:** ask whether the user wants minimal patch or refactor.
 
 ## DRY consolidation standard

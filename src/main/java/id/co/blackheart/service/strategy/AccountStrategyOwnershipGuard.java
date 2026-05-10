@@ -4,6 +4,7 @@ import id.co.blackheart.model.Account;
 import id.co.blackheart.model.AccountStrategy;
 import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.AccountStrategyRepository;
+import id.co.blackheart.util.AppConstant;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -25,33 +26,60 @@ public class AccountStrategyOwnershipGuard {
 
     public AccountStrategy assertOwned(UUID userId, UUID accountStrategyId) {
         if (userId == null || accountStrategyId == null) {
-            throw new EntityNotFoundException("Not found");
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
         }
         AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
-                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+                .orElseThrow(() -> new EntityNotFoundException(AppConstant.NOT_FOUND));
 
         if (Boolean.TRUE.equals(strategy.getIsDeleted())) {
-            throw new EntityNotFoundException("Not found");
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
         }
 
         Account account = accountRepository.findByAccountId(strategy.getAccountId())
-                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+                .orElseThrow(() -> new EntityNotFoundException(AppConstant.NOT_FOUND));
 
         if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Not found");
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
         }
 
         return strategy;
     }
 
+    /**
+     * V54 — read-only access gate. Returns the row if the user owns it OR if
+     * the row is PUBLIC. Use only on read paths (clone-source preview, list
+     * decoration). Write paths (backtest, edit, enable, delete) MUST keep
+     * using {@link #assertOwned} — PUBLIC means "browseable + cloneable",
+     * never "writable by anyone".
+     */
+    public AccountStrategy assertReadable(UUID userId, UUID accountStrategyId) {
+        if (userId == null || accountStrategyId == null) {
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
+        }
+        AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
+                .orElseThrow(() -> new EntityNotFoundException(AppConstant.NOT_FOUND));
+        if (Boolean.TRUE.equals(strategy.getIsDeleted())) {
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
+        }
+        if ("PUBLIC".equalsIgnoreCase(strategy.getVisibility())) {
+            return strategy;
+        }
+        Account account = accountRepository.findByAccountId(strategy.getAccountId())
+                .orElseThrow(() -> new EntityNotFoundException(AppConstant.NOT_FOUND));
+        if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
+        }
+        return strategy;
+    }
+
     public void assertOwnsAccount(UUID userId, UUID accountId) {
         if (userId == null || accountId == null) {
-            throw new EntityNotFoundException("Not found");
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
         }
         Account account = accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+                .orElseThrow(() -> new EntityNotFoundException(AppConstant.NOT_FOUND));
         if (!userId.equals(account.getUserId())) {
-            throw new EntityNotFoundException("Not found");
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
         }
     }
 }
