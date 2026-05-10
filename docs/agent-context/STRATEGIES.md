@@ -17,8 +17,8 @@
 | Code | Class | Path | One-liner |
 |---|---|---|---|
 | **LSR** | `LsrStrategyService` | `src/main/java/id/co/blackheart/service/strategy/LsrStrategyService.java` | Long-Short Reversal — fades extreme RSI with EMA200 trend filter. ~+20%/yr live. |
-| **VCB** | `VcbStrategyService` | `src/main/java/id/co/blackheart/service/strategy/VcbStrategyService.java` | Volatility Contraction Breakout — enters on Bollinger band squeeze release. ~+20%/yr live. |
-| **VBO** | `VolatilityBreakoutStrategyService` | `src/main/java/id/co/blackheart/service/strategy/VolatilityBreakoutStrategyService.java` | Volatility Breakout — ATR-scaled range breakout with ADX trend confirmation. ~+20%/yr live. |
+| **VCB** | `VcbStrategyService` | `src/main/java/id/co/blackheart/service/strategy/VcbStrategyService.java` | Volatility Contraction Breakout — enters on Bollinger band squeeze release. ~+20%/yr live. Gate helpers: `passesLongGates`, `passesShortGates`. |
+| **VBO** | `VolatilityBreakoutStrategyService` | `src/main/java/id/co/blackheart/service/strategy/VolatilityBreakoutStrategyService.java` | Volatility Breakout — ATR-scaled range breakout with ADX trend confirmation. ~+20%/yr live. Gate helpers: `passesLongGates`, `passesShortGates`; position management: `manageTp1Leg`, `manageRunnerLeg` (inner `PositionState` record). |
 
 ## Research — legacy hand-written
 
@@ -43,6 +43,18 @@
 | **DCT** | Donchian breakout — 10%/yr, no margin after fees+slippage | `DonchianBreakoutEngine` (DCB) |
 | **BBR** | Bollinger reversal — `NO_EDGE` verdict | `MeanReversionOscillatorEngine` (MRO) |
 | **CMR** | Cross-market reversal — never traded live | — |
+
+## Supporting services (service/strategy package — not strategies)
+
+These classes live in the same package and trigger the catalog hook but are infrastructure, not strategies.
+
+| Class | Path | One-liner |
+|---|---|---|
+| `AccountStrategyService` | `src/main/java/id/co/blackheart/service/strategy/AccountStrategyService.java` | CRUD + lifecycle for `account_strategy` rows; handles enable/disable, param promotion, Kelly fields. |
+| `AccountStrategyCloneService` | `src/main/java/id/co/blackheart/service/strategy/AccountStrategyCloneService.java` | Clones a PUBLIC/research-agent-owned strategy into a user-owned account in safe default state. |
+| `DefaultStrategyContextEnrichmentService` | `src/main/java/id/co/blackheart/service/strategy/DefaultStrategyContextEnrichmentService.java` | Enriches `BaseStrategyContext` with bias candle, feature store, regime/risk/volatility snapshots. |
+| `VcbStrategyParamService` | `src/main/java/id/co/blackheart/service/strategy/VcbStrategyParamService.java` | Reads, validates, and caches `VcbParams` for active VCB account-strategies. |
+| `VboStrategyParamService` | `src/main/java/id/co/blackheart/service/strategy/VboStrategyParamService.java` | Reads, validates, and caches `VboParams` for active VBO account-strategies. |
 
 ## Adding a new strategy
 

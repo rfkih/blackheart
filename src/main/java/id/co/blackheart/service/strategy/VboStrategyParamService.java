@@ -118,48 +118,52 @@ public class VboStrategyParamService {
         if (req == null) return m;
 
         // Compression
-        if (req.getCompressionBbWidthPctMax() != null) m.put("compressionBbWidthPctMax", req.getCompressionBbWidthPctMax());
-        if (req.getCompressionAdxMax() != null)        m.put("compressionAdxMax",        req.getCompressionAdxMax());
-        if (req.getRequireKcSqueeze() != null)         m.put("requireKcSqueeze",         req.getRequireKcSqueeze());
+        putIfPresent(m, "compressionBbWidthPctMax", req.getCompressionBbWidthPctMax());
+        putIfPresent(m, "compressionAdxMax",        req.getCompressionAdxMax());
+        putIfPresent(m, "requireKcSqueeze",         req.getRequireKcSqueeze());
 
         // Entry-bar ADX band
-        if (req.getAdxEntryMin() != null)              m.put("adxEntryMin",              req.getAdxEntryMin());
-        if (req.getAdxEntryMax() != null)              m.put("adxEntryMax",              req.getAdxEntryMax());
+        putIfPresent(m, "adxEntryMin",              req.getAdxEntryMin());
+        putIfPresent(m, "adxEntryMax",              req.getAdxEntryMax());
 
         // Breakout confirmation
-        if (req.getRequireDonchianBreak() != null)     m.put("requireDonchianBreak",     req.getRequireDonchianBreak());
-        if (req.getRequireTrendAlignment() != null)    m.put("requireTrendAlignment",    req.getRequireTrendAlignment());
-        if (req.getEma50SlopeMin() != null)            m.put("ema50SlopeMin",            req.getEma50SlopeMin());
-        if (req.getAtrExpansionMin() != null)          m.put("atrExpansionMin",          req.getAtrExpansionMin());
-        if (req.getRvolMin() != null)                  m.put("rvolMin",                  req.getRvolMin());
+        putIfPresent(m, "requireDonchianBreak",     req.getRequireDonchianBreak());
+        putIfPresent(m, "requireTrendAlignment",    req.getRequireTrendAlignment());
+        putIfPresent(m, "ema50SlopeMin",            req.getEma50SlopeMin());
+        putIfPresent(m, "atrExpansionMin",          req.getAtrExpansionMin());
+        putIfPresent(m, "rvolMin",                  req.getRvolMin());
 
         // Candle quality
-        if (req.getBodyRatioMin() != null)             m.put("bodyRatioMin",             req.getBodyRatioMin());
-        if (req.getClvMin() != null)                   m.put("clvMin",                   req.getClvMin());
-        if (req.getClvMax() != null)                   m.put("clvMax",                   req.getClvMax());
+        putIfPresent(m, "bodyRatioMin",             req.getBodyRatioMin());
+        putIfPresent(m, "clvMin",                   req.getClvMin());
+        putIfPresent(m, "clvMax",                   req.getClvMax());
 
         // RSI sanity
-        if (req.getLongRsiMax() != null)               m.put("longRsiMax",               req.getLongRsiMax());
-        if (req.getShortRsiMin() != null)              m.put("shortRsiMin",              req.getShortRsiMin());
+        putIfPresent(m, "longRsiMax",               req.getLongRsiMax());
+        putIfPresent(m, "shortRsiMin",              req.getShortRsiMin());
 
         // Risk / exits
-        if (req.getStopAtrBuffer() != null)            m.put("stopAtrBuffer",            req.getStopAtrBuffer());
-        if (req.getMaxEntryRiskPct() != null)          m.put("maxEntryRiskPct",          req.getMaxEntryRiskPct());
-        if (req.getTp1R() != null)                     m.put("tp1R",                     req.getTp1R());
+        putIfPresent(m, "stopAtrBuffer",            req.getStopAtrBuffer());
+        putIfPresent(m, "maxEntryRiskPct",          req.getMaxEntryRiskPct());
+        putIfPresent(m, "tp1R",                     req.getTp1R());
 
         // Management
-        if (req.getBreakEvenR() != null)               m.put("breakEvenR",               req.getBreakEvenR());
-        if (req.getRunnerBreakEvenR() != null)         m.put("runnerBreakEvenR",         req.getRunnerBreakEvenR());
-        if (req.getRunnerPhase2R() != null)            m.put("runnerPhase2R",            req.getRunnerPhase2R());
-        if (req.getRunnerPhase3R() != null)            m.put("runnerPhase3R",            req.getRunnerPhase3R());
-        if (req.getRunnerAtrPhase2() != null)          m.put("runnerAtrPhase2",          req.getRunnerAtrPhase2());
-        if (req.getRunnerAtrPhase3() != null)          m.put("runnerAtrPhase3",          req.getRunnerAtrPhase3());
-        if (req.getRunnerLockPhase2R() != null)        m.put("runnerLockPhase2R",        req.getRunnerLockPhase2R());
-        if (req.getRunnerLockPhase3R() != null)        m.put("runnerLockPhase3R",        req.getRunnerLockPhase3R());
+        putIfPresent(m, "breakEvenR",               req.getBreakEvenR());
+        putIfPresent(m, "runnerBreakEvenR",         req.getRunnerBreakEvenR());
+        putIfPresent(m, "runnerPhase2R",            req.getRunnerPhase2R());
+        putIfPresent(m, "runnerPhase3R",            req.getRunnerPhase3R());
+        putIfPresent(m, "runnerAtrPhase2",          req.getRunnerAtrPhase2());
+        putIfPresent(m, "runnerAtrPhase3",          req.getRunnerAtrPhase3());
+        putIfPresent(m, "runnerLockPhase2R",        req.getRunnerLockPhase2R());
+        putIfPresent(m, "runnerLockPhase3R",        req.getRunnerLockPhase3R());
 
         // Score
-        if (req.getMinSignalScore() != null)           m.put("minSignalScore",           req.getMinSignalScore());
+        putIfPresent(m, "minSignalScore",           req.getMinSignalScore());
 
         return m;
+    }
+
+    private static void putIfPresent(Map<String, Object> m, String key, Object value) {
+        if (value != null) m.put(key, value);
     }
 }

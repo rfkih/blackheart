@@ -831,7 +831,7 @@ public class BacktestTradeExecutorService {
         // last leg closes.
         BacktestTrade trade = scopedActiveTrade(state, strategyCode);
         List<BacktestTradePosition> allPositions = scopedActivePositions(state, strategyCode);
-        if (trade == null || allPositions.isEmpty()) {
+        if (trade == null || CollectionUtils.isEmpty(allPositions)) {
             return;
         }
 

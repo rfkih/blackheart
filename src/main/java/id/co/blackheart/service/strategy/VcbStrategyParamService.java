@@ -117,31 +117,35 @@ public class VcbStrategyParamService {
         Map<String, Object> m = new HashMap<>();
         if (req == null) return m;
 
-        if (req.getSqueezeKcTolerance() != null)   m.put("squeezeKcTolerance",   req.getSqueezeKcTolerance());
-        if (req.getAtrRatioCompressMax() != null)   m.put("atrRatioCompressMax",  req.getAtrRatioCompressMax());
-        if (req.getErCompressMax() != null)         m.put("erCompressMax",        req.getErCompressMax());
-        if (req.getRelVolBreakoutMin() != null)     m.put("relVolBreakoutMin",    req.getRelVolBreakoutMin());
-        if (req.getRelVolBreakoutMax() != null)     m.put("relVolBreakoutMax",    req.getRelVolBreakoutMax());
-        if (req.getBodyRatioBreakoutMin() != null)  m.put("bodyRatioBreakoutMin", req.getBodyRatioBreakoutMin());
-        if (req.getBiasErMin() != null)             m.put("biasErMin",            req.getBiasErMin());
-        if (req.getAdxEntryMax() != null)           m.put("adxEntryMax",          req.getAdxEntryMax());
-        if (req.getLongRsiMin() != null)            m.put("longRsiMin",           req.getLongRsiMin());
-        if (req.getShortRsiMax() != null)           m.put("shortRsiMax",          req.getShortRsiMax());
-        if (req.getLongDiSpreadMin() != null)       m.put("longDiSpreadMin",      req.getLongDiSpreadMin());
-        if (req.getShortDiSpreadMin() != null)      m.put("shortDiSpreadMin",     req.getShortDiSpreadMin());
-        if (req.getStopAtrBuffer() != null)         m.put("stopAtrBuffer",        req.getStopAtrBuffer());
-        if (req.getTp1R() != null)                  m.put("tp1R",                 req.getTp1R());
-        if (req.getMaxEntryRiskPct() != null)       m.put("maxEntryRiskPct",      req.getMaxEntryRiskPct());
-        if (req.getRunnerHalfR() != null)           m.put("runnerHalfR",          req.getRunnerHalfR());
-        if (req.getRunnerBreakEvenR() != null)      m.put("runnerBreakEvenR",     req.getRunnerBreakEvenR());
-        if (req.getRunnerPhase2R() != null)         m.put("runnerPhase2R",        req.getRunnerPhase2R());
-        if (req.getRunnerPhase3R() != null)         m.put("runnerPhase3R",        req.getRunnerPhase3R());
-        if (req.getRunnerAtrPhase2() != null)       m.put("runnerAtrPhase2",      req.getRunnerAtrPhase2());
-        if (req.getRunnerAtrPhase3() != null)       m.put("runnerAtrPhase3",      req.getRunnerAtrPhase3());
-        if (req.getRunnerLockPhase2R() != null)     m.put("runnerLockPhase2R",    req.getRunnerLockPhase2R());
-        if (req.getRunnerLockPhase3R() != null)     m.put("runnerLockPhase3R",    req.getRunnerLockPhase3R());
-        if (req.getMinSignalScore() != null)        m.put("minSignalScore",       req.getMinSignalScore());
+        putIfPresent(m, "squeezeKcTolerance",   req.getSqueezeKcTolerance());
+        putIfPresent(m, "atrRatioCompressMax",  req.getAtrRatioCompressMax());
+        putIfPresent(m, "erCompressMax",        req.getErCompressMax());
+        putIfPresent(m, "relVolBreakoutMin",    req.getRelVolBreakoutMin());
+        putIfPresent(m, "relVolBreakoutMax",    req.getRelVolBreakoutMax());
+        putIfPresent(m, "bodyRatioBreakoutMin", req.getBodyRatioBreakoutMin());
+        putIfPresent(m, "biasErMin",            req.getBiasErMin());
+        putIfPresent(m, "adxEntryMax",          req.getAdxEntryMax());
+        putIfPresent(m, "longRsiMin",           req.getLongRsiMin());
+        putIfPresent(m, "shortRsiMax",          req.getShortRsiMax());
+        putIfPresent(m, "longDiSpreadMin",      req.getLongDiSpreadMin());
+        putIfPresent(m, "shortDiSpreadMin",     req.getShortDiSpreadMin());
+        putIfPresent(m, "stopAtrBuffer",        req.getStopAtrBuffer());
+        putIfPresent(m, "tp1R",                 req.getTp1R());
+        putIfPresent(m, "maxEntryRiskPct",      req.getMaxEntryRiskPct());
+        putIfPresent(m, "runnerHalfR",          req.getRunnerHalfR());
+        putIfPresent(m, "runnerBreakEvenR",     req.getRunnerBreakEvenR());
+        putIfPresent(m, "runnerPhase2R",        req.getRunnerPhase2R());
+        putIfPresent(m, "runnerPhase3R",        req.getRunnerPhase3R());
+        putIfPresent(m, "runnerAtrPhase2",      req.getRunnerAtrPhase2());
+        putIfPresent(m, "runnerAtrPhase3",      req.getRunnerAtrPhase3());
+        putIfPresent(m, "runnerLockPhase2R",    req.getRunnerLockPhase2R());
+        putIfPresent(m, "runnerLockPhase3R",    req.getRunnerLockPhase3R());
+        putIfPresent(m, "minSignalScore",       req.getMinSignalScore());
 
         return m;
+    }
+
+    private static void putIfPresent(Map<String, Object> m, String key, Object value) {
+        if (value != null) m.put(key, value);
     }
 }

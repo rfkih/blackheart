@@ -247,7 +247,7 @@ public class BacktestService {
      * detail-read path can skip JSON parsing on absent values).
      */
     private static <K, V> Map<K, V> nullIfEmpty(Map<K, V> m) {
-        return (m == null || m.isEmpty()) ? null : m;
+        return CollectionUtils.isEmpty(m) ? null : m;
     }
 
     /**

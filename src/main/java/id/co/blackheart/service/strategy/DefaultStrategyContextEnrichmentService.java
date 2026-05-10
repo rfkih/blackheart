@@ -14,6 +14,7 @@ import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -54,8 +55,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
 
         if (!isBacktest
                 && requirements.isRequireBiasTimeframe()
-                && requirements.getBiasInterval() != null
-                && !requirements.getBiasInterval().isBlank()) {
+                && StringUtils.hasText(requirements.getBiasInterval())) {
             // Bug fix: use last COMPLETED bias candle (end_time < now) not the current forming one
             LocalDateTime now = LocalDateTime.now();
             biasMarketData = marketDataRepository

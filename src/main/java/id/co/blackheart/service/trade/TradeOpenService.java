@@ -715,7 +715,7 @@ public class TradeOpenService {
     }
 
     private boolean isInvalidPlan(SplitPlan splitPlan) {
-        return splitPlan == null || splitPlan.positions == null || splitPlan.positions.isEmpty();
+        return splitPlan == null || CollectionUtils.isEmpty(splitPlan.positions);
     }
 
     private SplitPlan invalidPlan() {

@@ -79,6 +79,7 @@ public class RuntimeHintsConfig implements RuntimeHintsRegistrar {
         return classes;
     }
 
+    @SuppressWarnings("unchecked")
     private void registerClassInPackage(String valPackage, ClassLoader classLoader, RuntimeHints hints) throws IOException {
         Path packageDirectory = Paths.get(classLoader.getResource(valPackage.replace('.','/')).getPath());
         try (Stream<Path> paths = Files.walk(packageDirectory)) {

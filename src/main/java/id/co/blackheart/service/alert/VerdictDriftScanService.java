@@ -2,6 +2,7 @@ package id.co.blackheart.service.alert;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import id.co.blackheart.exception.ServiceUnavailableException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -9,6 +10,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -120,10 +122,10 @@ public class VerdictDriftScanService {
             }
             return objectMapper.readTree(resp.body());
         } catch (java.io.IOException e) {
-            throw new RuntimeException("orchestrator I/O error", e);
+            throw new UncheckedIOException("orchestrator I/O error", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("orchestrator call interrupted", e);
+            throw new ServiceUnavailableException("orchestrator call interrupted", e);
         }
     }
 

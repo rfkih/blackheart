@@ -80,6 +80,8 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     private static final BigDecimal ONE  = BigDecimal.ONE;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
 
+    private static final String DIAG_ENTRY = "entry";
+
     // ── StrategyExecutor contract ─────────────────────────────────────────────
 
     @Override
@@ -137,93 +139,124 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         return hold(context, "No qualified VBO setup");
     }
 
+    // ── Entry gate helpers ────────────────────────────────────────────────────
+
+    private boolean passesAdxBandGate(FeatureStore f, VboParams p) {
+        if (f.getAdx() == null
+                || f.getAdx().compareTo(p.getAdxEntryMin()) < 0
+                || f.getAdx().compareTo(p.getAdxEntryMax()) > 0) {
+            log.debug("VBO gate-adx FAIL adx={} band={}/{}", f.getAdx(), p.getAdxEntryMin(), p.getAdxEntryMax());
+            return false;
+        }
+        return true;
+    }
+
+    private boolean passesBodyClvLongGate(FeatureStore f, VboParams p) {
+        if (f.getBodyToRangeRatio() == null
+                || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
+            log.debug("VBO LONG gate-body FAIL body={}", f.getBodyToRangeRatio());
+            return false;
+        }
+        if (f.getCloseLocationValue() == null
+                || f.getCloseLocationValue().compareTo(p.getClvMin()) < 0
+                || f.getCloseLocationValue().compareTo(p.getClvMax()) > 0) {
+            log.debug("VBO LONG gate-clv FAIL clv={} band={}/{}",
+                    f.getCloseLocationValue(), p.getClvMin(), p.getClvMax());
+            return false;
+        }
+        return true;
+    }
+
+    private boolean passesBodyClvShortGate(FeatureStore f, VboParams p) {
+        if (f.getBodyToRangeRatio() == null
+                || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
+            return false;
+        }
+        BigDecimal clv = f.getCloseLocationValue();
+        BigDecimal clvShortMax = ONE.subtract(p.getClvMin());
+        BigDecimal clvShortMin = ONE.subtract(p.getClvMax());
+        if (clv == null || clv.compareTo(clvShortMax) > 0 || clv.compareTo(clvShortMin) < 0) {
+            log.debug("VBO SHORT gate-clv FAIL clv={} band={}/{}", clv, clvShortMin, clvShortMax);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean passesLongGates(MarketData md, FeatureStore f, FeatureStore prev, VboParams p) {
+        if (!wasInCompression(prev, p)) {
+            log.debug("VBO LONG gate-compression FAIL prevBbWidth={} prevAdx={}",
+                    prev != null ? prev.getBbWidth() : null, prev != null ? prev.getAdx() : null);
+            return false;
+        }
+        BigDecimal upperBb = f.getBbUpperBand();
+        if (upperBb == null) return false;
+        BigDecimal close = strategyHelper.safe(md.getClosePrice());
+        if (close.compareTo(upperBb) <= 0) {
+            log.debug("VBO LONG gate-bb FAIL close={} upperBb={}", close, upperBb);
+            return false;
+        }
+        if (p.isRequireDonchianBreak()
+                && (f.getDonchianUpper20() == null || close.compareTo(f.getDonchianUpper20()) <= 0)) {
+            log.debug("VBO LONG gate-donchian FAIL close={} donch={}", close, f.getDonchianUpper20());
+            return false;
+        }
+        if (!hasRangeExpansion(md, prev, p)) {
+            log.debug("VBO LONG gate-range-expansion FAIL range={} prevAtr={}",
+                    rangeOf(md), prev != null ? prev.getAtr() : null);
+            return false;
+        }
+        if (!passesAdxBandGate(f, p)) return false;
+        if (f.getRelativeVolume20() == null || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) {
+            log.debug("VBO LONG gate-rvol FAIL rvol={}", f.getRelativeVolume20());
+            return false;
+        }
+        if (!passesBodyClvLongGate(f, p)) return false;
+        if (f.getRsi() != null && f.getRsi().compareTo(p.getLongRsiMax()) > 0) {
+            log.debug("VBO LONG gate-rsi FAIL rsi={} max={}", f.getRsi(), p.getLongRsiMax());
+            return false;
+        }
+        if (p.isRequireTrendAlignment() && !hasBullishTrendAlignment(md, f, p)) {
+            log.debug("VBO LONG gate-trend FAIL");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean passesShortGates(MarketData md, FeatureStore f, FeatureStore prev, VboParams p) {
+        if (!wasInCompression(prev, p)) return false;
+        BigDecimal lowerBb = f.getBbLowerBand();
+        if (lowerBb == null) return false;
+        BigDecimal close = strategyHelper.safe(md.getClosePrice());
+        if (close.compareTo(lowerBb) >= 0) return false;
+        if (p.isRequireDonchianBreak()
+                && (f.getDonchianLower20() == null || close.compareTo(f.getDonchianLower20()) >= 0)) {
+            return false;
+        }
+        if (!hasRangeExpansion(md, prev, p)) return false;
+        if (!passesAdxBandGate(f, p)) return false;
+        if (f.getRelativeVolume20() == null || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) return false;
+        if (!passesBodyClvShortGate(f, p)) return false;
+        if (f.getRsi() != null && f.getRsi().compareTo(p.getShortRsiMin()) < 0) {
+            log.debug("VBO SHORT gate-rsi FAIL rsi={} min={}", f.getRsi(), p.getShortRsiMin());
+            return false;
+        }
+        if (p.isRequireTrendAlignment() && !hasBearishTrendAlignment(md, f, p)) {
+            log.debug("VBO SHORT gate-trend FAIL");
+            return false;
+        }
+        return true;
+    }
+
     // ── Entries ───────────────────────────────────────────────────────────────
 
     private StrategyDecision tryLongEntry(
             EnrichedStrategyContext ctx, MarketData md, FeatureStore f,
             FeatureStore prev, VboParams p
     ) {
-        // Gate 1 — compression on the prior candle.
-        if (!wasInCompression(prev, p)) {
-            log.debug("VBO LONG gate-compression FAIL prevBbWidth={} prevAdx={}",
-                    prev != null ? prev.getBbWidth() : null,
-                    prev != null ? prev.getAdx() : null);
-            return null;
-        }
+        if (!passesLongGates(md, f, prev, p)) return null;
 
-        // Gate 2 — breakout: close above the current upper Bollinger band
-        // (and Donchian top, when required).
-        BigDecimal upperBb = f.getBbUpperBand();
-        if (upperBb == null) return null;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
-        if (close.compareTo(upperBb) <= 0) {
-            log.debug("VBO LONG gate-bb FAIL close={} upperBb={}", close, upperBb);
-            return null;
-        }
-        if (p.isRequireDonchianBreak()
-                && (f.getDonchianUpper20() == null || close.compareTo(f.getDonchianUpper20()) <= 0)) {
-            log.debug("VBO LONG gate-donchian FAIL close={} donch={}", close, f.getDonchianUpper20());
-            return null;
-        }
-
-        // Gate 3 — volatility expansion: current bar's range vs prior ATR.
-        if (!hasRangeExpansion(md, prev, p)) {
-            log.debug("VBO LONG gate-range-expansion FAIL range={} prevAtr={}",
-                    rangeOf(md), prev != null ? prev.getAtr() : null);
-            return null;
-        }
-
-        // Gate 3b — entry-bar ADX band (Goldilocks zone).
-        // 15m cohort: <15 lost across 18 trades (WR 17%), 22+ lost across 42
-        // trades (WR 31%). The 15–22 band earned +4.11 across 72 trades at
-        // WR 53% — clean signal. Compressed-but-just-breaking is the edge;
-        // everything outside is either no-trend or already-trending-late.
-        if (f.getAdx() == null
-                || f.getAdx().compareTo(p.getAdxEntryMin()) < 0
-                || f.getAdx().compareTo(p.getAdxEntryMax()) > 0) {
-            log.debug("VBO LONG gate-adx FAIL adx={} band={}/{}",
-                    f.getAdx(), p.getAdxEntryMin(), p.getAdxEntryMax());
-            return null;
-        }
-
-        // Gate 4 — volume participation.
-        if (f.getRelativeVolume20() == null
-                || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) {
-            log.debug("VBO LONG gate-rvol FAIL rvol={}", f.getRelativeVolume20());
-            return null;
-        }
-
-        // Gate 5 — directional close (body + CLV).
-        if (f.getBodyToRangeRatio() == null
-                || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
-            log.debug("VBO LONG gate-body FAIL body={}", f.getBodyToRangeRatio());
-            return null;
-        }
-        if (f.getCloseLocationValue() == null
-                || f.getCloseLocationValue().compareTo(p.getClvMin()) < 0
-                || f.getCloseLocationValue().compareTo(p.getClvMax()) > 0) {
-            // Upper bound rejects bars that closed pinned to the high — same
-            // exhaustion rationale as TPR.
-            log.debug("VBO LONG gate-clv FAIL clv={} band={}/{}",
-                    f.getCloseLocationValue(), p.getClvMin(), p.getClvMax());
-            return null;
-        }
-
-        // Gate 6 — RSI sanity: avoid chasing already-extended runs.
-        if (f.getRsi() != null && f.getRsi().compareTo(p.getLongRsiMax()) > 0) {
-            log.debug("VBO LONG gate-rsi FAIL rsi={} max={}", f.getRsi(), p.getLongRsiMax());
-            return null;
-        }
-
-        // Gate 7 — optional trend alignment (close above EMA50, EMA50 not
-        // strongly down). Off by default — VBO is meant to catch regime
-        // transitions where higher TF trend hasn't flipped yet.
-        if (p.isRequireTrendAlignment() && !hasBullishTrendAlignment(md, f, p)) {
-            log.debug("VBO LONG gate-trend FAIL");
-            return null;
-        }
-
-        // ── Sizing & stop: structural (below breakout candle low) with ATR buffer.
+        BigDecimal upperBb = f.getBbUpperBand();
         BigDecimal atr = resolveAtr(f);
         BigDecimal low = strategyHelper.safe(md.getLowPrice());
         BigDecimal entry = close;
@@ -239,7 +272,6 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         }
 
         BigDecimal tp1 = entry.add(riskPerUnit.multiply(p.getTp1R()));
-
         BigDecimal score = calculateLongSignalScore(md, f, prev);
         if (score.compareTo(p.getMinSignalScore()) < 0) {
             log.debug("VBO LONG score FAIL score={} min={}", score, p.getMinSignalScore());
@@ -285,7 +317,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                 .tags(List.of("ENTRY", "VBO", "LONG", "BREAKOUT", STRATEGY_VERSION))
                 .diagnostics(Map.of(
                         "module", "VolatilityBreakoutStrategyService",
-                        "entry", entry, "stop", stop, "tp1", tp1,
+                        DIAG_ENTRY, entry, "stop", stop, "tp1", tp1,
                         "upperBb", upperBb,
                         "prevBbWidth", prev != null && prev.getBbWidth() != null ? prev.getBbWidth() : ZERO,
                         "atr", atr,
@@ -297,55 +329,10 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
             EnrichedStrategyContext ctx, MarketData md, FeatureStore f,
             FeatureStore prev, VboParams p
     ) {
-        if (!wasInCompression(prev, p)) return null;
+        if (!passesShortGates(md, f, prev, p)) return null;
 
-        BigDecimal lowerBb = f.getBbLowerBand();
-        if (lowerBb == null) return null;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
-        if (close.compareTo(lowerBb) >= 0) return null;
-
-        if (p.isRequireDonchianBreak()
-                && (f.getDonchianLower20() == null || close.compareTo(f.getDonchianLower20()) >= 0)) {
-            return null;
-        }
-
-        if (!hasRangeExpansion(md, prev, p)) return null;
-
-        if (f.getAdx() == null
-                || f.getAdx().compareTo(p.getAdxEntryMin()) < 0
-                || f.getAdx().compareTo(p.getAdxEntryMax()) > 0) {
-            return null;
-        }
-
-        if (f.getRelativeVolume20() == null
-                || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) {
-            return null;
-        }
-
-        if (f.getBodyToRangeRatio() == null
-                || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
-            return null;
-        }
-
-        // Mirror the LONG CLV band onto the bottom of the candle.
-        BigDecimal clv = f.getCloseLocationValue();
-        BigDecimal clvShortMax = ONE.subtract(p.getClvMin());
-        BigDecimal clvShortMin = ONE.subtract(p.getClvMax());
-        if (clv == null || clv.compareTo(clvShortMax) > 0 || clv.compareTo(clvShortMin) < 0) {
-            log.debug("VBO SHORT gate-clv FAIL clv={} band={}/{}", clv, clvShortMin, clvShortMax);
-            return null;
-        }
-
-        if (f.getRsi() != null && f.getRsi().compareTo(p.getShortRsiMin()) < 0) {
-            log.debug("VBO SHORT gate-rsi FAIL rsi={} min={}", f.getRsi(), p.getShortRsiMin());
-            return null;
-        }
-
-        if (p.isRequireTrendAlignment() && !hasBearishTrendAlignment(md, f, p)) {
-            log.debug("VBO SHORT gate-trend FAIL");
-            return null;
-        }
-
+        BigDecimal lowerBb = f.getBbLowerBand();
         BigDecimal atr = resolveAtr(f);
         BigDecimal high = strategyHelper.safe(md.getHighPrice());
         BigDecimal entry = close;
@@ -357,7 +344,6 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         if (riskPerUnit.compareTo(maxAllowedRisk) > 0) return null;
 
         BigDecimal tp1 = entry.subtract(riskPerUnit.multiply(p.getTp1R()));
-
         BigDecimal score = calculateShortSignalScore(md, f, prev);
         if (score.compareTo(p.getMinSignalScore()) < 0) return null;
 
@@ -400,10 +386,10 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                 .entryRsi(f.getRsi())
                 .entryTrendRegime(f.getTrendRegime())
                 .decisionTime(LocalDateTime.now())
-                .tags(List.of("ENTRY", "VBO", "SHORT", "BREAKOUT", STRATEGY_VERSION))
+                .tags(List.of("ENTRY", "VBO", SIDE_SHORT, "BREAKOUT", STRATEGY_VERSION))
                 .diagnostics(Map.of(
                         "module", "VolatilityBreakoutStrategyService",
-                        "entry", entry, "stop", stop, "tp1", tp1,
+                        DIAG_ENTRY, entry, "stop", stop, "tp1", tp1,
                         "lowerBb", lowerBb,
                         "prevBbWidth", prev != null && prev.getBbWidth() != null ? prev.getBbWidth() : ZERO,
                         "atr", atr,
@@ -413,16 +399,21 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
 
     // ── Position management ───────────────────────────────────────────────────
 
+    private record PositionState(
+            String side, boolean isLong, BigDecimal close,
+            BigDecimal entry, BigDecimal curStop,
+            BigDecimal initRisk, BigDecimal move, BigDecimal rMultiple
+    ) {}
+
     private StrategyDecision managePosition(
             EnrichedStrategyContext ctx, MarketData md, FeatureStore f,
             PositionSnapshot snap, VboParams p
     ) {
         String side = snap.getSide();
-        String role = snap.getPositionRole();
         if (side == null) return hold(ctx, "VBO manage: unknown side");
 
         boolean isLong = SIDE_LONG.equalsIgnoreCase(side);
-        boolean isRunner = POSITION_ROLE_RUNNER.equalsIgnoreCase(role);
+        boolean isRunner = POSITION_ROLE_RUNNER.equalsIgnoreCase(snap.getPositionRole());
 
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
         BigDecimal curStop = strategyHelper.safe(snap.getCurrentStopLossPrice());
@@ -436,64 +427,76 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         if (move.compareTo(ZERO) <= 0) return hold(ctx, "VBO manage: not in profit");
 
         BigDecimal rMultiple = move.divide(initRisk, 8, RoundingMode.HALF_UP);
+        PositionState st = new PositionState(side, isLong, close, entry, curStop, initRisk, move, rMultiple);
+        return isRunner ? manageRunnerLeg(ctx, st, f, snap, p) : manageTp1Leg(ctx, st, snap, p);
+    }
 
-        // ── TP1 leg: move stop to break-even once trade is in profit enough. ─
-        if (!isRunner) {
-            BigDecimal beTrigger = initRisk.multiply(p.getBreakEvenR());
-            if (move.compareTo(beTrigger) < 0) return hold(ctx, "VBO BE not ready");
+    private StrategyDecision manageTp1Leg(
+            EnrichedStrategyContext ctx, PositionState st, PositionSnapshot snap, VboParams p
+    ) {
+        BigDecimal beTrigger = st.initRisk().multiply(p.getBreakEvenR());
+        if (st.move().compareTo(beTrigger) < 0) return hold(ctx, "VBO BE not ready");
 
-            boolean alreadyAtBe = isLong ? curStop.compareTo(entry) >= 0 : curStop.compareTo(entry) <= 0;
-            if (alreadyAtBe) return hold(ctx, "VBO stop already at BE");
+        boolean alreadyAtBe = st.isLong()
+                ? st.curStop().compareTo(st.entry()) >= 0
+                : st.curStop().compareTo(st.entry()) <= 0;
+        if (alreadyAtBe) return hold(ctx, "VBO stop already at BE");
 
-            return buildManagementDecision(
-                    ctx, side, isLong ? SETUP_LONG_BE : SETUP_SHORT_BE,
-                    entry, snap.getTakeProfitPrice(),
-                    "Move TP1 leg to break-even at " + p.getBreakEvenR() + "R",
-                    Map.of("entry", entry, "curStop", curStop, "close", close, "rMultiple", rMultiple),
-                    POSITION_ROLE_TP1
-            );
-        }
+        ManagementTarget beTarget = new ManagementTarget(
+                st.isLong() ? SETUP_LONG_BE : SETUP_SHORT_BE,
+                st.entry(), snap.getTakeProfitPrice(), POSITION_ROLE_TP1);
+        return buildManagementDecision(ctx, st.side(), beTarget,
+                "Move TP1 leg to break-even at " + p.getBreakEvenR() + "R",
+                Map.of(DIAG_ENTRY, st.entry(), "curStop", st.curStop(),
+                        "close", st.close(), "rMultiple", st.rMultiple()));
+    }
 
-        // ── Runner leg: phase-based ATR trail. ───────────────────────────────
+    private StrategyDecision manageRunnerLeg(
+            EnrichedStrategyContext ctx, PositionState st, FeatureStore f,
+            PositionSnapshot snap, VboParams p
+    ) {
         BigDecimal atr = resolveAtr(f);
-        BigDecimal candidate = null;
-
-        if (rMultiple.compareTo(p.getRunnerPhase3R()) >= 0) {
-            BigDecimal atrTrail = isLong
-                    ? close.subtract(atr.multiply(p.getRunnerAtrPhase3()))
-                    : close.add(atr.multiply(p.getRunnerAtrPhase3()));
-            BigDecimal lockStop = isLong
-                    ? entry.add(initRisk.multiply(p.getRunnerLockPhase3R()))
-                    : entry.subtract(initRisk.multiply(p.getRunnerLockPhase3R()));
-            candidate = isLong ? atrTrail.max(lockStop) : atrTrail.min(lockStop);
-        } else if (rMultiple.compareTo(p.getRunnerPhase2R()) >= 0) {
-            BigDecimal atrTrail = isLong
-                    ? close.subtract(atr.multiply(p.getRunnerAtrPhase2()))
-                    : close.add(atr.multiply(p.getRunnerAtrPhase2()));
-            BigDecimal lockStop = isLong
-                    ? entry.add(initRisk.multiply(p.getRunnerLockPhase2R()))
-                    : entry.subtract(initRisk.multiply(p.getRunnerLockPhase2R()));
-            candidate = isLong ? atrTrail.max(lockStop) : atrTrail.min(lockStop);
-        } else if (rMultiple.compareTo(p.getRunnerBreakEvenR()) >= 0) {
-            boolean alreadyAtBe = isLong ? curStop.compareTo(entry) >= 0 : curStop.compareTo(entry) <= 0;
-            if (!alreadyAtBe) candidate = entry;
-        }
-
+        BigDecimal candidate = computeRunnerCandidate(st, atr, p);
         if (candidate == null) return hold(ctx, "VBO runner not ready");
 
-        boolean improved = isLong
-                ? candidate.compareTo(curStop) > 0
-                : candidate.compareTo(curStop) < 0;
+        boolean improved = st.isLong()
+                ? candidate.compareTo(st.curStop()) > 0
+                : candidate.compareTo(st.curStop()) < 0;
         if (!improved) return hold(ctx, "VBO runner stop already optimal");
 
-        return buildTrailDecision(
-                ctx, side, isLong ? SETUP_LONG_TRAIL : SETUP_SHORT_TRAIL,
-                candidate, snap.getTakeProfitPrice(),
-                "VBO runner trail at " + rMultiple + "R",
-                Map.of("rMultiple", rMultiple, "candidate", candidate,
-                        "curStop", curStop, "close", close, "atr", atr),
-                POSITION_ROLE_RUNNER
-        );
+        ManagementTarget trailTarget = new ManagementTarget(
+                st.isLong() ? SETUP_LONG_TRAIL : SETUP_SHORT_TRAIL,
+                candidate, snap.getTakeProfitPrice(), POSITION_ROLE_RUNNER);
+        return buildTrailDecision(ctx, st.side(), trailTarget,
+                "VBO runner trail at " + st.rMultiple() + "R",
+                Map.of("rMultiple", st.rMultiple(), "candidate", candidate,
+                        "curStop", st.curStop(), "close", st.close(), "atr", atr));
+    }
+
+    private BigDecimal computeRunnerCandidate(PositionState st, BigDecimal atr, VboParams p) {
+        if (st.rMultiple().compareTo(p.getRunnerPhase3R()) >= 0) {
+            return computePhaseStop(st, atr, p.getRunnerAtrPhase3(), p.getRunnerLockPhase3R());
+        }
+        if (st.rMultiple().compareTo(p.getRunnerPhase2R()) >= 0) {
+            return computePhaseStop(st, atr, p.getRunnerAtrPhase2(), p.getRunnerLockPhase2R());
+        }
+        if (st.rMultiple().compareTo(p.getRunnerBreakEvenR()) >= 0) {
+            boolean alreadyAtBe = st.isLong()
+                    ? st.curStop().compareTo(st.entry()) >= 0
+                    : st.curStop().compareTo(st.entry()) <= 0;
+            return alreadyAtBe ? null : st.entry();
+        }
+        return null;
+    }
+
+    private BigDecimal computePhaseStop(PositionState st, BigDecimal atr, BigDecimal atrMult, BigDecimal lockMult) {
+        BigDecimal atrTrail = st.isLong()
+                ? st.close().subtract(atr.multiply(atrMult))
+                : st.close().add(atr.multiply(atrMult));
+        BigDecimal lockStop = st.isLong()
+                ? st.entry().add(st.initRisk().multiply(lockMult))
+                : st.entry().subtract(st.initRisk().multiply(lockMult));
+        return st.isLong() ? atrTrail.max(lockStop) : atrTrail.min(lockStop);
     }
 
     // ── Compression / expansion / trend helpers ───────────────────────────────
@@ -560,9 +563,8 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         // a regime-transition strategy, just no strong opposing slope.
         if (!(f.getEma50Slope() == null
                 || f.getEma50Slope().compareTo(p.getEma50SlopeMin().negate()) >= 0)) return false;
-        if (p.isRequireSlope200Gate() && f.getSlope200() != null
-                && f.getSlope200().compareTo(p.getSlope200Min()) < 0) return false;
-        return true;
+        return !p.isRequireSlope200Gate() || f.getSlope200() == null
+                || f.getSlope200().compareTo(p.getSlope200Min()) >= 0;
     }
 
     private boolean hasBearishTrendAlignment(MarketData md, FeatureStore f, VboParams p) {
@@ -571,9 +573,8 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         if (close.compareTo(f.getEma50()) >= 0) return false;
         if (!(f.getEma50Slope() == null
                 || f.getEma50Slope().compareTo(p.getEma50SlopeMin()) <= 0)) return false;
-        if (p.isRequireSlope200Gate() && f.getSlope200() != null
-                && f.getSlope200().compareTo(p.getSlope200Min().negate()) > 0) return false;
-        return true;
+        return !p.isRequireSlope200Gate() || f.getSlope200() == null
+                || f.getSlope200().compareTo(p.getSlope200Min().negate()) <= 0;
     }
 
     // ── Scoring ───────────────────────────────────────────────────────────────
@@ -629,10 +630,12 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
 
     // ── Decision builders ─────────────────────────────────────────────────────
 
+    private record ManagementTarget(
+            String setupType, BigDecimal newStop, BigDecimal takeProfit, String targetRole
+    ) {}
+
     private StrategyDecision buildManagementDecision(
-            EnrichedStrategyContext ctx, String side, String setupType,
-            BigDecimal newStop, BigDecimal takeProfit, String reason,
-            Map<String, Object> diag, String targetRole
+            EnrichedStrategyContext ctx, String side, ManagementTarget t, String reason, Map<String, Object> diag
     ) {
         return StrategyDecision.builder()
                 .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
@@ -641,12 +644,12 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(ctx.getInterval())
                 .signalType(SIGNAL_TYPE_MANAGEMENT)
-                .setupType(setupType)
+                .setupType(t.setupType())
                 .side(side)
                 .reason(reason)
-                .stopLossPrice(newStop)
-                .takeProfitPrice1(takeProfit)
-                .targetPositionRole(targetRole)
+                .stopLossPrice(t.newStop())
+                .takeProfitPrice1(t.takeProfit())
+                .targetPositionRole(t.targetRole())
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("MANAGEMENT", STRATEGY_CODE, side, "BREAK_EVEN"))
                 .diagnostics(diag)
@@ -654,9 +657,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     }
 
     private StrategyDecision buildTrailDecision(
-            EnrichedStrategyContext ctx, String side, String setupType,
-            BigDecimal newStop, BigDecimal takeProfit, String reason,
-            Map<String, Object> diag, String targetRole
+            EnrichedStrategyContext ctx, String side, ManagementTarget t, String reason, Map<String, Object> diag
     ) {
         return StrategyDecision.builder()
                 .decisionType(DecisionType.UPDATE_POSITION_MANAGEMENT)
@@ -665,13 +666,13 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                 .strategyVersion(STRATEGY_VERSION)
                 .strategyInterval(ctx.getInterval())
                 .signalType(SIGNAL_TYPE_MANAGEMENT)
-                .setupType(setupType)
+                .setupType(t.setupType())
                 .side(side)
                 .reason(reason)
-                .stopLossPrice(newStop)
-                .trailingStopPrice(newStop)
-                .takeProfitPrice1(takeProfit)
-                .targetPositionRole(targetRole)
+                .stopLossPrice(t.newStop())
+                .trailingStopPrice(t.newStop())
+                .takeProfitPrice1(t.takeProfit())
+                .targetPositionRole(t.targetRole())
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("MANAGEMENT", STRATEGY_CODE, side, "TRAIL"))
                 .diagnostics(diag)

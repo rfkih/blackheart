@@ -467,7 +467,7 @@ public class AccountStrategyService {
     }
 
     private static String normalizeRegimeCsv(String raw) {
-        return raw.isBlank() ? null : raw.trim().toUpperCase();
+        return !StringUtils.hasText(raw) ? null : raw.trim().toUpperCase();
     }
 
     // V45 — Kelly / bankroll sizing fields.

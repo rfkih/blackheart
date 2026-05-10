@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.util.HashMap;
 import java.util.List;
@@ -179,7 +180,7 @@ public class AccountStrategyCloneService {
 
     private String derivePresetName(AccountStrategy source) {
         String base = source.getPresetName();
-        if (base == null || base.isBlank()) {
+        if (!StringUtils.hasText(base)) {
             return "Cloned from research-agent";
         }
         return base + " (cloned)";

@@ -59,6 +59,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     private final BacktestRunRepository backtestRunRepository;
 
     @Override
+    @SuppressWarnings("java:S2638")
     public @Nullable Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
         if (accessor == null) return message;
