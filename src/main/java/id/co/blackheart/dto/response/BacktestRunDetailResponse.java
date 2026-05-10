@@ -42,6 +42,14 @@ public class BacktestRunDetailResponse {
     private Boolean allowShort;
     private Integer maxConcurrentStrategies;
     private Map<String, BigDecimal> strategyAllocations;
+    /** V57 — per-strategy risk-pct override map. Fractional scale matching
+     *  account_strategy.risk_pct. Null on legacy runs pre-V57. */
+    private Map<String, BigDecimal> strategyRiskPcts;
+    /** V58 — per-strategy allowLong/allowShort override map. Null on legacy
+     *  runs; populated when the operator flipped a strategy's direction in
+     *  the wizard for this run only. */
+    private Map<String, Boolean> strategyAllowLong;
+    private Map<String, Boolean> strategyAllowShort;
     private Map<String, String> strategyIntervals;
     /** Flat funding-rate stub used at submit time (basis points per 8h),
      *  applied per-position at close. Null on legacy runs that pre-date V22. */

@@ -171,4 +171,29 @@ public class AccountStrategy extends BaseEntity {
     @Builder.Default
     private String visibility = "PRIVATE";
 
+    /**
+     * Per-strategy risk-based-sizing toggle (V55). When TRUE, LONG entries on
+     * legacy strategies (LSR/VCB/VBO/FundingCarry) route through
+     * {@link id.co.blackheart.service.strategy.StrategyHelper#calculateLongEntryNotional}
+     * which sizes off {@code riskPct} and uses {@code capitalAllocationPct} as
+     * a notional cap. When FALSE, legacy strategies size directly off
+     * {@code capitalAllocationPct} as before (preserving pre-V55 behaviour).
+     *
+     * <p>Default FALSE so existing rows keep current sizing behaviour after
+     * migration; new rows created via the API default TRUE so the platform
+     * pushes operators onto the unified risk model going forward.
+     */
+    @Column(name = "use_risk_based_sizing", nullable = false)
+    @Builder.Default
+    private Boolean useRiskBasedSizing = Boolean.FALSE;
+
+    /**
+     * Per-trade risk as a fraction of cash balance, e.g. 0.0500 = 5%. Used
+     * only when {@code useRiskBasedSizing = TRUE}. The DB constraint enforces
+     * (0, 0.20]; the controller layer validates the same range on input.
+     */
+    @Column(name = "risk_pct", nullable = false, precision = 5, scale = 4)
+    @Builder.Default
+    private BigDecimal riskPct = new BigDecimal("0.0500");
+
 }

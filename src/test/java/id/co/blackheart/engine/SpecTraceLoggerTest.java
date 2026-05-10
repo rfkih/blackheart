@@ -48,7 +48,7 @@ class SpecTraceLoggerTest {
     void backtestRecordsAlways_evenWhenSampleRateIsZero() {
         SpecTraceLogger logger = new SpecTraceLogger(repository, txManager, 0.0);
 
-        logger.record(spec("BBR"), backtestCtx(UUID.randomUUID()),
+        logger.recordTrace(spec("BBR"), backtestCtx(UUID.randomUUID()),
                 hold(), 1_000_000L, null, null);
 
         ArgumentCaptor<SpecTrace> captor = ArgumentCaptor.forClass(SpecTrace.class);
@@ -67,7 +67,7 @@ class SpecTraceLoggerTest {
     @Test
     void liveSampleRateZeroSkipsWrites() {
         SpecTraceLogger logger = new SpecTraceLogger(repository, txManager, 0.0);
-        logger.record(spec("BBR"), liveCtx(), hold(), 1_000L, null, null);
+        logger.recordTrace(spec("BBR"), liveCtx(), hold(), 1_000L, null, null);
         verify(repository, never()).save(any(SpecTrace.class));
     }
 
@@ -76,7 +76,7 @@ class SpecTraceLoggerTest {
         SpecTraceLogger logger = new SpecTraceLogger(repository, txManager, 1.0);
         RuntimeException boom = new IllegalStateException("bad spec");
 
-        logger.record(spec("BBR"), liveCtx(), null, 500_000L, boom, null);
+        logger.recordTrace(spec("BBR"), liveCtx(), null, 500_000L, boom, null);
 
         ArgumentCaptor<SpecTrace> captor = ArgumentCaptor.forClass(SpecTrace.class);
         verify(repository).save(captor.capture());
@@ -95,7 +95,7 @@ class SpecTraceLoggerTest {
                 .reason("rsi oversold + bb tag")
                 .build();
 
-        logger.record(spec("BBR"), liveCtx(), d, 250_000L, null, null);
+        logger.recordTrace(spec("BBR"), liveCtx(), d, 250_000L, null, null);
 
         ArgumentCaptor<SpecTrace> captor = ArgumentCaptor.forClass(SpecTrace.class);
         verify(repository).save(captor.capture());
@@ -123,7 +123,7 @@ class SpecTraceLoggerTest {
                 .build();
 
         SpecTraceLogger logger = new SpecTraceLogger(repository, txManager, 1.0);
-        logger.record(spec, backtestCtx(UUID.randomUUID()), hold(), 0L, null, null);
+        logger.recordTrace(spec, backtestCtx(UUID.randomUUID()), hold(), 0L, null, null);
 
         ArgumentCaptor<SpecTrace> captor = ArgumentCaptor.forClass(SpecTrace.class);
         verify(repository).save(captor.capture());
@@ -150,7 +150,7 @@ class SpecTraceLoggerTest {
         r0.put("result", true);
         r0.put("value", 22.4);
 
-        logger.record(spec("BBR"), liveCtx(), hold(), 0L, null, List.of(r0));
+        logger.recordTrace(spec("BBR"), liveCtx(), hold(), 0L, null, List.of(r0));
 
         ArgumentCaptor<SpecTrace> captor = ArgumentCaptor.forClass(SpecTrace.class);
         verify(repository).save(captor.capture());
@@ -167,7 +167,7 @@ class SpecTraceLoggerTest {
                 .thenThrow(new RuntimeException("DB down"));
 
         // Must not throw — trace writes are best-effort.
-        logger.record(spec("BBR"), liveCtx(), hold(), 0L, null, null);
+        logger.recordTrace(spec("BBR"), liveCtx(), hold(), 0L, null, null);
         assertTrue(true);
     }
 

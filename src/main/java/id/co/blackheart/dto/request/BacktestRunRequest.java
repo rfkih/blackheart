@@ -176,6 +176,28 @@ public class BacktestRunRequest {
     private Map<String, BigDecimal> strategyAllocations;
 
     /**
+     * V57 — per-strategy risk-pct override for this run only, as a fraction
+     * (e.g. 0.05 = 5%). Key = strategy code. Strategies not in this map fall
+     * back to {@code account_strategy.risk_pct}. Range checked at the
+     * resolver: values outside (0, 0.20] are dropped (treated as not set).
+     */
+    @Size(max = 10)
+    private Map<String, BigDecimal> strategyRiskPcts;
+
+    /**
+     * V58 — per-strategy allowLong override for this run only. Wizard-
+     * supplied for ad-hoc research ("test LSR with shorts without flipping
+     * the live row"). Missing keys fall back to the bound
+     * {@code account_strategy.allow_long}, which is the V58 default.
+     */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyAllowLong;
+
+    /** V58 — per-strategy allowShort override. See {@link #strategyAllowLong}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyAllowShort;
+
+    /**
      * Per-strategy interval for multi-timeframe runs. Key = strategy code,
      * value = interval string (e.g. "15m"). When non-null, the coordinator
      * loads one candle stream per unique interval and each strategy fires

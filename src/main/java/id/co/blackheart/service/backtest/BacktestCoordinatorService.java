@@ -158,11 +158,13 @@ public class BacktestCoordinatorService {
                 backtestRun, executors, strategyInterval,
                 strategyCandleByEndTime, strategyFeatureByStartTime, sortedStrategyFeatures);
 
-        // Resolve per-strategy capital allocation ONCE at run start. Without
-        // this, every monitor tick called accountStrategyRepository.findById
-        // for any strategy lacking a wizard override — pathological N+1 on
-        // long backtests (260k+ ticks × N strategies).
-        Map<String, BigDecimal> allocationByStrategy = resolveAllocationsForRun(backtestRun, executors);
+        // Resolve per-strategy sizing config ONCE at run start. Without this,
+        // every monitor tick called accountStrategyRepository.findById for any
+        // strategy lacking a wizard override — pathological N+1 on long
+        // backtests (260k+ ticks × N strategies). V55 carries the risk-based
+        // sizing toggle + riskPct alongside allocation so the synthetic
+        // AccountStrategy mirrors the live row's sizing model.
+        Map<String, StrategySizing> sizingByStrategy = resolveStrategySizingForRun(backtestRun, executors);
 
         final int totalCandles = monitorCandles.size();
         int processed = 0;
@@ -186,7 +188,7 @@ public class BacktestCoordinatorService {
                     requirements,
                     biasByStrategy,
                     perStrategyContext,
-                    allocationByStrategy
+                    sizingByStrategy
             );
 
             backtestStateService.checkIntraBarDrawdown(state, monitorCandle.getLowPrice());
@@ -330,12 +332,12 @@ public class BacktestCoordinatorService {
             StrategyRequirements requirements,
             Map<String, BiasData> biasByStrategy,
             Map<String, IntervalContext> perStrategyContext,
-            Map<String, BigDecimal> allocationByStrategy
+            Map<String, StrategySizing> sizingByStrategy
     ) {
         if (executors.size() == 1) {
             handleSingleStrategyStep(backtestRun, state, monitorCandle,
                     executors.getFirst(), requirements,
-                    biasByStrategy, perStrategyContext, allocationByStrategy);
+                    biasByStrategy, perStrategyContext, sizingByStrategy);
             return;
         }
 
@@ -346,7 +348,7 @@ public class BacktestCoordinatorService {
                 : new HashSet<>(state.getActiveTradesByStrategy().keySet());
         for (String ownerCode : ownersAtTickStart) {
             manageOwnerActiveTrade(backtestRun, state, monitorCandle, ownerCode,
-                    executors, biasByStrategy, perStrategyContext, allocationByStrategy);
+                    executors, biasByStrategy, perStrategyContext, sizingByStrategy);
         }
 
         // (2) Strategies without a trade can fire entries — gated by the
@@ -354,7 +356,7 @@ public class BacktestCoordinatorService {
         // timeframe has a bar closing at this tick.
         for (StrategyExecutorEntry entry : executors) {
             tryFireEntry(backtestRun, state, monitorCandle, entry,
-                    executors, biasByStrategy, perStrategyContext, allocationByStrategy);
+                    executors, biasByStrategy, perStrategyContext, sizingByStrategy);
         }
     }
 
@@ -367,7 +369,7 @@ public class BacktestCoordinatorService {
             List<StrategyExecutorEntry> executors,
             Map<String, BiasData> biasByStrategy,
             Map<String, IntervalContext> perStrategyContext,
-            Map<String, BigDecimal> allocationByStrategy
+            Map<String, StrategySizing> sizingByStrategy
     ) {
         StrategyExecutorEntry ownerEntry = findExecutorByCode(executors, ownerCode);
         if (ownerEntry == null) return;
@@ -382,7 +384,7 @@ public class BacktestCoordinatorService {
         int ownerOpenCount = countOpenPositionsFor(state, ownerEntry.code());
 
         AccountStrategy syntheticAs = buildSyntheticAccountStrategy(
-                backtestRun, ownerEntry.code(), ic.interval(), allocationByStrategy);
+                backtestRun, ownerEntry.code(), ic.interval(), sizingByStrategy);
         StrategyRequirements ownerRequirements = ownerEntry.executor().getRequirements();
         BiasData ownerBias = biasFor(biasByStrategy, ownerEntry.code());
         EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
@@ -406,7 +408,7 @@ public class BacktestCoordinatorService {
             List<StrategyExecutorEntry> executors,
             Map<String, BiasData> biasByStrategy,
             Map<String, IntervalContext> perStrategyContext,
-            Map<String, BigDecimal> allocationByStrategy
+            Map<String, StrategySizing> sizingByStrategy
     ) {
         // Skip strategies that already hold a trade or have a pending entry
         // queued — storePendingEntry would silently reject the latter anyway.
@@ -436,7 +438,7 @@ public class BacktestCoordinatorService {
         PositionSnapshot entrySnapshot = PositionSnapshot.builder().hasOpenPosition(false).build();
 
         AccountStrategy syntheticAs = buildSyntheticAccountStrategy(
-                backtestRun, entry.code(), ic.interval(), allocationByStrategy);
+                backtestRun, entry.code(), ic.interval(), sizingByStrategy);
         StrategyRequirements entryRequirements = entry.executor().getRequirements();
         BiasData entryBias = biasFor(biasByStrategy, entry.code());
         EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
@@ -470,7 +472,7 @@ public class BacktestCoordinatorService {
             StrategyRequirements requirements,
             Map<String, BiasData> biasByStrategy,
             Map<String, IntervalContext> perStrategyContext,
-            Map<String, BigDecimal> allocationByStrategy
+            Map<String, StrategySizing> sizingByStrategy
     ) {
         IntervalContext ic = perStrategyContext.get(only.code());
         if (ic == null) return;
@@ -488,7 +490,7 @@ public class BacktestCoordinatorService {
         boolean strategyHasTrade = hasOpenTradeFor(state, only.code());
 
         AccountStrategy syntheticAs = buildSyntheticAccountStrategy(
-                backtestRun, only.code(), ic.interval(), allocationByStrategy);
+                backtestRun, only.code(), ic.interval(), sizingByStrategy);
         BiasData onlyBias = biasFor(biasByStrategy, only.code());
         EnrichedStrategyContext enrichedContext = buildAndEnrichContext(
                 backtestRun, state, ic.interval(), strategyCandle, strategyFeature,
@@ -651,8 +653,12 @@ public class BacktestCoordinatorService {
                 .executionMetadata(executionMetadata)
                 .cashBalance(state.getCashBalance())
                 .assetBalance(resolveSyntheticAssetBalanceForBacktest(state, strategyCandle))
-                .allowLong(resolveAllowLong(backtestRun))
-                .allowShort(resolveAllowShort(backtestRun))
+                // V58 — read direction flags from the per-strategy synthetic
+                // AS rather than re-deriving from the run-level scalar, so
+                // the enrichment context stays consistent with the AS the
+                // strategy will inspect.
+                .allowLong(syntheticAs != null ? syntheticAs.getAllowLong() : resolveAllowLong(backtestRun))
+                .allowShort(syntheticAs != null ? syntheticAs.getAllowShort() : resolveAllowShort(backtestRun))
                 .maxOpenPositions(resolveMaxOpenPositions(backtestRun))
                 .currentOpenTradeCount(hasOpenTrade ? 1 : 0)
                 .riskPerTradePct(backtestRun.getRiskPerTradePct())
@@ -1057,7 +1063,7 @@ public class BacktestCoordinatorService {
 
     private AccountStrategy buildSyntheticAccountStrategy(
             BacktestRun backtestRun, String strategyCode, String resolvedInterval,
-            Map<String, BigDecimal> allocationByStrategy
+            Map<String, StrategySizing> sizingByStrategy
     ) {
         UUID resolvedId = (backtestRun.getStrategyAccountStrategyIds() != null
                 && backtestRun.getStrategyAccountStrategyIds().containsKey(strategyCode))
@@ -1073,23 +1079,60 @@ public class BacktestCoordinatorService {
                 ? resolvedInterval
                 : backtestRun.getInterval();
 
-        // Capital allocation pre-resolved at run start (see
-        // resolveAllocationsForRun) — map-only lookup on the hot path.
-        BigDecimal allocation = (allocationByStrategy != null && strategyCode != null
-                && allocationByStrategy.containsKey(strategyCode))
-                ? allocationByStrategy.get(strategyCode)
-                : new BigDecimal("100");
+        // Sizing config pre-resolved at run start (see
+        // resolveStrategySizingForRun) — map-only lookup on the hot path.
+        // V55 carries the risk-based-sizing toggle + riskPct alongside
+        // allocation so the synthetic AS mirrors the live row's sizing
+        // model. Falls back to legacy 100% allocation + risk-based OFF when
+        // no entry exists (single-strategy legacy runs etc).
+        StrategySizing sizing = (sizingByStrategy != null && strategyCode != null
+                && sizingByStrategy.containsKey(strategyCode))
+                ? sizingByStrategy.get(strategyCode)
+                : StrategySizing.legacy(new BigDecimal("100"));
 
         return AccountStrategy.builder()
                 .accountStrategyId(resolvedId)
                 .strategyCode(strategyCode)
                 .intervalName(interval)
-                .allowLong(resolveAllowLong(backtestRun))
-                .allowShort(resolveAllowShort(backtestRun))
+                // V58 — direction flags now travel through StrategySizing,
+                // sourced per-strategy from the bound account_strategy (or
+                // the run-level fallback for ad-hoc spec strategies).
+                .allowLong(sizing.allowLong())
+                .allowShort(sizing.allowShort())
                 .maxOpenPositions(resolveMaxOpenPositions(backtestRun))
                 .enabled(Boolean.TRUE)
-                .capitalAllocationPct(allocation)
+                .capitalAllocationPct(sizing.allocationPct())
+                .useRiskBasedSizing(sizing.useRiskBasedSizing())
+                .riskPct(sizing.riskPct())
                 .build();
+    }
+
+    /**
+     * V55 — pre-resolved sizing config for one strategy in a backtest run.
+     * Bundles allocation (subject to wizard overrides) plus the risk-based
+     * sizing toggle and per-trade risk fraction (always read from the live
+     * row — wizard doesn't override these today). Plumbed end-to-end to
+     * {@link #buildSyntheticAccountStrategy} so the synthetic
+     * {@link AccountStrategy} the engine sees during backtest matches the
+     * sizing config of the live row that the operator is testing.
+     */
+    record StrategySizing(
+            BigDecimal allocationPct,
+            Boolean useRiskBasedSizing,
+            BigDecimal riskPct,
+            Boolean allowLong,
+            Boolean allowShort
+    ) {
+        static StrategySizing legacy(BigDecimal alloc) {
+            // Used when no persisted row backs the run (synthetic / pre-V55
+            // defaults). Risk-based path stays OFF so legacy behaviour is
+            // preserved when the operator hasn't opted in. Direction flags
+            // default permissive — the run-level allowLong/allowShort still
+            // act as the override layer for ad-hoc spec strategies that
+            // don't pin an account_strategy.
+            return new StrategySizing(alloc, Boolean.FALSE, new BigDecimal("0.0500"),
+                    Boolean.TRUE, Boolean.TRUE);
+        }
     }
 
     /**
@@ -1106,35 +1149,124 @@ public class BacktestCoordinatorService {
      * Strategy code matching is case-insensitive against the canonicalised
      * uppercase keys persisted by {@code BacktestService.canonicaliseAllocations}.
      *
-     * <p>Package-private for focused unit tests; see BacktestAllocationResolutionTest.
+     * <p>Package-private wrapper preserved for {@link
+     * BacktestAllocationResolutionTest}; production callers use
+     * {@link #resolveStrategySizingForRun} so the risk-sizing toggle / riskPct
+     * round-trip into the synthetic AccountStrategy.
      */
     Map<String, BigDecimal> resolveAllocationsForRun(
             BacktestRun backtestRun, List<StrategyExecutorEntry> executors
     ) {
-        Map<String, BigDecimal> wizardOverrides = backtestRun.getStrategyAllocations();
-        Map<String, UUID> idMap = backtestRun.getStrategyAccountStrategyIds();
+        Map<String, StrategySizing> full = resolveStrategySizingForRun(backtestRun, executors);
         Map<String, BigDecimal> out = new LinkedHashMap<>();
-
-        for (StrategyExecutorEntry entry : executors) {
-            String code = entry.code();
-            BigDecimal value = resolveAllocationForCode(code, wizardOverrides, idMap, backtestRun);
-            out.put(code, value);
-            log.debug("Resolved capital allocation | strategy={} pct={}", code, value);
+        for (Map.Entry<String, StrategySizing> e : full.entrySet()) {
+            out.put(e.getKey(), e.getValue().allocationPct());
         }
         return out;
     }
 
-    private BigDecimal resolveAllocationForCode(
-            String code,
-            Map<String, BigDecimal> wizardOverrides,
-            Map<String, UUID> idMap,
-            BacktestRun backtestRun
+    /**
+     * V55 — full per-strategy sizing config. Same lookup discipline as
+     * {@link #resolveAllocationsForRun} for allocation; additionally pulls
+     * {@code useRiskBasedSizing} + {@code riskPct} from the persisted row so
+     * the synthetic backtest {@link AccountStrategy} mirrors the live row's
+     * sizing model. When no persisted row resolves (single-strategy legacy
+     * runs etc), falls back to {@link StrategySizing#legacy(BigDecimal)} —
+     * risk-based OFF, matching pre-V55 behaviour.
+     */
+    Map<String, StrategySizing> resolveStrategySizingForRun(
+            BacktestRun backtestRun, List<StrategyExecutorEntry> executors
     ) {
-        BigDecimal override = resolveWizardOverride(wizardOverrides, code);
+        Map<String, BigDecimal> wizardOverrides = backtestRun.getStrategyAllocations();
+        Map<String, BigDecimal> wizardRiskOverrides = backtestRun.getStrategyRiskPcts();
+        // V58 — per-strategy direction overrides. Same lookup discipline as
+        // riskOverrides: wizard map wins when the key is present, otherwise
+        // fall through to the bound account_strategy's flag.
+        Map<String, Boolean> wizardAllowLongOverrides = backtestRun.getStrategyAllowLong();
+        Map<String, Boolean> wizardAllowShortOverrides = backtestRun.getStrategyAllowShort();
+        Map<String, UUID> idMap = backtestRun.getStrategyAccountStrategyIds();
+        Map<String, StrategySizing> out = new LinkedHashMap<>();
+
+        for (StrategyExecutorEntry entry : executors) {
+            String code = entry.code();
+            BigDecimal override = resolveWizardOverride(wizardOverrides, code);
+            BigDecimal riskOverride = resolveRiskOverride(wizardRiskOverrides, code);
+            Boolean allowLongOverride = resolveBoolOverride(wizardAllowLongOverrides, code);
+            Boolean allowShortOverride = resolveBoolOverride(wizardAllowShortOverrides, code);
+            AccountStrategy persisted = resolvePersistedAccountStrategy(idMap, code, backtestRun);
+
+            BigDecimal allocation = resolveAllocationPct(override, persisted);
+            Boolean allowLong = resolveEffectiveAllowLong(persisted, allowLongOverride, backtestRun);
+            Boolean allowShort = resolveEffectiveAllowShort(persisted, allowShortOverride, backtestRun);
+            StrategySizing sizing = buildSizingRecord(allocation, riskOverride, persisted, allowLong, allowShort);
+            out.put(code, sizing);
+            log.debug("Resolved sizing | strategy={} pct={} useRisk={} riskPct={} allowLong={} allowShort={}",
+                    code, sizing.allocationPct(),
+                    sizing.useRiskBasedSizing(), sizing.riskPct(),
+                    sizing.allowLong(), sizing.allowShort());
+        }
+        return out;
+    }
+
+    private BigDecimal resolveAllocationPct(BigDecimal override, AccountStrategy persisted) {
         if (override != null) return override;
-        BigDecimal persisted = resolvePersistedAllocation(idMap, code, backtestRun);
-        if (persisted != null) return persisted;
+        // Fix G — respect explicit zero from the persisted row.
+        if (persisted != null && persisted.getCapitalAllocationPct() != null) {
+            return persisted.getCapitalAllocationPct();
+        }
         return new BigDecimal("100");
+    }
+
+    private static Boolean defaultTrue(Boolean flag) {
+        return flag != null ? flag : Boolean.TRUE;
+    }
+
+    // Direction flags precedence: (1) wizard per-strategy override (V58 strategyAllowLong /
+    // strategyAllowShort), (2) bound account_strategy, (3) run-level flag (permissive
+    // fallback for ad-hoc specs that don't pin an account_strategy).
+    private Boolean resolveEffectiveAllowLong(AccountStrategy persisted, Boolean override, BacktestRun run) {
+        Boolean base = persisted != null ? defaultTrue(persisted.getAllowLong()) : resolveAllowLong(run);
+        return override != null ? override : base;
+    }
+
+    private Boolean resolveEffectiveAllowShort(AccountStrategy persisted, Boolean override, BacktestRun run) {
+        Boolean base = persisted != null ? defaultTrue(persisted.getAllowShort()) : resolveAllowShort(run);
+        return override != null ? override : base;
+    }
+
+    private StrategySizing buildSizingRecord(BigDecimal allocation, BigDecimal riskOverride,
+            AccountStrategy persisted, Boolean allowLong, Boolean allowShort) {
+        if (persisted == null) {
+            // No persisted row resolved. A wizard riskOverride is explicit operator
+            // intent — honour it even without a persisted anchor so it isn't dropped
+            // on ad-hoc runs that don't pin an account_strategy.
+            if (riskOverride != null) {
+                return new StrategySizing(allocation, Boolean.TRUE, riskOverride, allowLong, allowShort);
+            }
+            return StrategySizing.legacy(allocation);
+        }
+        Boolean useRisk = persisted.getUseRiskBasedSizing();
+        BigDecimal riskPct;
+        // V57 — wizard-level riskPct override wins and implicitly forces risk-based sizing on.
+        if (riskOverride != null) {
+            useRisk = Boolean.TRUE;
+            riskPct = riskOverride;
+        } else {
+            riskPct = persisted.getRiskPct() != null ? persisted.getRiskPct() : new BigDecimal("0.0500");
+        }
+        return new StrategySizing(
+                allocation, useRisk != null ? useRisk : Boolean.FALSE, riskPct, allowLong, allowShort);
+    }
+
+    /**
+     * V57 — wizard-level per-strategy riskPct override lookup. Mirrors
+     * {@link #resolveWizardOverride} for allocation: case-insensitive key
+     * match, drop non-positive values. Out-of-range values are filtered by
+     * {@code BacktestService.canonicaliseStrategyRiskPcts} upstream so we
+     * only see (0, 0.20] here.
+     */
+    private BigDecimal resolveRiskOverride(Map<String, BigDecimal> wizardOverrides, String code) {
+        return resolveWizardOverride(wizardOverrides, code);
     }
 
     private BigDecimal resolveWizardOverride(Map<String, BigDecimal> wizardOverrides, String code) {
@@ -1143,17 +1275,25 @@ public class BacktestCoordinatorService {
         return (override != null && override.signum() > 0) ? override : null;
     }
 
-    private BigDecimal resolvePersistedAllocation(
+    /**
+     * V58 — case-insensitive lookup for the per-strategy direction override
+     * maps. Returns {@code null} when the map doesn't carry a value for
+     * this strategy, signaling "no override → use the persisted AS flag".
+     * Boolean.FALSE is a valid override value (force direction off).
+     */
+    private Boolean resolveBoolOverride(Map<String, Boolean> wizardOverrides, String code) {
+        if (wizardOverrides == null || code == null) return false;
+        return wizardOverrides.get(code.toUpperCase());
+    }
+
+    private AccountStrategy resolvePersistedAccountStrategy(
             Map<String, UUID> idMap, String code, BacktestRun backtestRun
     ) {
         UUID resolvedId = (idMap != null && code != null && idMap.containsKey(code))
                 ? idMap.get(code)
                 : backtestRun.getAccountStrategyId();
         if (resolvedId == null) return null;
-        AccountStrategy persisted = accountStrategyRepository.findById(resolvedId).orElse(null);
-        // Fix G — respect explicit zero. Returns null only when the column was
-        // never set, not when the user deliberately set 0.
-        return (persisted == null) ? null : persisted.getCapitalAllocationPct();
+        return accountStrategyRepository.findById(resolvedId).orElse(null);
     }
 
     private void forceCloseRemainingOpenTrade(

@@ -155,7 +155,8 @@ public class VcbStrategyService implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notionalSize = strategyHelper.calculateEntryNotional(context, SIDE_LONG);
+        BigDecimal notionalSize = strategyHelper.calculateLongEntryNotional(
+                context, sizing.entry(), sizing.stop());
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Long notional size is zero");
         }
@@ -302,8 +303,10 @@ public class VcbStrategyService implements StrategyExecutor {
         }
 
         // SHORT spot orders sell base currency (BTC); executor compares against
-        // BTC balance. Use the BTC-denominated helper, not the USDT one.
-        BigDecimal positionSize = strategyHelper.calculateShortPositionSize(context);
+        // BTC balance. V55 — calculateShortEntryQty picks risk-based vs legacy
+        // allocation sizing based on the toggle, returning BTC qty for both.
+        BigDecimal positionSize = strategyHelper.calculateShortEntryQty(
+                context, sizing.entry(), sizing.stop());
         if (positionSize.compareTo(ZERO) <= 0) {
             return hold(context, "Short position size is zero");
         }

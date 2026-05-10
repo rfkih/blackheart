@@ -55,6 +55,7 @@ These classes live in the same package and trigger the catalog hook but are infr
 | `DefaultStrategyContextEnrichmentService` | `src/main/java/id/co/blackheart/service/strategy/DefaultStrategyContextEnrichmentService.java` | Enriches `BaseStrategyContext` with bias candle, feature store, regime/risk/volatility snapshots. |
 | `VcbStrategyParamService` | `src/main/java/id/co/blackheart/service/strategy/VcbStrategyParamService.java` | Reads, validates, and caches `VcbParams` for active VCB account-strategies. |
 | `VboStrategyParamService` | `src/main/java/id/co/blackheart/service/strategy/VboStrategyParamService.java` | Reads, validates, and caches `VboParams` for active VBO account-strategies. |
+| `StrategyHelper` | `src/main/java/id/co/blackheart/service/strategy/StrategyHelper.java` | Shared sizing helpers used by all legacy strategies (LSR/VCB/VBO/FundingCarry): `calculateLongEntryNotional`, `calculateShortEntryQty`, `calculateRiskBasedNotional`. Reads `account_strategy.use_risk_based_sizing` / `risk_pct` (V55+). |
 
 ## Adding a new strategy
 

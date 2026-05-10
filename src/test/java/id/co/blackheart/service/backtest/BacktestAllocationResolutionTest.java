@@ -19,7 +19,6 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -76,16 +75,18 @@ class BacktestAllocationResolutionTest {
         overrides.put("LSR", new BigDecimal("42"));   // wizard override
         run.setStrategyAllocations(overrides);
 
-        // Persistent value present but should be IGNORED in favour of override.
+        // Persistent allocation present but should be IGNORED in favour of override.
+        // V55 — even when override wins for allocation, the persisted row is
+        // still consulted because useRiskBasedSizing/riskPct have no wizard
+        // overrides; the DB is the single source of truth for those fields so
+        // the synthetic AccountStrategy mirrors the live row's sizing model.
         AccountStrategy persisted = new AccountStrategy();
         persisted.setCapitalAllocationPct(new BigDecimal("80"));
-        lenient().when(accountStrategyRepository.findById(any())).thenReturn(Optional.of(persisted));
+        when(accountStrategyRepository.findById(any())).thenReturn(Optional.of(persisted));
 
         Map<String, BigDecimal> resolved = coordinator.resolveAllocationsForRun(run, List.of(entry("LSR")));
 
         assertEquals(new BigDecimal("42"), resolved.get("LSR"));
-        // Cache discipline: when the override wins, we don't hit the DB.
-        verify(accountStrategyRepository, never()).findById(any());
     }
 
     @Test
@@ -210,5 +211,193 @@ class BacktestAllocationResolutionTest {
         Map<String, BigDecimal> resolved = coordinator.resolveAllocationsForRun(run, List.of(entry("GHOST")));
 
         assertEquals(new BigDecimal("17"), resolved.get("GHOST"));
+    }
+
+    // ── V55 — risk-based sizing propagation ─────────────────────────────────
+
+    @Test
+    void sizingResolverPropagatesRiskFieldsFromPersistedRow() {
+        UUID accountStrategyId = UUID.randomUUID();
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(accountStrategyId);
+
+        AccountStrategy persisted = new AccountStrategy();
+        persisted.setCapitalAllocationPct(new BigDecimal("60"));
+        persisted.setUseRiskBasedSizing(Boolean.TRUE);
+        persisted.setRiskPct(new BigDecimal("0.0300"));
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(persisted));
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(new BigDecimal("60"), s.allocationPct());
+        assertEquals(Boolean.TRUE, s.useRiskBasedSizing());
+        assertEquals(new BigDecimal("0.0300"), s.riskPct());
+    }
+
+    @Test
+    void sizingResolverPullsRiskFieldsEvenWhenWizardOverridesAllocation() {
+        // Critical V55 contract — the synthetic AS in backtest must mirror the
+        // live row's risk-based sizing toggle even when the wizard rewrites
+        // allocation. Otherwise the operator's backtest of a risk-based
+        // strategy would silently fall through to legacy direct sizing because
+        // the wizard-override path used to short-circuit the DB lookup.
+        UUID accountStrategyId = UUID.randomUUID();
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(accountStrategyId);
+        Map<String, BigDecimal> overrides = new LinkedHashMap<>();
+        overrides.put("LSR", new BigDecimal("42"));
+        run.setStrategyAllocations(overrides);
+
+        AccountStrategy persisted = new AccountStrategy();
+        persisted.setCapitalAllocationPct(new BigDecimal("80"));
+        persisted.setUseRiskBasedSizing(Boolean.TRUE);
+        persisted.setRiskPct(new BigDecimal("0.0500"));
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(persisted));
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(new BigDecimal("42"), s.allocationPct());        // wizard override wins
+        assertEquals(Boolean.TRUE, s.useRiskBasedSizing());            // pulled from persisted
+        assertEquals(new BigDecimal("0.0500"), s.riskPct());           // pulled from persisted
+    }
+
+    @Test
+    void sizingResolverDefaultsToLegacyWhenPersistedRowMissing() {
+        // No persisted row → legacy fallback (FALSE / 5%) so backtests on
+        // accounts without a DB-resident AccountStrategy preserve the pre-V55
+        // direct-allocation sizing path.
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(UUID.randomUUID());
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(Boolean.FALSE, s.useRiskBasedSizing());
+        assertEquals(new BigDecimal("0.0500"), s.riskPct());
+    }
+
+    @Test
+    void sizingResolverDefaultsNullToggleAndRiskFromPersistedRow() {
+        // Pre-V55 rows may have null in the new columns until the migration
+        // backfills them. Defensive: treat null as FALSE / 0.05 so we don't
+        // NPE in StrategyHelper.calculateLongEntryNotional.
+        UUID accountStrategyId = UUID.randomUUID();
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(accountStrategyId);
+
+        AccountStrategy persisted = new AccountStrategy();
+        persisted.setCapitalAllocationPct(new BigDecimal("40"));
+        // useRiskBasedSizing + riskPct intentionally null
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(persisted));
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("VCB")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("VCB");
+        assertEquals(new BigDecimal("40"), s.allocationPct());
+        assertEquals(Boolean.FALSE, s.useRiskBasedSizing());
+        assertEquals(new BigDecimal("0.0500"), s.riskPct());
+    }
+
+    // ── V57 — wizard riskPct override ───────────────────────────────────
+
+    @Test
+    void wizardRiskOverrideForcesRiskBasedSizingOnAndOverridesPersistedRiskPct() {
+        // V57 contract — setting strategyRiskPcts in the wizard payload
+        // explicitly overrides account_strategy.risk_pct AND forces
+        // useRiskBasedSizing on for that strategy in the run, even if
+        // the persisted toggle is off. Lets operators do "what if" risk
+        // comparisons without persistently flipping the live row.
+        UUID accountStrategyId = UUID.randomUUID();
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(accountStrategyId);
+        Map<String, BigDecimal> riskOverrides = new LinkedHashMap<>();
+        riskOverrides.put("LSR", new BigDecimal("0.0300"));
+        run.setStrategyRiskPcts(riskOverrides);
+
+        AccountStrategy persisted = new AccountStrategy();
+        persisted.setCapitalAllocationPct(new BigDecimal("50"));
+        persisted.setUseRiskBasedSizing(Boolean.FALSE);   // off persistently
+        persisted.setRiskPct(new BigDecimal("0.0500"));   // 5% persistently
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(persisted));
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(new BigDecimal("50"), s.allocationPct());
+        assertEquals(Boolean.TRUE, s.useRiskBasedSizing());          // forced on
+        assertEquals(new BigDecimal("0.0300"), s.riskPct());          // wizard wins
+    }
+
+    @Test
+    void wizardRiskOverrideMissingKeyFallsBackToPersistedRiskPct() {
+        // Strategies without an entry in strategyRiskPcts inherit the
+        // persisted risk_pct + persisted toggle as before.
+        UUID accountStrategyId = UUID.randomUUID();
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(accountStrategyId);
+        Map<String, BigDecimal> riskOverrides = new LinkedHashMap<>();
+        riskOverrides.put("LSR", new BigDecimal("0.0300"));
+        run.setStrategyRiskPcts(riskOverrides);
+
+        AccountStrategy persisted = new AccountStrategy();
+        persisted.setCapitalAllocationPct(new BigDecimal("60"));
+        persisted.setUseRiskBasedSizing(Boolean.TRUE);
+        persisted.setRiskPct(new BigDecimal("0.0200"));
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(persisted));
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("VCB")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("VCB");
+        assertEquals(new BigDecimal("60"), s.allocationPct());
+        assertEquals(Boolean.TRUE, s.useRiskBasedSizing());
+        assertEquals(new BigDecimal("0.0200"), s.riskPct());
+    }
+
+    @Test
+    void wizardRiskOverrideAppliesEvenWhenNoPersistedRowExists() {
+        // Audit fix — when no persisted row resolves (ad-hoc run with no
+        // accountStrategyId), the wizard riskOverride is still honoured
+        // rather than silently dropped. Before the fix, the legacy fallback
+        // path ignored riskOverride and fell back to direct allocation.
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(null);
+        Map<String, BigDecimal> riskOverrides = new LinkedHashMap<>();
+        riskOverrides.put("LSR", new BigDecimal("0.0400"));
+        run.setStrategyRiskPcts(riskOverrides);
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(Boolean.TRUE, s.useRiskBasedSizing());
+        assertEquals(new BigDecimal("0.0400"), s.riskPct());
+    }
+
+    @Test
+    void wizardRiskOverrideKeysAreCaseInsensitive() {
+        // Mirror of allocation override — wizard keys arrive uppercased
+        // by canonicaliseStrategyRiskPcts; executor codes can come in any
+        // case and still match.
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(UUID.randomUUID());
+        Map<String, BigDecimal> riskOverrides = new LinkedHashMap<>();
+        riskOverrides.put("LSR", new BigDecimal("0.0300"));
+        run.setStrategyRiskPcts(riskOverrides);
+
+        // Lowercase executor code — must still match the canonicalised key.
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("lsr")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("lsr");
+        assertEquals(Boolean.TRUE, s.useRiskBasedSizing());
+        assertEquals(new BigDecimal("0.0300"), s.riskPct());
     }
 }

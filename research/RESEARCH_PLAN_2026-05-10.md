@@ -1,63 +1,93 @@
-# Session 8 Research Plan — 2026-05-10
+# Session 9 Research Plan — 2026-05-10
 Strategy: 4th profitable strategy (>=10pct/yr net fees+20bps slippage, ROBUST walk-forward)
 
-## State on Entry (from journal + queue read)
-### Previously Tested (No Edge / Blocked)
-- DCB 4h: SIGNIFICANT_EDGE but WF NOT_ROBUST + slippage=-110. Dead.
-- DCB 1h: NO_EDGE (null-screen max PF=0.88)
-- MRO 1h: NO_EDGE (raw PF=0.13-0.35)
-- MRO 4h: NO_EDGE (max PF=1.25 n=34 insufficient)
-- TPR: ALL intervals frequency-starved (4h bias filter). DISCARDED.
-- TPB 1h: EDGE_PRESENT null-screen but frequency-starved (n=2-32). DISCARDED.
-- FCARRY: param bug (still blocked, operator action needed)
+## State on Entry
 
-### Major Session 8 Development: MMR UNBLOCKED
-MomentumMeanReversionEngine (archetype=momentum_mean_reversion) was BLOCKED in all prior sessions.
-This session: Created strategy_definition (a046eedf) + account_strategy rows (aa7dac0a for 1h, 6e74c1ec for 4h).
-MMR is now testable.
+### Outcomes From Session 8 (2026-05-09)
+- MMR UNBLOCKED: strategy_definition a046eedf, account_strategy aa7dac0a (1h), 6e74c1ec (4h)
+- MMR 1h null-screen: NO_EDGE_DETECTED (PF=0.46-0.59, all draws below 1.0) — ANTI_PATTERN d1a58e1a
+- MRO 15m null-screen: NO_EDGE_DETECTED (PF=0.23-0.33) — ANTI_PATTERN c16546df
+- DCB 15m null-screen: NO_EDGE_DETECTED (PF=0.52-0.68) — ANTI_PATTERN 89886914
 
-## Running Null-Screens (all submitted this session)
-1. DCB 15m: task bb1cae00w (4 draws, seed=42). Hypothesis: ffc87901.
-2. MRO 15m: task b33xphf5c (4 draws, seed=42). Hypothesis: 9191487e.
-3. MMR 1h:  task b8xblmobk (4 draws, seed=99). Hypothesis: 584bba80.
+### Cumulative Discard Table
+| Archetype/Interval | Verdict | Reason |
+|---|---|---|
+| DCB 4h BTCUSDT | NOT_ROBUST WF | Regime collapse 2025-2026; 2024 trend bias |
+| DCB 1h BTCUSDT | NO_EDGE | Null-screen max PF=0.88 |
+| DCB 15m BTCUSDT | NO_EDGE | Null-screen max PF=0.68 |
+| MRO 1h BTCUSDT | NO_EDGE | Null-screen PF<0.40 |
+| MRO 4h BTCUSDT | NO_EDGE | Null-screen max PF=1.25, n=34 insufficient |
+| MRO 15m BTCUSDT | NO_EDGE | Null-screen PF=0.23-0.33 |
+| MMR 1h BTCUSDT | NO_EDGE | Null-screen PF=0.46-0.59 |
+| TPB all intervals | DISCARD | Frequency-starved (n=2-32; requireBiasTimeframe=true) |
+| TPR all intervals | DISCARD | Frequency-starved (n=5-32 at any interval) |
+| FCARRY | BLOCKED | Java param bug (operator fix needed) |
 
-## Decision Branches (by priority)
+### Remaining Untested Combinations (BTCUSDT)
+1. **MMR 4h** — account_strategy 6e74c1ec exists; null-screen not run (highest priority)
+2. **MMR 5m** — high frequency, may have sufficient n but likely noisy
+3. **TPB 4h** — native 4h, no cross-TF conflict (still BLOCKED: no strategy_definition after DB reset)
+4. **DCB ETHUSDT** — BLOCKED (ETH feature_store empty)
 
-### MMR 1h (highest priority — new, unblocked, dual-directional)
-EDGE_PRESENT (P75>=1.2, share>=0.25):
-  - Request plan review with this plan
-  - Queue sweep: extremeAtrMult x rsiOversoldMax x stopAtrBuffer x minRewardRiskRatio
-  - Focused grid: [1.5,2.0,2.5] x [28,32] x [0.5,1.0] x [1.5,2.0] = 24 cells
-  - iter_budget=24, early_stop=true, require_walk_forward=true
+## Hypothesis Pre-Registration: MMR 4h BTCUSDT
 
-NO_EDGE:
-  - Journal ANTI_PATTERN for MMR 1h
-  - Try MMR 4h null-screen (4 draws) — 4h may have better RR for this mechanism
-  
-### DCB 15m (if EDGE_PRESENT)
-  - Request plan review
-  - Queue: adxEntryMin x rvolMin x tpR x stopAtrMult (4D grid)
-  - Sweep: [18,20,22,24] x [1.0,1.2,1.4] x [1.5,2.0,2.5] x [1.5,2.0] = 72 cells
-  - Focus on adxEntryMin=20-24 range (DCB 4h winner zone)
-  - Risk: 15m noisier than 4h; slippage will be larger issue at 15m
+**Hypothesis:** At 4h intervals, MomentumMeanReversionEngine fires on larger ATR displacements from EMA200. These are meaningful regime reversals rather than intraday noise. BTC's 4h structure produces ~15-40 ATR-extreme events/year that revert to EMA50 — enough for n>=80 over the 28-month backtest window. The 4h interval's larger average move per bar implies better RR, which may offset the lower frequency. The choppy 2025-2026 BTC market (flat EMA200) should increase mean-reversion frequency relative to 2024 trending regime. Dual-directional (long below EMA200, short above) provides regime neutrality.
 
-### MRO 15m (if EDGE_PRESENT)
-  - Request plan review
-  - Queue: rsiOversoldMax x rsiOverboughtMin x stopAtrBuffer x minRewardRiskRatio (4D)
-  
-### If ALL null-screens NO_EDGE
-  - Journal updated archetype exhaustion
-  - Remaining blockers: FCARRY (param bug), ETH backfill
-  - DATA_WISHLIST reminder: 
-    1. Fix FundingCarryStrategyService.java line 94 (param override bug)
-    2. Backfill ETHUSDT feature_store (0 rows currently)
-  - Continue with MMR 4h null-screen (still untested)
+**Mechanism:** close deviates >extremeAtrMult*ATR from EMA200 AND RSI<rsiOversoldMax (long) or RSI>rsiOverboughtMin (short). Exit target: EMA50. Stop: close +/- stopAtrBuffer*ATR. Minimum RR gate: minRewardRiskRatio.
 
-## Strategy Logic
-MMR is structurally the best remaining candidate because:
-1. EMA200-anchored ATR entry (different from all prior tested engines)
-2. No cross-TF bias filter (unlike TPR/TPB which were frequency-starved)
-3. Dual-directional (long+short): suits both trending and range-bound regimes
-4. 2025-2026 choppy BTC aligns with EMA200 mean-reversion dynamics
-5. EMA50 target = longer hold than MRO (EMA20) but shorter than DCB (distant TP)
+**Parameter axes for null-screen:**
+- extremeAtrMult: [1.5, 3.0] (controls entry selectivity — lower = more entries, higher = fewer but more extreme)
+- rsiOversoldMax: [25, 40] (RSI gate — wider = more entries)
+- stopAtrBuffer: [0.5, 1.5] (stop width)
+- minRewardRiskRatio: [1.5, 2.5] (RR gate)
 
+**Expected outcome:** EDGE_PRESENT or INCONCLUSIVE. Mechanism: 4h bars capture significant deviation events. If 1h (n=564-1015 per draw) showed PF<0.60, 4h (n=~30-150 per draw) may differ because: (1) larger absolute moves per deviation event, (2) EMA200 more stable at 4h = cleaner anchor, (3) less noise pollution.
+
+**Counter-argument (falsification):** If the mechanism itself (fade EMA200 deviation) has no edge regardless of timeframe, 4h will also fail. 1h null-screen PF=0.46-0.59 suggests the mechanism may be inherently weak on BTCUSDT.
+
+**Account strategy ID for 4h:** 6e74c1ec-a124-4e56-83c5-73131baf39c8
+
+## Experiment 1: MMR 4h Null-Screen (8 draws)
+
+**Pre-screen approach:**  
+POST /null-screen with n_draws=8, seed=42  
+Param ranges: extremeAtrMult=[1.5,3.0], rsiOversoldMax=[25,40], stopAtrBuffer=[0.5,1.5], minRewardRiskRatio=[1.5,2.5]  
+Account strategy: 6e74c1ec
+
+**Decision branches:**
+- EDGE_PRESENT (P75>=1.2 OR share_PF_ge_1.2>=0.25): Request plan review immediately, queue focused 4D grid sweep
+- INCONCLUSIVE: Queue small 8-cell confirmatory grid (extremeAtrMult x rsiOversoldMax x stopAtrBuffer x minRewardRiskRatio)
+- NO_EDGE_DETECTED: Journal ANTI_PATTERN for MMR 4h, pivot to Experiment 2
+
+## Experiment 2 (fallback if MMR 4h fails): DCB ETHUSDT 4h null-screen
+
+BLOCKED by ETH feature_store empty. If operator backfills ETH, this is the immediate next step.
+
+## Experiment 3 (fallback): MMR 5m BTCUSDT null-screen
+
+MMR at 5m would generate very high n (thousands of draws per year). Risk: 5m is noisier, slippage impacts larger, and the EMA200 signal is less meaningful at 5m granularity. PF likely to be sub-1.0. Low priority.
+
+## Experiment 4 (fallback): TPB 4h BTCUSDT null-screen
+
+BLOCKED: requires strategy_definition deployment (operator-only). If operator deploys TPB 4h spec: immediate null-screen with axes adxEntryMin, stopAtrBuffer, tp1R.
+
+## If all remaining untested combos yield NO_EDGE:
+
+Journal ARCHETYPE_EXHAUSTION_2026-05-10 with DATA_WISHLIST:
+1. ETH backfill (enables DCB/MRO/MMR/TPB on ETHUSDT)
+2. FCARRY Java fix (enables funding-rate carry)
+3. TPB 4h deploy (operator deploys spec)
+4. Consider new spec archetype: VBO-derivative with volume-profile entry gate
+
+## Constraints Reaffirmed
+- BTC/ETH only, intervals 5m/15m/1h/4h only
+- Production strategies LSR/VCB/VBO untouchable
+- 10%/yr net after fees+slippage mandatory bar
+- Research-mode only (no promote, no deploy)
+- Null-screen before full sweep (conserve DSR budget)
+- Pre-register hypothesis before any sweep
+
+## Decision Criteria for Next Session
+- MMR 4h EDGE_PRESENT: proceed to plan review + grid sweep
+- MMR 4h NO_EDGE: journal exhaustion update, await operator action
+- If operator has backfilled ETH by next session: immediately run null-screens on DCB/MRO/MMR ETHUSDT 4h

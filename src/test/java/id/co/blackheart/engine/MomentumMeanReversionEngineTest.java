@@ -112,7 +112,7 @@ class MomentumMeanReversionEngineTest {
         return StrategySpec.builder()
                 .strategyCode("MMR")
                 .strategyName("MMR")
-                .archetype(MomentumMeanReversionEngine.ARCHETYPE)
+                .archetype(MomentumMeanReversionEngine.ARCHETYPE_NAME)
                 .archetypeVersion(MomentumMeanReversionEngine.VERSION)
                 .specSchemaVersion(1)
                 .params(new HashMap<>())

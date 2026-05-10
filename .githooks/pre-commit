@@ -27,12 +27,21 @@ require_catalog() {
 
     if echo "$STAGED" | grep -qE "$code_pattern"; then
         if ! echo "$STAGED" | grep -qF "$catalog"; then
-            echo ""
-            echo "✗ Catalog out of date: $label"
-            echo "   touched code matching: $code_pattern"
-            echo "   needs entry in:        $catalog"
-            echo "   (stage the catalog edit in the same commit, or pass --no-verify with reason in PR)"
-            errors=$((errors + 1))
+            # Auto-stage the catalog when it has local modifications so IDE
+            # partial-commit workflows (which re-run git add with a fixed file
+            # list) don't force a manual re-add on every commit.
+            if ! git diff --quiet -- "$catalog" 2>/dev/null \
+               || ! git diff --cached --quiet -- "$catalog" 2>/dev/null; then
+                git add -- "$catalog"
+                echo "ℹ  Auto-staged $catalog"
+            else
+                echo ""
+                echo "✗ Catalog out of date: $label"
+                echo "   touched code matching: $code_pattern"
+                echo "   needs entry in:        $catalog"
+                echo "   (stage the catalog edit in the same commit, or pass --no-verify with reason in PR)"
+                errors=$((errors + 1))
+            fi
         fi
     fi
 }

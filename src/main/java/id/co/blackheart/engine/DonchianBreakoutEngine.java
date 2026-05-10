@@ -72,8 +72,9 @@ public class DonchianBreakoutEngine implements StrategyEngine {
     private static final BigDecimal DEFAULT_MAX_ENTRY_RISK_PCT = new BigDecimal("0.04");
     private static final int        DEFAULT_MAX_BARS_HELD      = 24;
     private static final int        DEFAULT_INTERVAL_MINUTES   = 60;
-    private static final boolean    DEFAULT_USE_RISK_SIZING    = true;
-    private static final BigDecimal DEFAULT_RISK_PCT           = new BigDecimal("0.02");
+    // V56 — useRiskBasedSizing/riskPct moved to account_strategy. Spec-body
+    // keys for these are no longer read; existing rows in spec_jsonb are
+    // ignored gracefully by paramBoolean/paramBigDecimal.
 
     private final StrategyHelper strategyHelper;
 
@@ -158,7 +159,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         BigDecimal maxAllowedRisk = entry.multiply(t.maxEntryRiskPct);
         if (riskPerUnit.compareTo(maxAllowedRisk) > 0) return null;
 
-        BigDecimal notional = resolveSize(ctx, SIDE_LONG, entry, stop, t);
+        BigDecimal notional = resolveSize(ctx, SIDE_LONG, entry, stop);
         if (notional.compareTo(ZERO) <= 0) return hold(spec, ctx, "DCB long notional zero");
 
         log.info("DCB[{}] LONG ENTRY | time={} close={} donchUpper={} rvol={} adx={} stop={} tp1={}",
@@ -209,7 +210,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         BigDecimal maxAllowedRisk = entry.multiply(t.maxEntryRiskPct);
         if (riskPerUnit.compareTo(maxAllowedRisk) > 0) return null;
 
-        BigDecimal positionSize = resolveSize(ctx, SIDE_SHORT, entry, stop, t);
+        BigDecimal positionSize = resolveSize(ctx, SIDE_SHORT, entry, stop);
         if (positionSize.compareTo(ZERO) <= 0) return hold(spec, ctx, "DCB short position size zero");
 
         log.info("DCB[{}] SHORT ENTRY | time={} close={} donchLower={} rvol={} adx={} stop={} tp1={}",
@@ -293,24 +294,20 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                 .build();
     }
 
+    /**
+     * V56 — sizing config sourced from {@code account_strategy} via the
+     * unified helpers. Pre-V56 this method ran its own risk math driven by
+     * spec body params ({@code t.useRiskBasedSizing} / {@code t.riskPct});
+     * those fields are now inert and the engine reads
+     * {@code account_strategy.use_risk_based_sizing} / {@code risk_pct} via
+     * {@link StrategyHelper#calculateLongEntryNotional} /
+     * {@link StrategyHelper#calculateShortEntryQty}.
+     */
     private BigDecimal resolveSize(EnrichedStrategyContext ctx, String side,
-                                   BigDecimal entry, BigDecimal stop, Tuning t) {
-        boolean isLong = SIDE_LONG.equalsIgnoreCase(side);
-        BigDecimal allocation = isLong
-                ? strategyHelper.calculateEntryNotional(ctx, SIDE_LONG)
-                : strategyHelper.calculateShortPositionSize(ctx);
-        if (!t.useRiskBasedSizing) return allocation;
-        BigDecimal cash = ctx.getCashBalance();
-        if (cash == null || cash.compareTo(ZERO) <= 0) return allocation;
-        BigDecimal riskPerUnit = isLong ? entry.subtract(stop) : stop.subtract(entry);
-        if (riskPerUnit.compareTo(ZERO) <= 0) return allocation;
-        BigDecimal riskAmount = cash.multiply(t.riskPct);
-        if (riskAmount.compareTo(ZERO) <= 0) return allocation;
-        BigDecimal qty = riskAmount.divide(riskPerUnit, 12, RoundingMode.DOWN);
-        BigDecimal candidate = isLong ? qty.multiply(entry).setScale(8, RoundingMode.HALF_UP)
-                                      : qty.setScale(8, RoundingMode.HALF_UP);
-        if (allocation.compareTo(ZERO) > 0 && candidate.compareTo(allocation) > 0) return allocation;
-        return candidate;
+                                   BigDecimal entry, BigDecimal stop) {
+        return SIDE_LONG.equalsIgnoreCase(side)
+                ? strategyHelper.calculateLongEntryNotional(ctx, entry, stop)
+                : strategyHelper.calculateShortEntryQty(ctx, entry, stop);
     }
 
     private StrategyDecision.StrategyDecisionBuilder baseBuilder(StrategySpec spec, EnrichedStrategyContext ctx) {
@@ -364,8 +361,6 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         final BigDecimal maxEntryRiskPct;
         final int maxBarsHeld;
         final int intervalMinutes;
-        final boolean useRiskBasedSizing;
-        final BigDecimal riskPct;
 
         private Tuning(StrategySpec s) {
             this.rvolMin            = s.paramBigDecimal("rvolMin", DEFAULT_RVOL_MIN);
@@ -376,8 +371,6 @@ public class DonchianBreakoutEngine implements StrategyEngine {
             this.maxEntryRiskPct    = s.paramBigDecimal("maxEntryRiskPct", DEFAULT_MAX_ENTRY_RISK_PCT);
             this.maxBarsHeld        = s.paramInteger("maxBarsHeld", DEFAULT_MAX_BARS_HELD);
             this.intervalMinutes    = s.paramInteger("intervalMinutes", DEFAULT_INTERVAL_MINUTES);
-            this.useRiskBasedSizing = s.paramBoolean("useRiskBasedSizing", DEFAULT_USE_RISK_SIZING);
-            this.riskPct            = s.paramBigDecimal("riskPct", DEFAULT_RISK_PCT);
         }
 
         static Tuning from(StrategySpec spec) {

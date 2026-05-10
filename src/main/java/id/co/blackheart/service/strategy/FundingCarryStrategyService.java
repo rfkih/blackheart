@@ -168,7 +168,7 @@ public class FundingCarryStrategyService implements StrategyExecutor {
         BigDecimal stop = close.subtract(atr.multiply(p.getAtrStopMult()));
         if (stop.compareTo(ZERO) <= 0) return null;
 
-        BigDecimal notional = strategyHelper.calculateEntryNotional(ctx, SIDE_LONG);
+        BigDecimal notional = strategyHelper.calculateLongEntryNotional(ctx, close, stop);
         if (notional.compareTo(ZERO) <= 0) return hold(ctx, "FCARRY long notional zero");
 
         log.info("FCARRY LONG ENTRY | time={} close={} z={} rate8h={} stop={}",
@@ -230,7 +230,7 @@ public class FundingCarryStrategyService implements StrategyExecutor {
         BigDecimal atr = resolveAtr(f);
         BigDecimal stop = close.add(atr.multiply(p.getAtrStopMult()));
 
-        BigDecimal positionSize = strategyHelper.calculateShortPositionSize(ctx);
+        BigDecimal positionSize = strategyHelper.calculateShortEntryQty(ctx, close, stop);
         if (positionSize.compareTo(ZERO) <= 0) return hold(ctx, "FCARRY short position size zero");
 
         log.info("FCARRY SHORT ENTRY | time={} close={} z={} rate8h={} stop={}",

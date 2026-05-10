@@ -266,7 +266,7 @@ public class LsrStrategyService implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notionalSize = strategyHelper.calculateEntryNotional(context, SIDE_LONG);
+        BigDecimal notionalSize = strategyHelper.calculateLongEntryNotional(context, entryPrice, stopLoss);
         if (notionalSize.compareTo(ZERO) <= 0) {
             return hold(context, "Long sweep notional size is zero");
         }
@@ -365,7 +365,7 @@ public class LsrStrategyService implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal baseNotional = strategyHelper.calculateEntryNotional(context, SIDE_LONG);
+        BigDecimal baseNotional = strategyHelper.calculateLongEntryNotional(context, entryPrice, stopLoss);
         BigDecimal notionalSize = baseNotional.multiply(p.getLongContinuationNotionalMultiplier()).setScale(8, RoundingMode.HALF_UP);
 
         if (notionalSize.compareTo(ZERO) <= 0) {
@@ -462,10 +462,11 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         // SHORT entries on Binance spot sell base currency (BTC) — the executor
-        // reads `positionSize` and matches against the BTC balance. Use the
-        // BTC-denominated helper, not `calculateEntryNotional` which returns
-        // USDT and would silently undershoot the balance check.
-        BigDecimal basePositionSize = strategyHelper.calculateShortPositionSize(context);
+        // reads `positionSize` and matches against the BTC balance. The
+        // BTC-denominated helper handles both legacy direct-allocation and the
+        // V55 risk-based path (BTC qty derived from cash × riskPct / stopDist,
+        // capped by asset inventory).
+        BigDecimal basePositionSize = strategyHelper.calculateShortEntryQty(context, entryPrice, stopLoss);
         BigDecimal positionSize = basePositionSize.multiply(p.getShortNotionalMultiplier()).setScale(8, RoundingMode.HALF_UP);
 
         if (positionSize.compareTo(ZERO) <= 0) {

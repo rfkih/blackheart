@@ -26,6 +26,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -200,6 +201,17 @@ public class AccountStrategyService {
         // builder default).
         String visibility = isResearchAgentAccount(account) ? "PUBLIC" : "PRIVATE";
 
+        // V55 — new presets default to risk-based sizing ON so the platform
+        // pushes operators onto the unified risk model. The user can flip the
+        // toggle off explicitly via the request, and existing rows (created
+        // pre-V55) keep the migration's FALSE default.
+        Boolean useRiskSizing = req.getUseRiskBasedSizing() != null
+                ? req.getUseRiskBasedSizing()
+                : Boolean.TRUE;
+        BigDecimal riskPct = req.getRiskPct() != null
+                ? req.getRiskPct()
+                : new BigDecimal("0.0500");
+
         AccountStrategy entity = AccountStrategy.builder()
                 .accountStrategyId(UUID.randomUUID())
                 .accountId(account.getAccountId())
@@ -219,6 +231,8 @@ public class AccountStrategyService {
                 .isDeleted(false)
                 .deletedAt(null)
                 .visibility(visibility)
+                .useRiskBasedSizing(useRiskSizing)
+                .riskPct(riskPct)
                 .build();
 
         AccountStrategy saved = accountStrategyRepository.save(entity);
@@ -395,6 +409,7 @@ public class AccountStrategyService {
         dirty |= applyPriorityOrderChange(strategy, req);
         dirty |= applyRegimeGateChange(strategy, req);
         dirty |= applyKellyChange(strategy, req);
+        dirty |= applyRiskSizingChange(strategy, req);
 
         if (!dirty) {
             return toResponse(strategy);
@@ -490,6 +505,26 @@ public class AccountStrategyService {
         return dirty;
     }
 
+    // V55 — risk-based sizing toggle + per-trade risk fraction.
+    private boolean applyRiskSizingChange(AccountStrategy strategy, UpdateAccountStrategyRequest req) {
+        boolean dirty = false;
+        if (req.getUseRiskBasedSizing() != null
+                && !req.getUseRiskBasedSizing().equals(strategy.getUseRiskBasedSizing())) {
+            strategy.setUseRiskBasedSizing(req.getUseRiskBasedSizing());
+            dirty = true;
+            log.info("Updated strategy id={} useRiskBasedSizing -> {}",
+                    strategy.getAccountStrategyId(), req.getUseRiskBasedSizing());
+        }
+        if (req.getRiskPct() != null
+                && req.getRiskPct().compareTo(strategy.getRiskPct()) != 0) {
+            strategy.setRiskPct(req.getRiskPct());
+            dirty = true;
+            log.info("Updated strategy id={} riskPct -> {}",
+                    strategy.getAccountStrategyId(), req.getRiskPct());
+        }
+        return dirty;
+    }
+
     /**
      * Lightweight before/after snapshot of the editable fields. Avoids
      * dragging the full entity (including non-serializable JPA lazy refs)
@@ -503,7 +538,9 @@ public class AccountStrategyService {
             String allowedTrendRegimes,
             String allowedVolatilityRegimes,
             Boolean kellySizingEnabled,
-            java.math.BigDecimal kellyMaxFraction
+            BigDecimal kellyMaxFraction,
+            Boolean useRiskBasedSizing,
+            BigDecimal riskPct
     ) {
         static AccountStrategySnapshot of(AccountStrategy s) {
             return new AccountStrategySnapshot(
@@ -514,7 +551,9 @@ public class AccountStrategyService {
                     s.getAllowedTrendRegimes(),
                     s.getAllowedVolatilityRegimes(),
                     s.getKellySizingEnabled(),
-                    s.getKellyMaxFraction()
+                    s.getKellyMaxFraction(),
+                    s.getUseRiskBasedSizing(),
+                    s.getRiskPct()
             );
         }
     }
@@ -681,6 +720,8 @@ public class AccountStrategyService {
                 .allowedVolatilityRegimes(s.getAllowedVolatilityRegimes())
                 .kellySizingEnabled(s.getKellySizingEnabled())
                 .kellyMaxFraction(s.getKellyMaxFraction())
+                .useRiskBasedSizing(s.getUseRiskBasedSizing())
+                .riskPct(s.getRiskPct())
                 .visibility(s.getVisibility())
                 .ownedByCurrentUser(owned)
                 .ownerLabel(ownerLabel)

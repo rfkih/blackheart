@@ -1,6 +1,7 @@
 package id.co.blackheart.service.strategy;
 
 import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
+import id.co.blackheart.model.AccountStrategy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -150,6 +151,13 @@ public class StrategyHelper {
             BigDecimal maxAllocationPct) {
         if (!hasValidRiskInputs(context, entryPrice, stopLossPrice, riskPct)) return ZERO;
 
+        // LONG: stop must be strictly below entry. Strategies validate this
+        // upstream (riskPerUnit > 0), but a wrong-sided stop slipping through
+        // would compute a positive notional via |entry − stop| and open a
+        // guaranteed-loss trade. Defense in depth — return ZERO so the
+        // strategy holds.
+        if (stopLossPrice.compareTo(entryPrice) >= 0) return ZERO;
+
         BigDecimal stopDistance = entryPrice.subtract(stopLossPrice).abs();
         if (stopDistance.signum() <= 0) return ZERO;
         BigDecimal stopDistancePct = stopDistance.divide(entryPrice, 8, RoundingMode.HALF_UP);
@@ -207,6 +215,140 @@ public class StrategyHelper {
                     + "will produce identical results above 1.0 until futures-leverage "
                     + "support lands. Suppressing further occurrences.", capFraction);
         }
+    }
+
+    /**
+     * V55 — unified LONG-entry sizing.
+     *
+     * <p><b>Picker semantics</b>:
+     * <ul>
+     *   <li>Toggle <b>off</b> → legacy {@link #calculateEntryNotional}
+     *       (allocation-as-direct-size).</li>
+     *   <li>Toggle <b>on</b> but {@code riskPct} unset/non-positive → also
+     *       falls back to legacy. The toggle alone isn't enough to commit to
+     *       risk-based math; treat half-configured rows as a config gap, not
+     *       a "hold every trade" signal.</li>
+     *   <li>Toggle <b>on</b> AND {@code riskPct} valid → strict risk-based
+     *       sizing. ZERO from {@link #calculateRiskBasedNotional} means the
+     *       strategy must HOLD — degenerate stop, no cash, wrong-sided stop,
+     *       missing inventory, etc. We do NOT fall back to legacy here:
+     *       silently sizing a full-allocation position when the operator
+     *       opted into controlled risk would defeat the toggle's intent.</li>
+     * </ul>
+     *
+     * <p>Used by legacy strategies (LSR / VCB / VBO / FundingCarry). SHORT
+     * counterpart is {@link #calculateShortEntryQty}. Spec-driven engines
+     * (DCB / MMR / MRO / TPR) carry their own risk config in spec body params
+     * and don't read this toggle — the frontend hides the input for them.
+     */
+    public BigDecimal calculateLongEntryNotional(EnrichedStrategyContext context,
+                                                 BigDecimal entryPrice,
+                                                 BigDecimal stopLossPrice) {
+        AccountStrategy as = context == null ? null : context.getAccountStrategy();
+        boolean toggleOn = as != null && Boolean.TRUE.equals(as.getUseRiskBasedSizing());
+        boolean riskPctSet = as != null
+                && as.getRiskPct() != null
+                && as.getRiskPct().signum() > 0;
+        if (!toggleOn || !riskPctSet) {
+            return calculateEntryNotional(context, SIDE_LONG);
+        }
+        return calculateRiskBasedNotional(
+                context, entryPrice, stopLossPrice, as.getRiskPct(), /*maxAllocationPct=*/null);
+    }
+
+    /**
+     * V55 — unified SHORT-entry sizing (BTC qty). When the strategy has
+     * {@code useRiskBasedSizing = TRUE} and a positive {@code riskPct}, sizes
+     * via {@link #calculateRiskBasedShortQty} (BTC qty derived from a
+     * cash-denominated risk budget × stop distance, capped by inventory).
+     * Otherwise falls through to {@link #calculateShortPositionSize} (legacy
+     * allocation-as-direct-fraction).
+     *
+     * <p>Symmetric with {@link #calculateLongEntryNotional}: same risk budget
+     * basis ({@code cashBalance × riskPct}), same stop-distance derivation;
+     * only the output unit and the cap basis differ — LONG returns USDT
+     * notional capped by cash, SHORT returns BTC qty capped by asset balance
+     * (which is the synthetic cash-equivalent BTC in backtest mode, so the
+     * cap meaning is preserved across live + backtest).
+     *
+     * <p>Falls back to legacy sizing on ZERO output (degenerate stop, missing
+     * inventory) — same defensive pattern as the LONG path.
+     */
+    public BigDecimal calculateShortEntryQty(EnrichedStrategyContext context,
+                                             BigDecimal entryPrice,
+                                             BigDecimal stopLossPrice) {
+        AccountStrategy as = context == null ? null : context.getAccountStrategy();
+        boolean toggleOn = as != null && Boolean.TRUE.equals(as.getUseRiskBasedSizing());
+        boolean riskPctSet = as != null
+                && as.getRiskPct() != null
+                && as.getRiskPct().signum() > 0;
+        // Same picker semantics as calculateLongEntryNotional — fall back to
+        // legacy only when config is incomplete (toggle off or riskPct unset).
+        // When the operator opted in fully, ZERO from the risk math means
+        // HOLD; falling back to legacy on a cash=0 SHORT would over-trade
+        // the full BTC inventory, defeating the controlled-risk intent.
+        if (!toggleOn || !riskPctSet) {
+            return calculateShortPositionSize(context);
+        }
+        return calculateRiskBasedShortQty(
+                context, entryPrice, stopLossPrice, as.getRiskPct(), /*maxAllocationPct=*/null);
+    }
+
+    /**
+     * V55 — risk-based SHORT sizing in BTC qty. Mirror of
+     * {@link #calculateRiskBasedNotional} but projects to a coin quantity
+     * because spot SHORT executors match {@code positionSize} (BTC) against
+     * the asset balance.
+     *
+     * <pre>
+     *   stopDistance = |entry − stop|                       (USDT per BTC)
+     *   idealQtyBtc  = cashBalance × riskPct / stopDistance (BTC qty)
+     *   capQtyBtc    = assetBalance × min(maxAlloc, 1.0)    (inventory cap)
+     *   qty          = min(idealQtyBtc, capQtyBtc)
+     * </pre>
+     *
+     * <p>The risk budget is denominated in cashBalance × riskPct (same as
+     * LONG) — symmetric across sides. In backtest mode, {@code assetBalance}
+     * is the synthetic {@code cashBalance / price} populated by the
+     * coordinator; in live spot mode it is the real BTC inventory. Either
+     * way the cap fraction acts as a hard ceiling on how much of "what we
+     * could short" we actually deploy.
+     *
+     * <p>Returns ZERO on degenerate inputs (null context / non-positive
+     * risk / missing inventory / stop=entry); callers fall back to legacy
+     * sizing rather than killing the trade.
+     */
+    public BigDecimal calculateRiskBasedShortQty(
+            EnrichedStrategyContext context,
+            BigDecimal entryPrice,
+            BigDecimal stopLossPrice,
+            BigDecimal riskPct,
+            BigDecimal maxAllocationPct) {
+        if (!hasValidRiskInputs(context, entryPrice, stopLossPrice, riskPct)) return ZERO;
+
+        // SHORT: stop must be strictly above entry. Mirror of the LONG
+        // side-correctness guard — a wrong-sided stop here would also size
+        // a guaranteed-loss trade off the |entry − stop| math. Return ZERO
+        // so the strategy holds.
+        if (stopLossPrice.compareTo(entryPrice) <= 0) return ZERO;
+
+        BigDecimal stopDistance = stopLossPrice.subtract(entryPrice).abs();
+        if (stopDistance.signum() <= 0) return ZERO;
+
+        BigDecimal cash = safe(context.getCashBalance());
+        if (cash.signum() <= 0) return ZERO;
+
+        BigDecimal idealQty = cash.multiply(riskPct)
+                .divide(stopDistance, 8, RoundingMode.HALF_UP);
+
+        BigDecimal capFraction = resolveCapFraction(context, maxAllocationPct);
+        if (capFraction.signum() <= 0) return ZERO;
+
+        BigDecimal assetBalance = context.getAssetBalance();
+        if (assetBalance == null || assetBalance.signum() <= 0) return ZERO;
+        BigDecimal capQty = assetBalance.multiply(capFraction);
+
+        return idealQty.min(capQty).setScale(8, RoundingMode.HALF_UP);
     }
 
     /**

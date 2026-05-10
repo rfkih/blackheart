@@ -57,34 +57,36 @@ public class AccountStrategyCloneService {
 
         Account target = resolveTargetAccount(userId, targetAccountId);
 
-        // Same-tuple guard. The unique constraint on
+        // Same-tuple lookup. The unique constraint on
         // (account_id, strategy_definition_id, symbol, interval_name) is NOT
-        // partial — soft-deleted rows still occupy the slot. So we look up
-        // *including* soft-deleted and branch on which case we hit:
-        //   - active duplicate  → 409, "delete the existing one"
-        //   - soft-deleted only → 409, "previously deleted, restore it"
-        // Without the soft-deleted branch, the INSERT would trip a
-        // DataIntegrityViolation and the user gets a generic 500.
-        accountStrategyRepository
+        // partial — soft-deleted rows still occupy the slot. Branch on which
+        // case we hit:
+        //   - active duplicate  → 409, the user must delete the existing one
+        //                          first (we don't silently overwrite a row
+        //                          that may be running / have open trades).
+        //   - soft-deleted only → seamless re-clone path: revive the row in
+        //                          place, overwrite its config from the
+        //                          source, and replace the active preset.
+        //                          Preserves the original account_strategy_id
+        //                          so historical trade attribution stays
+        //                          intact, and the user sees a normal
+        //                          successful clone instead of an error.
+        AccountStrategy existing = accountStrategyRepository
                 .findByUniqueKeyIncludingDeleted(target.getAccountId(), source.getStrategyDefinitionId(),
                         source.getSymbol(), source.getIntervalName())
-                .ifPresent(existing -> {
-                    if (Boolean.TRUE.equals(existing.getIsDeleted())) {
-                        throw new IllegalStateException(
-                                "You previously had a strategy for "
-                                        + source.getStrategyCode() + " "
-                                        + source.getSymbol() + " "
-                                        + source.getIntervalName()
-                                        + " on this account and deleted it. Restore the existing row "
-                                        + "instead of cloning a fresh one.");
-                    }
-                    throw new IllegalStateException(
-                            "You already have a strategy for "
-                                    + source.getStrategyCode() + " "
-                                    + source.getSymbol() + " "
-                                    + source.getIntervalName()
-                                    + " on this account. Delete the existing one before cloning.");
-                });
+                .orElse(null);
+
+        if (existing != null && !Boolean.TRUE.equals(existing.getIsDeleted())) {
+            throw new IllegalStateException(
+                    "You already have a strategy for "
+                            + source.getStrategyCode() + " "
+                            + source.getSymbol() + " "
+                            + source.getIntervalName()
+                            + " on this account. Delete the existing one before cloning.");
+        }
+        if (existing != null) {
+            return reviveAndRecloneInto(existing, source, target, createdBy, userId);
+        }
 
         Integer maxPriority = accountStrategyRepository.findMaxPriorityOrderByAccountId(target.getAccountId());
         int newPriority = (maxPriority == null ? 0 : maxPriority) + 1;
@@ -113,6 +115,8 @@ public class AccountStrategyCloneService {
                 .allowedVolatilityRegimes(source.getAllowedVolatilityRegimes())
                 .kellySizingEnabled(source.getKellySizingEnabled())
                 .kellyMaxFraction(source.getKellyMaxFraction())
+                .useRiskBasedSizing(source.getUseRiskBasedSizing())
+                .riskPct(source.getRiskPct())
                 .visibility("PRIVATE")
                 .build();
         clone.setCreatedBy(createdBy);
@@ -137,6 +141,93 @@ public class AccountStrategyCloneService {
                 cloneSourceSnapshot(source),
                 saved);
         return saved.getAccountStrategyId();
+    }
+
+    /**
+     * Seamless re-clone: the destination tuple already has a soft-deleted row,
+     * so revive it in place rather than failing with a "previously deleted"
+     * conflict. Preserves the original {@code account_strategy_id} (so any
+     * historical trades / paper-trade runs / audit rows linked to it stay
+     * resolvable), but overwrites the row's mutable config from the source
+     * and replaces the active strategy_param preset. Resets the row to the
+     * same safe-by-default shape a fresh clone would land in: PRIVATE,
+     * disabled, simulated, STOPPED, kill-switch cleared, priority pushed to
+     * the bottom of the user's list.
+     */
+    private UUID reviveAndRecloneInto(AccountStrategy revived, AccountStrategy source,
+                                      Account target, String createdBy, UUID userId) {
+        RevivedSnapshot beforeSnapshot = snapshotForAudit(revived);
+
+        Integer maxPriority = accountStrategyRepository.findMaxPriorityOrderByAccountId(target.getAccountId());
+        int newPriority = (maxPriority == null ? 0 : maxPriority) + 1;
+
+        revived.setIsDeleted(false);
+        revived.setDeletedAt(null);
+        revived.setStrategyCode(source.getStrategyCode());
+        revived.setPresetName(derivePresetName(source));
+        revived.setEnabled(false);
+        revived.setSimulated(true);
+        revived.setAllowLong(source.getAllowLong());
+        revived.setAllowShort(source.getAllowShort());
+        revived.setMaxOpenPositions(source.getMaxOpenPositions());
+        revived.setCapitalAllocationPct(source.getCapitalAllocationPct());
+        revived.setPriorityOrder(newPriority);
+        revived.setCurrentStatus("STOPPED");
+        revived.setDdKillThresholdPct(source.getDdKillThresholdPct());
+        revived.setIsKillSwitchTripped(false);
+        revived.setKillSwitchTrippedAt(null);
+        revived.setKillSwitchReason(null);
+        revived.setRegimeGateEnabled(source.getRegimeGateEnabled());
+        revived.setAllowedTrendRegimes(source.getAllowedTrendRegimes());
+        revived.setAllowedVolatilityRegimes(source.getAllowedVolatilityRegimes());
+        revived.setKellySizingEnabled(source.getKellySizingEnabled());
+        revived.setKellyMaxFraction(source.getKellyMaxFraction());
+        revived.setUseRiskBasedSizing(source.getUseRiskBasedSizing());
+        revived.setRiskPct(source.getRiskPct());
+        revived.setVisibility("PRIVATE");
+        revived.setUpdatedBy(createdBy);
+        AccountStrategy saved = accountStrategyRepository.save(revived);
+
+        // Replace the active preset with the source's. StrategyParamService.create
+        // deactivates any prior active preset on the same account_strategy_id
+        // before flagging the new row as active, so the revived row's stale
+        // active preset (from before deletion) is naturally retired.
+        copyActivePreset(source.getAccountStrategyId(), saved.getAccountStrategyId(), createdBy);
+
+        log.info("Revived + re-cloned account_strategy id={} from source={} targetAccount={} userId={}",
+                saved.getAccountStrategyId(), source.getAccountStrategyId(),
+                target.getAccountId(), userId);
+        auditService.recordEvent(userId, "STRATEGY_RESTORED_AND_RECLONED", "AccountStrategy",
+                saved.getAccountStrategyId(),
+                beforeSnapshot,
+                saved);
+        return saved.getAccountStrategyId();
+    }
+
+    /** Minimal pre-mutation snapshot for audit. Avoids recording the
+     *  full live entity reference (which Hibernate would mutate after save,
+     *  giving the audit a misleading "before" payload). */
+    private record RevivedSnapshot(
+            UUID accountStrategyId,
+            String strategyCode,
+            String symbol,
+            String intervalName,
+            String presetName,
+            Boolean isDeleted,
+            String currentStatus,
+            Integer priorityOrder
+    ) {}
+
+    private RevivedSnapshot snapshotForAudit(AccountStrategy s) {
+        return new RevivedSnapshot(
+                s.getAccountStrategyId(),
+                s.getStrategyCode(),
+                s.getSymbol(),
+                s.getIntervalName(),
+                s.getPresetName(),
+                s.getIsDeleted(),
+                s.getCurrentStatus(),
+                s.getPriorityOrder());
     }
 
     /** Minimal, non-leaking snapshot of the clone source — just enough to

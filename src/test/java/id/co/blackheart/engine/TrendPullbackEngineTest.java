@@ -113,68 +113,65 @@ class TrendPullbackEngineTest {
         assertTrue(d.getTags().contains("BREAK_EVEN"));
     }
 
-    // ── Risk-based sizing + fallback chain (V2) ──────────────────────────
+    // ── Risk-based sizing + fallback chain (V2 → V56) ───────────────────
 
     /**
-     * Risk-based sizing default: spec params {@code {}} → engine reads
-     * {@code D_RISK_PER_TRADE_PCT=0.02}, {@code D_MAX_ALLOCATION_PCT=1.00}.
-     * Long-entry fixture has stop ~0.21% wide; ideal = 10000 × 0.02 / 0.0021
-     * exceeds 100% cap → notional saturates at cashBalance × 1.0 = 10000.
+     * V56 — risk-based sizing on, fixture {@code capitalAllocationPct=100,
+     * riskPct=0.02}: stop ~0.21% wide → ideal = 10000 × 0.02 / 0.0021 ≫ cap.
+     * Cap binds at {@code cashBalance × 1.0 = 10000} USDT.
      */
     @Test
     void longEntry_defaultRiskBasedSizing_saturatesAt100pctCap() {
-        EnrichedStrategyContext ctx = longEntryContext();
+        EnrichedStrategyContext ctx = longEntryContextWithRiskBased(
+                /*allocPct=*/new BigDecimal("100"), /*riskPct=*/new BigDecimal("0.0200"));
         StrategyDecision d = engine.evaluate(spec(), ctx);
 
         assertEquals(DecisionType.OPEN_LONG, d.getDecisionType());
-        assertBdEq("10000", d.getNotionalSize());   // cashBalance × 1.0 cap
+        assertBdEq("10000", d.getNotionalSize());
     }
 
     /**
-     * Fallback chain: when spec sets {@code riskPerTradePct=0} the helper
-     * returns ZERO and the engine must fall through to
-     * {@code calculateEntryNotional}. With cashBalance=10000 and
-     * capitalAllocationPct=50, expected notional = 5000.
+     * V56 — toggle off, fixture allocation 50%: legacy direct-allocation
+     * sizing returns {@code cashBalance × 0.50 = 5000}. Pre-V56 the same
+     * fallback was triggered by setting {@code riskPerTradePct=0} on the
+     * spec; post-V56 the operator switches sizing modes via the
+     * account_strategy toggle.
      */
     @Test
-    void longEntry_riskPerTradeDisabled_fallsBackToLegacyNotional() {
-        StrategySpec withDisabledRisk = specWithParams(Map.of(
-                "riskPerTradePct", BigDecimal.ZERO));
-        EnrichedStrategyContext ctx = longEntryContext();
-        StrategyDecision d = engine.evaluate(withDisabledRisk, ctx);
+    void longEntry_toggleOff_fallsBackToLegacyNotional() {
+        EnrichedStrategyContext ctx = longEntryContext();   // useRiskBasedSizing=false, alloc=50
+        StrategyDecision d = engine.evaluate(spec(), ctx);
 
         assertEquals(DecisionType.OPEN_LONG, d.getDecisionType());
-        assertBdEq("5000", d.getNotionalSize());   // 10000 × 50% legacy alloc
+        assertBdEq("5000", d.getNotionalSize());
     }
 
     /**
-     * SHORT fallback: when {@code riskPerTradePct=0} the engine falls back
-     * to {@code calculateShortPositionSize}, which returns
+     * V56 SHORT — toggle off → {@code calculateShortPositionSize} returns
      * {@code assetBalance × allocFraction = 0.1 × 0.50 = 0.05} BTC.
      */
     @Test
-    void shortEntry_riskPerTradeDisabled_fallsBackToLegacyPositionSize() {
-        StrategySpec withDisabledRisk = specWithParams(Map.of(
-                "riskPerTradePct", BigDecimal.ZERO));
-        EnrichedStrategyContext ctx = shortEntryContext();
-        StrategyDecision d = engine.evaluate(withDisabledRisk, ctx);
-
-        assertEquals(DecisionType.OPEN_SHORT, d.getDecisionType());
-        assertBdEq("0.05", d.getPositionSize());   // assetBalance × allocFraction
-    }
-
-    /**
-     * SHORT default risk-based: stop ~0.21% wide; ideal saturates 100% cap
-     * at $10,000 USDT notional. Conversion to BTC qty = 10000 / 99700.
-     */
-    @Test
-    void shortEntry_defaultRiskBasedSizing_convertsUsdtToBtcQty() {
-        EnrichedStrategyContext ctx = shortEntryContext();
+    void shortEntry_toggleOff_fallsBackToLegacyPositionSize() {
+        EnrichedStrategyContext ctx = shortEntryContext();   // useRiskBasedSizing=false, alloc=50
         StrategyDecision d = engine.evaluate(spec(), ctx);
 
         assertEquals(DecisionType.OPEN_SHORT, d.getDecisionType());
-        // 10000 / 99700 = 0.10030090 (8-dp HALF_UP). Exact match to engine math.
-        assertBdEq("0.10030090", d.getPositionSize());
+        assertBdEq("0.05", d.getPositionSize());
+    }
+
+    /**
+     * V56 SHORT — risk-based on, fixture {@code capitalAllocationPct=100,
+     * riskPct=0.02}: ideal qty saturates inventory cap at
+     * {@code assetBalance × 1.0 = 0.1} BTC.
+     */
+    @Test
+    void shortEntry_defaultRiskBasedSizing_capsAtInventory() {
+        EnrichedStrategyContext ctx = shortEntryContextWithRiskBased(
+                /*allocPct=*/new BigDecimal("100"), /*riskPct=*/new BigDecimal("0.0200"));
+        StrategyDecision d = engine.evaluate(spec(), ctx);
+
+        assertEquals(DecisionType.OPEN_SHORT, d.getDecisionType());
+        assertBdEq("0.10000000", d.getPositionSize());
     }
 
     @Test
@@ -367,6 +364,12 @@ class TrendPullbackEngineTest {
                 .strategyCode("TPR")
                 .capitalAllocationPct(new BigDecimal("50"))
                 .build();
+        return baseCtxWithAccountStrategy(md, now, bias, biasMd, hasPosition, snap, as);
+    }
+
+    private static EnrichedStrategyContext baseCtxWithAccountStrategy(
+            MarketData md, FeatureStore now, FeatureStore bias, MarketData biasMd,
+            boolean hasPosition, PositionSnapshot snap, AccountStrategy as) {
         Map<String, Object> meta = new HashMap<>();
         meta.put("source", "backtest");
 
@@ -386,5 +389,36 @@ class TrendPullbackEngineTest {
                 .allowShort(Boolean.TRUE)
                 .executionMetadata(meta)
                 .build();
+    }
+
+    /**
+     * V56 — long-entry context with risk-based sizing on. Mirrors the V56
+     * backfill state for spec-engine rows (useRiskBasedSizing=true,
+     * riskPct=0.02 by default in tests, allocation passed explicitly).
+     */
+    private static EnrichedStrategyContext longEntryContextWithRiskBased(
+            BigDecimal allocPct, BigDecimal riskPct) {
+        EnrichedStrategyContext base = longEntryContext();
+        AccountStrategy as = AccountStrategy.builder()
+                .strategyCode("TPR")
+                .capitalAllocationPct(allocPct)
+                .useRiskBasedSizing(Boolean.TRUE)
+                .riskPct(riskPct)
+                .build();
+        base.setAccountStrategy(as);
+        return base;
+    }
+
+    private static EnrichedStrategyContext shortEntryContextWithRiskBased(
+            BigDecimal allocPct, BigDecimal riskPct) {
+        EnrichedStrategyContext base = shortEntryContext();
+        AccountStrategy as = AccountStrategy.builder()
+                .strategyCode("TPR")
+                .capitalAllocationPct(allocPct)
+                .useRiskBasedSizing(Boolean.TRUE)
+                .riskPct(riskPct)
+                .build();
+        base.setAccountStrategy(as);
+        return base;
     }
 }

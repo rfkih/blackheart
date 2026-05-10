@@ -279,6 +279,38 @@ public class BacktestRun extends BaseEntity {
     private Map<String, BigDecimal> strategyAllocations;
 
     /**
+     * V57 — per-strategy risk-pct override map. Key = uppercase strategy
+     * code, value = fractional risk per trade (0 < x ≤ 0.20). Strategies
+     * missing from the map fall back to
+     * {@code account_strategy.risk_pct}; the fractional scale matches that
+     * column (distinct from {@link #riskPerTradePct}, which is a percent
+     * scalar kept for diagnostic snapshot only).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_risk_pcts", columnDefinition = "jsonb")
+    private Map<String, BigDecimal> strategyRiskPcts;
+
+    /**
+     * V58 — per-strategy allowLong override map. Key = uppercase strategy
+     * code, value = boolean. Wizard-supplied; lets operators flip a single
+     * strategy's direction for one research run without changing the live
+     * {@code account_strategy.allow_long}. Null map / missing key falls
+     * back to the bound account_strategy's flag (V58 default).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_allow_long", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyAllowLong;
+
+    /**
+     * V58 — per-strategy allowShort override map. Same semantics as
+     * {@link #strategyAllowLong}. Null map / missing key falls back to the
+     * bound account_strategy.allow_short.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_allow_short", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyAllowShort;
+
+    /**
      * Per-strategy interval map for multi-timeframe runs. Key = uppercase
      * strategy code, value = interval string (e.g. "15m"). When non-null,
      * the coordinator routes each strategy only to its own interval's bar

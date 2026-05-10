@@ -139,6 +139,9 @@ public class BacktestService {
                 // account_strategy.capital_allocation_pct" respectively.
                 .maxConcurrentStrategies(request.getMaxConcurrentStrategies())
                 .strategyAllocations(nullIfEmpty(canonicaliseAllocations(request.getStrategyAllocations())))
+                .strategyRiskPcts(nullIfEmpty(canonicaliseStrategyRiskPcts(request.getStrategyRiskPcts())))
+                .strategyAllowLong(nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyAllowLong())))
+                .strategyAllowShort(nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyAllowShort())))
                 .strategyIntervals(nullIfEmpty(canonicaliseIntervals(request.getStrategyIntervals())))
                 // Origin tag — RESEARCHER when the autonomous orchestrator
                 // submits, USER for everything else (wizard, scripts). This
@@ -216,6 +219,46 @@ public class BacktestService {
                             "strategyAllocations[" + e.getKey() + "] must be in (0, 100], got " + v);
                 }
                 out.put(e.getKey().toUpperCase().trim(), v);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * V57 — Validate + uppercase-normalize the per-strategy risk-pct map.
+     * Values are fractional (matching {@code account_strategy.risk_pct}); the
+     * resolver enforces (0, 0.20]. Returns an empty map for null/empty input
+     * via the same contract as {@link #canonicaliseAllocations}.
+     */
+    private Map<String, BigDecimal> canonicaliseStrategyRiskPcts(Map<String, BigDecimal> raw) {
+        Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
+        BigDecimal upperBound = new BigDecimal("0.20");
+        for (Map.Entry<String, BigDecimal> e : raw.entrySet()) {
+            BigDecimal v = e.getValue();
+            if (StringUtils.hasText(e.getKey()) && v != null) {
+                if (v.signum() <= 0 || v.compareTo(upperBound) > 0) {
+                    throw new IllegalArgumentException(
+                            "strategyRiskPcts[" + e.getKey() + "] must be in (0, 0.20], got " + v);
+                }
+                out.put(e.getKey().toUpperCase().trim(), v);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * V58 — uppercase-normalize a per-strategy boolean map (used by the
+     * direction-override fields strategyAllowLong / strategyAllowShort).
+     * Drops null values silently. Empty-vs-null contract matches
+     * {@link #canonicaliseAllocations}.
+     */
+    private Map<String, Boolean> canonicaliseStrategyBoolMap(Map<String, Boolean> raw) {
+        Map<String, Boolean> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
+        for (Map.Entry<String, Boolean> e : raw.entrySet()) {
+            if (StringUtils.hasText(e.getKey()) && e.getValue() != null) {
+                out.put(e.getKey().toUpperCase().trim(), e.getValue());
             }
         }
         return out;

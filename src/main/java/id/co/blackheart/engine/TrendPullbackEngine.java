@@ -93,9 +93,7 @@ public class TrendPullbackEngine implements StrategyEngine {
     private static final BigDecimal D_RUNNER_LOCK_PHASE2  = new BigDecimal("1.00");
     private static final BigDecimal D_RUNNER_LOCK_PHASE3  = new BigDecimal("2.50");
     private static final BigDecimal D_MIN_SIGNAL_SCORE    = new BigDecimal("0.55");
-    // Risk-based sizing (kept in sync with TPR Params.defaults()).
-    private static final BigDecimal D_RISK_PER_TRADE_PCT  = new BigDecimal("0.02");
-    private static final BigDecimal D_MAX_ALLOCATION_PCT  = new BigDecimal("1.00");
+    // V56 — riskPerTradePct/maxAllocationPct moved to account_strategy.
 
     private final StrategyHelper strategyHelper;
 
@@ -167,17 +165,17 @@ public class TrendPullbackEngine implements StrategyEngine {
         BigDecimal score = longSignalScore(f, t);
         if (score.compareTo(t.minSignalScore) < 0) return null;
 
-        BigDecimal notional = pickLongNotional(ctx, entry, stop, t);
+        BigDecimal notional = pickLongNotional(ctx, entry, stop);
         if (notional.compareTo(ZERO) <= 0) return hold(spec, ctx, "TPR long notional zero");
 
         BigDecimal tp1 = entry.add(riskPerUnit.multiply(t.tp1R));
-        // stopDist% is structural stop distance; riskPerTradePct is the V2
-        // sizing knob (% of capital risked per trade). Logged separately to
-        // avoid the prior "risk%" ambiguity.
-        log.info("TPR[{}] LONG ENTRY | time={} entry={} stop={} tp1={} stopDist%={} riskPerTradePct={} notional={} score={}",
+        // stopDist% = structural stop distance. Per-trade risk pct lives on
+        // account_strategy now (V56) and is logged by StrategyHelper at the
+        // sizing call site, so we don't shadow it here.
+        log.info("TPR[{}] LONG ENTRY | time={} entry={} stop={} tp1={} stopDist%={} notional={} score={}",
                 spec.getStrategyCode(), md.getEndTime(), entry, stop, tp1,
                 riskPerUnit.divide(entry, 4, RoundingMode.HALF_UP).multiply(HUNDRED),
-                t.riskPerTradePct, notional, score);
+                notional, score);
 
         return baseBuilder(spec, ctx)
                 .decisionType(DecisionType.OPEN_LONG)
@@ -228,14 +226,16 @@ public class TrendPullbackEngine implements StrategyEngine {
         return riskPerUnit.compareTo(entry.multiply(t.maxEntryRiskPct)) <= 0;
     }
 
+    /**
+     * V56 — sizing config sourced from {@code account_strategy} via the
+     * unified helper. Pre-V56 TPR read {@code riskPerTradePct} and
+     * {@code maxAllocationPct} from spec body params with hardcoded defaults
+     * (0.02 / 1.00); those fields are now inert and the engine respects the
+     * operator's account-level toggle + cap.
+     */
     private BigDecimal pickLongNotional(EnrichedStrategyContext ctx, BigDecimal entry,
-                                        BigDecimal stop, Tuning t) {
-        BigDecimal notional = strategyHelper.calculateRiskBasedNotional(
-                ctx, entry, stop, t.riskPerTradePct, t.maxAllocationPct);
-        if (notional.compareTo(ZERO) <= 0) {
-            return strategyHelper.calculateEntryNotional(ctx, SIDE_LONG);
-        }
-        return notional;
+                                        BigDecimal stop) {
+        return strategyHelper.calculateLongEntryNotional(ctx, entry, stop);
     }
 
     private StrategyDecision tryShortEntry(StrategySpec spec, EnrichedStrategyContext ctx,
@@ -258,14 +258,14 @@ public class TrendPullbackEngine implements StrategyEngine {
         BigDecimal score = shortSignalScore(f, t);
         if (score.compareTo(t.minSignalScore) < 0) return null;
 
-        BigDecimal positionSize = pickShortPositionSize(ctx, entry, stop, t);
+        BigDecimal positionSize = pickShortPositionSize(ctx, entry, stop);
         if (positionSize.compareTo(ZERO) <= 0) return hold(spec, ctx, "TPR short position size zero");
 
         BigDecimal tp1 = entry.subtract(riskPerUnit.multiply(t.tp1R));
-        log.info("TPR[{}] SHORT ENTRY | time={} entry={} stop={} tp1={} stopDist%={} riskPerTradePct={} positionSize={} score={}",
+        log.info("TPR[{}] SHORT ENTRY | time={} entry={} stop={} tp1={} stopDist%={} positionSize={} score={}",
                 spec.getStrategyCode(), md.getEndTime(), entry, stop, tp1,
                 riskPerUnit.divide(entry, 4, RoundingMode.HALF_UP).multiply(HUNDRED),
-                t.riskPerTradePct, positionSize, score);
+                positionSize, score);
 
         return baseBuilder(spec, ctx)
                 .decisionType(DecisionType.OPEN_SHORT)
@@ -315,18 +315,12 @@ public class TrendPullbackEngine implements StrategyEngine {
     }
 
     /**
-     * SHORT: risk-based USDT notional → BTC qty via entry price; fall back
-     * to legacy assetBalance × allocation when riskPerTradePct is unset or
-     * the inputs are degenerate.
+     * V56 — sizing config sourced from {@code account_strategy} via the
+     * unified helper.
      */
     private BigDecimal pickShortPositionSize(EnrichedStrategyContext ctx, BigDecimal entry,
-                                             BigDecimal stop, Tuning t) {
-        BigDecimal riskNotionalUsdt = strategyHelper.calculateRiskBasedNotional(
-                ctx, entry, stop, t.riskPerTradePct, t.maxAllocationPct);
-        if (riskNotionalUsdt.compareTo(ZERO) > 0) {
-            return riskNotionalUsdt.divide(entry, 8, RoundingMode.HALF_UP);
-        }
-        return strategyHelper.calculateShortPositionSize(ctx);
+                                             BigDecimal stop) {
+        return strategyHelper.calculateShortEntryQty(ctx, entry, stop);
     }
 
     // ── Position management ──────────────────────────────────────────────────
@@ -624,8 +618,6 @@ public class TrendPullbackEngine implements StrategyEngine {
         final BigDecimal runnerLockPhase2R;
         final BigDecimal runnerLockPhase3R;
         final BigDecimal minSignalScore;
-        final BigDecimal riskPerTradePct;
-        final BigDecimal maxAllocationPct;
 
         private Tuning(StrategySpec s) {
             this.ema50SlopeMin     = s.paramBigDecimal("ema50SlopeMin", D_EMA50_SLOPE_MIN);
@@ -655,8 +647,6 @@ public class TrendPullbackEngine implements StrategyEngine {
             this.runnerLockPhase2R = s.paramBigDecimal("runnerLockPhase2R", D_RUNNER_LOCK_PHASE2);
             this.runnerLockPhase3R = s.paramBigDecimal("runnerLockPhase3R", D_RUNNER_LOCK_PHASE3);
             this.minSignalScore    = s.paramBigDecimal("minSignalScore", D_MIN_SIGNAL_SCORE);
-            this.riskPerTradePct   = s.paramBigDecimal("riskPerTradePct", D_RISK_PER_TRADE_PCT);
-            this.maxAllocationPct  = s.paramBigDecimal("maxAllocationPct", D_MAX_ALLOCATION_PCT);
         }
 
         static Tuning from(StrategySpec spec) { return new Tuning(spec); }

@@ -15,7 +15,7 @@
     "maxEntryRiskPct":      {"type": "number", "exclusiveMinimum": 0, "maximum": 0.5},
     "maxBarsHeld":          {"type": "integer", "minimum": 1, "maximum": 1000},
     "intervalMinutes":      {"type": "integer", "minimum": 1, "maximum": 1440},
-    "useRiskBasedSizing":   {"type": "boolean"},
-    "riskPct":              {"type": "number", "exclusiveMinimum": 0, "maximum": 0.1}
+    "useRiskBasedSizing":   {"type": "boolean", "description": "INERT post-V56 — engines read account_strategy.use_risk_based_sizing. Accepted only so legacy spec rows still validate; new writes are ignored by the engine."},
+    "riskPct":              {"type": "number", "exclusiveMinimum": 0, "maximum": 0.1, "description": "INERT post-V56 — engines read account_strategy.risk_pct. Set risk via the account-strategy panel, not the spec param_overrides."}
   }
 }

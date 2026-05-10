@@ -9,6 +9,9 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
@@ -64,8 +67,8 @@ public class ResearchActivityService {
         return new ResearchSessionSummaryResponse(
                 (String) row[0],
                 (String) row[1],
-                row[2] != null ? ((java.sql.Timestamp) row[2]).toInstant().atOffset(ZoneOffset.UTC) : null,
-                row[3] != null ? ((java.sql.Timestamp) row[3]).toInstant().atOffset(ZoneOffset.UTC) : null,
+                toUtcOffset(row[2]),
+                toUtcOffset(row[3]),
                 row[4] != null ? ((Number) row[4]).intValue() : 0,
                 Arrays.asList(codes),
                 row[6] != null ? ((Number) row[6]).intValue() : 0,
@@ -74,5 +77,21 @@ public class ResearchActivityService {
                 row[9] != null ? ((Number) row[9]).intValue() : 0,
                 row[10] != null && (Boolean) row[10]
         );
+    }
+
+    /**
+     * Native-query timestamp coercion. Hibernate 6 + the modern Postgres JDBC
+     * driver hand back {@link Instant} for {@code timestamptz} columns rather
+     * than {@link java.sql.Timestamp}, but tests / older driver builds may
+     * still return Timestamp or LocalDateTime. Dispatch on the runtime type
+     * so the listing endpoint doesn't ClassCastException whichever wins.
+     */
+    private static OffsetDateTime toUtcOffset(Object v) {
+        if (v == null) return null;
+        if (v instanceof OffsetDateTime odt) return odt.withOffsetSameInstant(ZoneOffset.UTC);
+        if (v instanceof Instant inst) return inst.atOffset(ZoneOffset.UTC);
+        if (v instanceof java.sql.Timestamp ts) return ts.toInstant().atOffset(ZoneOffset.UTC);
+        if (v instanceof LocalDateTime ldt) return ldt.atOffset(ZoneOffset.UTC);
+        throw new IllegalStateException("Unsupported timestamp type from native query: " + v.getClass());
     }
 }

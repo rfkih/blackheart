@@ -59,4 +59,14 @@ public class UpdateAccountStrategyRequest {
      */
     @DecimalMin("0.05") @DecimalMax("1.00")
     private BigDecimal kellyMaxFraction;
+
+    /** V55 — risk-based sizing toggle. Null leaves unchanged. */
+    private Boolean useRiskBasedSizing;
+
+    /**
+     * V55 — per-trade risk as a fraction of cash balance, range (0, 0.20].
+     * Null leaves unchanged.
+     */
+    @DecimalMin("0.0001") @DecimalMax("0.20")
+    private BigDecimal riskPct;
 }

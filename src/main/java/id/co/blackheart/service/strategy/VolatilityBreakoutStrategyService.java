@@ -183,11 +183,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     }
 
     private boolean passesLongGates(MarketData md, FeatureStore f, FeatureStore prev, VboParams p) {
-        if (!wasInCompression(prev, p)) {
-            log.debug("VBO LONG gate-compression FAIL prevBbWidth={} prevAdx={}",
-                    prev != null ? prev.getBbWidth() : null, prev != null ? prev.getAdx() : null);
-            return false;
-        }
+        if (!checkLongCompression(prev, p)) return false;
         BigDecimal upperBb = f.getBbUpperBand();
         if (upperBb == null) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
@@ -195,31 +191,53 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
             log.debug("VBO LONG gate-bb FAIL close={} upperBb={}", close, upperBb);
             return false;
         }
-        if (p.isRequireDonchianBreak()
-                && (f.getDonchianUpper20() == null || close.compareTo(f.getDonchianUpper20()) <= 0)) {
-            log.debug("VBO LONG gate-donchian FAIL close={} donch={}", close, f.getDonchianUpper20());
-            return false;
-        }
-        if (!hasRangeExpansion(md, prev, p)) {
-            log.debug("VBO LONG gate-range-expansion FAIL range={} prevAtr={}",
-                    rangeOf(md), prev != null ? prev.getAtr() : null);
-            return false;
-        }
+        if (!checkLongDonchian(close, f, p)) return false;
+        if (!checkLongRangeExpansion(md, prev, p)) return false;
         if (!passesAdxBandGate(f, p)) return false;
-        if (f.getRelativeVolume20() == null || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) {
-            log.debug("VBO LONG gate-rvol FAIL rvol={}", f.getRelativeVolume20());
-            return false;
-        }
+        if (!checkLongRvol(f, p)) return false;
         if (!passesBodyClvLongGate(f, p)) return false;
-        if (f.getRsi() != null && f.getRsi().compareTo(p.getLongRsiMax()) > 0) {
-            log.debug("VBO LONG gate-rsi FAIL rsi={} max={}", f.getRsi(), p.getLongRsiMax());
-            return false;
-        }
-        if (p.isRequireTrendAlignment() && !hasBullishTrendAlignment(md, f, p)) {
-            log.debug("VBO LONG gate-trend FAIL");
-            return false;
-        }
-        return true;
+        if (!checkLongRsi(f, p)) return false;
+        return checkLongTrendAlignment(md, f, p);
+    }
+
+    private boolean checkLongCompression(FeatureStore prev, VboParams p) {
+        if (wasInCompression(prev, p)) return true;
+        log.debug("VBO LONG gate-compression FAIL prevBbWidth={} prevAdx={}",
+                prev != null ? prev.getBbWidth() : null, prev != null ? prev.getAdx() : null);
+        return false;
+    }
+
+    private boolean checkLongDonchian(BigDecimal close, FeatureStore f, VboParams p) {
+        if (!p.isRequireDonchianBreak()) return true;
+        BigDecimal donch = f.getDonchianUpper20();
+        if (donch != null && close.compareTo(donch) > 0) return true;
+        log.debug("VBO LONG gate-donchian FAIL close={} donch={}", close, donch);
+        return false;
+    }
+
+    private boolean checkLongRangeExpansion(MarketData md, FeatureStore prev, VboParams p) {
+        if (hasRangeExpansion(md, prev, p)) return true;
+        log.debug("VBO LONG gate-range-expansion FAIL range={} prevAtr={}",
+                rangeOf(md), prev != null ? prev.getAtr() : null);
+        return false;
+    }
+
+    private boolean checkLongRvol(FeatureStore f, VboParams p) {
+        if (f.getRelativeVolume20() != null && f.getRelativeVolume20().compareTo(p.getRvolMin()) >= 0) return true;
+        log.debug("VBO LONG gate-rvol FAIL rvol={}", f.getRelativeVolume20());
+        return false;
+    }
+
+    private boolean checkLongRsi(FeatureStore f, VboParams p) {
+        if (f.getRsi() == null || f.getRsi().compareTo(p.getLongRsiMax()) <= 0) return true;
+        log.debug("VBO LONG gate-rsi FAIL rsi={} max={}", f.getRsi(), p.getLongRsiMax());
+        return false;
+    }
+
+    private boolean checkLongTrendAlignment(MarketData md, FeatureStore f, VboParams p) {
+        if (!p.isRequireTrendAlignment() || hasBullishTrendAlignment(md, f, p)) return true;
+        log.debug("VBO LONG gate-trend FAIL");
+        return false;
     }
 
     private boolean passesShortGates(MarketData md, FeatureStore f, FeatureStore prev, VboParams p) {
@@ -278,7 +296,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
             return null;
         }
 
-        BigDecimal notional = strategyHelper.calculateEntryNotional(ctx, SIDE_LONG);
+        BigDecimal notional = strategyHelper.calculateLongEntryNotional(ctx, entry, stop);
         if (notional.compareTo(ZERO) <= 0) return hold(ctx, "VBO long notional zero");
 
         log.info("VBO LONG ENTRY | time={} close={} upperBb={} stop={} tp1={} risk%={} score={}",
@@ -347,10 +365,10 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         BigDecimal score = calculateShortSignalScore(md, f, prev);
         if (score.compareTo(p.getMinSignalScore()) < 0) return null;
 
-        // SHORT executor reads `positionSize` and matches it against the BTC
-        // balance; `calculateEntryNotional` returns USDT and would always be
-        // > BTC qty, so the executor's balance guard would silently reject.
-        BigDecimal positionSize = strategyHelper.calculateShortPositionSize(ctx);
+        // SHORT executor reads `positionSize` (BTC qty) and matches it against
+        // the BTC balance. V55 — calculateShortEntryQty picks risk-based vs
+        // legacy allocation sizing based on the AccountStrategy toggle.
+        BigDecimal positionSize = strategyHelper.calculateShortEntryQty(ctx, entry, stop);
         if (positionSize.compareTo(ZERO) <= 0) return hold(ctx, "VBO short position size zero");
 
         log.info("VBO SHORT ENTRY | time={} close={} lowerBb={} stop={} tp1={} risk%={} score={}",
