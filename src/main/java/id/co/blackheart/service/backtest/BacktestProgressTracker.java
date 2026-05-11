@@ -1,6 +1,5 @@
 package id.co.blackheart.service.backtest;
 
-import id.co.blackheart.repository.BacktestRunRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.extern.slf4j.Slf4j;
@@ -52,7 +51,6 @@ public class BacktestProgressTracker {
      *  {@code WebSocketAuthInterceptor}. */
     private static final String PROGRESS_TOPIC_PREFIX = "/topic/backtest/";
 
-    private final BacktestRunRepository runRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final TransactionTemplate txTemplate;
 
@@ -62,11 +60,9 @@ public class BacktestProgressTracker {
     private final ConcurrentMap<UUID, State> perRun = new ConcurrentHashMap<>();
 
     public BacktestProgressTracker(
-            BacktestRunRepository runRepository,
             SimpMessagingTemplate messagingTemplate,
             PlatformTransactionManager txManager
     ) {
-        this.runRepository = runRepository;
         this.messagingTemplate = messagingTemplate;
         this.txTemplate = new TransactionTemplate(txManager);
         this.txTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -182,10 +178,4 @@ public class BacktestProgressTracker {
         }
     }
 
-    // Kept only to avoid an unused-import warning on runRepository in future
-    // refactors that want to read the current value from the DB.
-    @SuppressWarnings("unused")
-    private BacktestRunRepository unused() {
-        return runRepository;
-    }
 }

@@ -60,6 +60,19 @@ public class GlobalExceptionHandler {
         return badRequest(ResponseCode.ILLEGAL_STATE, ex.getMessage());
     }
 
+    // ── 429 Too Many Requests ────────────────────────────────────────────────
+
+    @ExceptionHandler(id.co.blackheart.exception.BacktestConcurrencyLimitException.class)
+    public ResponseEntity<ResponseDto> handleBacktestConcurrencyLimit(
+            id.co.blackheart.exception.BacktestConcurrencyLimitException ex) {
+        log.warn("Backtest concurrency limit reached: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(ResponseDto.builder()
+                .responseCode(HttpStatus.TOO_MANY_REQUESTS.value() + ResponseCode.TOO_MANY_REQUESTS.getCode())
+                .responseDesc(ResponseCode.TOO_MANY_REQUESTS.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
     // ── 409 Conflict ─────────────────────────────────────────────────────────
 
     @ExceptionHandler(StrategyHasOpenTradesException.class)

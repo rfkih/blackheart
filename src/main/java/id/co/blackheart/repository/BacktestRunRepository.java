@@ -17,6 +17,9 @@ import java.util.UUID;
 @Repository
 public interface BacktestRunRepository extends JpaRepository<BacktestRun, UUID> {
 
+    @Query("SELECT COUNT(r) FROM BacktestRun r WHERE r.userId = :userId AND r.status IN :statuses")
+    long countByUserIdAndStatusIn(@Param("userId") UUID userId, @Param("statuses") List<String> statuses);
+
     /**
      * Kept for callers that still want the simple, unfiltered ordered list.
      * New callers should use {@link #findFiltered} which carries filter + sort

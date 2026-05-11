@@ -16,6 +16,8 @@ Java/Spring Boot algo trading on Binance: live trading + backtesting.
 | **JobType handler catalog** (BACKFILL_*, PATCH_*, RECOMPUTE_*, COVERAGE_*) | `docs/agent-context/JOBS.md` |
 | **Key tables / schema reference** (feature_store, market_data, funding_*, research_*) | `docs/agent-context/SCHEMA.md` |
 | Two-JVM deployment runbook | `research/DEPLOYMENT.md` |
+| Cross-host Tailscale-mesh deployment (VPS ↔ home research) | `docs/agent-context/DEPLOYMENT_TAILSCALE.md` |
+| Postgres migration runbook (home Docker → VPS Docker) | `docs/agent-context/DEPLOYMENT_DB_MIGRATION.md` |
 | DB role separation | `research/DB_USER_SEPARATION.md` |
 | Spec language (Phase 2) | `research/specs/SCHEMA.md` |
 | Parametric engine blueprint (M1+) | `docs/PARAMETRIC_ENGINE_BLUEPRINT.md` |

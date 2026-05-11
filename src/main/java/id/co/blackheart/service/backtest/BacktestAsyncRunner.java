@@ -8,8 +8,6 @@ import id.co.blackheart.service.strategy.BacktestParamOverrideContext;
 import id.co.blackheart.service.strategy.BacktestParamPresetContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
-import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.Collections;
@@ -17,26 +15,12 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Runs a previously-persisted {@link BacktestRun} on the dedicated backtest
- * executor. Called by {@link BacktestService#runBacktest} which returns the
- * initial PENDING row to the client immediately — the heavy coordinator work
- * happens here off the HTTP request thread.
- *
- * <p>State machine during the run:
- * <pre>
- *   PENDING  — row is enqueued, worker not yet picked up
- *   RUNNING  — worker claimed it, coordinator loop is live (progress ticks)
- *   COMPLETED — summary persisted, progress=100
- *   FAILED   — coordinator threw; progress frozen at last reported value
- * </pre>
- *
- * <p>Each transition is written via {@link BacktestRunLifecycle} in its own
- * REQUIRES_NEW transaction so the status is visible to polling clients as
- * soon as it flips — we don't want a long-running outer transaction to hide
- * the state from readers.
+ * @deprecated Replaced by {@link BacktestKafkaConsumer}. Kept as a
+ * non-Spring class until all references are confirmed removed. Do not
+ * inject or call directly — this class is no longer a Spring bean.
  */
+@Deprecated
 @Slf4j
-@Service
 @RequiredArgsConstructor
 public class BacktestAsyncRunner {
 
@@ -53,7 +37,6 @@ public class BacktestAsyncRunner {
     private final ObjectMapper objectMapper;
     private final BacktestAnalysisService analysisService;
 
-    @Async("backtestExecutor")
     public void runAsync(UUID backtestRunId) {
         log.info("Backtest worker started | runId={}", backtestRunId);
         Map<String, Map<String, Object>> overrides = Collections.emptyMap();

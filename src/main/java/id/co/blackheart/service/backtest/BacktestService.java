@@ -19,7 +19,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.RejectedExecutionException;
 
 @Slf4j
 @Service
@@ -36,7 +35,8 @@ public class BacktestService {
     private final BacktestRunRepository backtestRunRepository;
     private final BacktestResponseMapper backtestMapperService;
     private final AccountStrategyOwnershipGuard ownershipGuard;
-    private final BacktestAsyncRunner backtestAsyncRunner;
+    private final BacktestConcurrencyGate concurrencyGate;
+    private final BacktestKafkaProducer kafkaProducer;
     private final ObjectMapper objectMapper;
     private final BuildInfoService buildInfoService;
     private final SlippageCalibrationService slippageCalibrationService;
@@ -150,18 +150,24 @@ public class BacktestService {
                 .triggeredBy(resolveTriggeredBy(request))
                 .build();
 
-        backtestRun = backtestRunRepository.save(backtestRun);
+        // Gate: atomic advisory lock + in-flight count + INSERT in one REQUIRES_NEW tx.
+        // Throws BacktestConcurrencyLimitException (→ HTTP 429) when at capacity.
+        backtestRun = concurrencyGate.checkAndSave(backtestRun);
 
         try {
-            backtestAsyncRunner.runAsync(backtestRun.getBacktestRunId());
-        } catch (RejectedExecutionException e) {
-            // Backtest pool is saturated — mark the row FAILED immediately so
-            // the user sees the reason instead of a "stuck PENDING forever".
-            log.warn("Backtest executor rejected submission | runId={}",
-                    backtestRun.getBacktestRunId());
+            kafkaProducer.send(backtestRun.getBacktestRunId(), backtestRun.getUserId());
+        } catch (Exception e) {
+            // Kafka broker unreachable — mark the persisted row FAILED so it
+            // doesn't sit as PENDING forever, then surface a 503 to the caller
+            // so the research orchestrator can retry rather than silently losing
+            // the submission (returning HTTP 200 with status=FAILED in the body
+            // was the prior behaviour and was invisible to orchestrator retry logic).
+            log.warn("Kafka produce failed — marking run FAILED | runId={}", backtestRun.getBacktestRunId(), e);
             backtestRun.setStatus("FAILED");
-            backtestRun.setNotes("Server is at backtest capacity. Try again in a few minutes.");
+            backtestRun.setNotes("Failed to queue backtest. Try again shortly.");
             backtestRunRepository.save(backtestRun);
+            throw new id.co.blackheart.exception.ServiceUnavailableException(
+                    "Backtest queue is temporarily unavailable. Try again shortly.");
         }
 
         return backtestMapperService.toRunResponse(backtestRun);
