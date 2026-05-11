@@ -92,7 +92,9 @@ public class StrategyParamService {
                 Map<String, Object> map = (Map<String, Object>) cached;
                 return new HashMap<>(map);
             }
-        } catch (Exception | Error e) {
+        } catch (OutOfMemoryError e) {
+            log.warn("Redis OOM during deserialization for strategy_param key={}, falling through to DB", key);
+        } catch (Exception e) {
             log.warn("Redis read failed for active strategy_param key={}, falling through to DB: {}",
                     key, e.getMessage());
         }

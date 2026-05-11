@@ -3,6 +3,7 @@ package id.co.blackheart.service.backtest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
@@ -40,12 +41,12 @@ public class BacktestKafkaProducer {
             kafkaTemplate.send(topic, key, backtestRunId.toString())
                     .get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (ExecutionException e) {
-            throw new RuntimeException("Kafka produce failed: " + e.getCause().getMessage(), e.getCause());
+            throw new KafkaException("Kafka produce failed: " + e.getCause().getMessage(), e.getCause());
         } catch (TimeoutException e) {
-            throw new RuntimeException("Kafka produce timed out after " + SEND_TIMEOUT_SECONDS + "s", e);
+            throw new KafkaException("Kafka produce timed out after " + SEND_TIMEOUT_SECONDS + "s", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("Interrupted while sending to Kafka", e);
+            throw new KafkaException("Interrupted while sending to Kafka", e);
         }
         log.info("Backtest queued | topic={} runId={} userId={}", topic, backtestRunId, userId);
     }

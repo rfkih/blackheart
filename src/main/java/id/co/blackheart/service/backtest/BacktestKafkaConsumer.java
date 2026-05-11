@@ -54,6 +54,7 @@ public class BacktestKafkaConsumer {
             groupId = "backtest-consumer-group",
             containerFactory = "backtestKafkaListenerFactory"
     )
+    @SuppressWarnings("java:S1181") // intentional: catch Throwable so OOM marks the run FAILED instead of leaving it permanently RUNNING
     public void consume(String message, Acknowledgment ack) {
         UUID backtestRunId;
         try {
