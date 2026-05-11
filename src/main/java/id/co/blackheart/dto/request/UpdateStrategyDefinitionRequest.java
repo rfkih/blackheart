@@ -53,4 +53,10 @@ public class UpdateStrategyDefinitionRequest {
     /** Optional free-form rationale recorded in {@code strategy_definition_history.change_reason}. */
     @Size(max = 1000, message = "Change reason is too long")
     private String changeReason;
+
+    /** V40 — definition-scope kill-switch. Null = leave unchanged. */
+    private Boolean enabled;
+
+    /** V40 — definition-scope paper flag. Null = leave unchanged. */
+    private Boolean simulated;
 }

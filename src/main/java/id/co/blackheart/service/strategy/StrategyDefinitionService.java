@@ -132,6 +132,8 @@ public class StrategyDefinitionService {
                 .archetypeVersion(archetypeVersion)
                 .specJsonb(specJsonb)
                 .specSchemaVersion(specSchemaVersion)
+                .enabled(request.getEnabled() != null ? request.getEnabled() : false)
+                .simulated(request.getSimulated() != null ? request.getSimulated() : true)
                 .isDeleted(false)
                 .build();
         entity.setCreatedBy(actorEmail);
@@ -175,6 +177,12 @@ public class StrategyDefinitionService {
         }
         if (request.getSpecSchemaVersion() != null) {
             entity.setSpecSchemaVersion(request.getSpecSchemaVersion());
+        }
+        if (request.getEnabled() != null) {
+            entity.setEnabled(request.getEnabled());
+        }
+        if (request.getSimulated() != null) {
+            entity.setSimulated(request.getSimulated());
         }
         if (LEGACY_ARCHETYPE.equalsIgnoreCase(entity.getArchetype())) {
             // Legacy strategies must not carry a spec body — keep the column null
@@ -234,6 +242,8 @@ public class StrategyDefinitionService {
                 .archetypeVersion(s.getArchetypeVersion())
                 .specJsonb(s.getSpecJsonb() == null ? null : new HashMap<>(s.getSpecJsonb()))
                 .specSchemaVersion(s.getSpecSchemaVersion())
+                .enabled(s.getEnabled())
+                .simulated(s.getSimulated())
                 .isDeleted(s.getIsDeleted())
                 .deletedAt(s.getDeletedAt())
                 .createdTime(s.getCreatedTime())

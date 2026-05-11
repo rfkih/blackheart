@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -93,8 +94,7 @@ public class FundingCarryStrategyService implements StrategyExecutor {
 
         UUID accountStrategyId = context.getAccountStrategy() != null
                 ? context.getAccountStrategy().getAccountStrategyId() : null;
-        FundingCarryParams p = FundingCarryParams.merge(
-                strategyParamService.getActiveOverrides(accountStrategyId));
+        FundingCarryParams p = FundingCarryParams.merge(resolveOverrides(accountStrategyId));
 
         MarketData md = context.getMarketData();
         FeatureStore f = context.getFeatureStore();
@@ -328,6 +328,25 @@ public class FundingCarryStrategyService implements StrategyExecutor {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Effective override map = stored active preset + thread-local backtest
+     * wizard/sweep overrides (wizard wins on key collision). Mirrors the
+     * {@link VboStrategyParamService#getParams} pattern so FCARRY honours
+     * {@link BacktestParamOverrideContext} during sweeps instead of always
+     * reading the live active preset.
+     */
+    private Map<String, Object> resolveOverrides(UUID accountStrategyId) {
+        Map<String, Object> wizardOverrides = BacktestParamOverrideContext.forStrategy(STRATEGY_CODE);
+        Map<String, Object> stored = accountStrategyId == null
+                ? new HashMap<>()
+                : strategyParamService.resolveOverridesForStrategy(STRATEGY_CODE, accountStrategyId);
+        if (wizardOverrides.isEmpty()) return stored;
+        if (stored.isEmpty()) return wizardOverrides;
+        Map<String, Object> layered = new HashMap<>(stored);
+        layered.putAll(wizardOverrides);
+        return layered;
+    }
 
     private BigDecimal carryScore(BigDecimal z, FundingCarryParams p) {
         // |z| above entry threshold → score scales toward 1 at 2× the threshold.

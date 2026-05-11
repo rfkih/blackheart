@@ -78,4 +78,12 @@ public class CreateStrategyDefinitionRequest {
 
     @Positive(message = "specSchemaVersion must be positive")
     private Integer specSchemaVersion;
+
+    /** V40 — definition-scope kill-switch. Defaults to {@code false} (disabled
+     *  until explicitly enabled). Set to {@code true} to enable on creation. */
+    private Boolean enabled;
+
+    /** V40 — definition-scope paper flag. Defaults to {@code true} (all new
+     *  definitions are simulated/paper until explicitly set to false). */
+    private Boolean simulated;
 }

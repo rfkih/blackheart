@@ -45,6 +45,18 @@ public class KafkaConsumerConfig {
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        // Backtest jobs block the listener thread for the full run duration.
+        // Default max.poll.interval.ms is 5 min — any backtest longer than that
+        // causes the broker to kick the consumer out before ack.acknowledge()
+        // fires, producing CommitFailedException. Set to 2 hours to cover the
+        // worst-case sweep. max.poll.records=1 ensures one job per poll cycle
+        // so the interval timer only ticks during actual processing, not queuing.
+        props.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 7_200_000);  // 2 h
+        props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
+        // session.timeout / heartbeat — Spring Kafka's background heartbeat thread
+        // keeps the session alive; these just need to be consistent with each other.
+        props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 60_000);
+        props.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 20_000);
         // Slow down retry spam when broker is unreachable (default max is 1 s → floods logs).
         props.put(CommonClientConfigs.RECONNECT_BACKOFF_MS_CONFIG, 2_000);
         props.put(CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_CONFIG, 30_000);

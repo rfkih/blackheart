@@ -23,6 +23,8 @@ public class StrategyDefinitionResponse {
     private Integer archetypeVersion;
     private Map<String, Object> specJsonb;
     private Integer specSchemaVersion;
+    private Boolean enabled;
+    private Boolean simulated;
     private Boolean isDeleted;
     private LocalDateTime deletedAt;
     private LocalDateTime createdTime;
