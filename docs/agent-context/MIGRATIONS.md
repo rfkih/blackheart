@@ -11,9 +11,9 @@
 - **Baseline:** pre-Flyway state stamped V1 via `spring.flyway.baseline-on-migrate=true`. Legacy `db/migration/` is reference only.
 - **Trading JVM owns Flyway.** Research JVM has Flyway disabled.
 
-## Current head: V57
+## Current head: V58
 
-## V14–V57 catalog
+## V14–V58 catalog
 
 - **V14** — DB role separation (`blackheart_trading` full DML; `blackheart_research` SELECT operational + DML backtest/research/promotion; both NOLOGIN; see `research/DB_USER_SEPARATION.md`).
 - **V15** — Promotion pipeline: `account_strategy.simulated`, `paper_trade_run`, `strategy_promotion_log` w/ CHECK.
@@ -44,6 +44,7 @@
 - **V55** — Adds `account_strategy.use_risk_based_sizing` (BOOLEAN, default FALSE) + `risk_pct` (NUMERIC(5,4), default 0.0500, CHECK 0 < x ≤ 0.20). Lets legacy strategies (LSR/VCB/VBO/FundingCarry) opt into risk-based sizing via `StrategyHelper.calculateRiskBasedNotional`; `capital_allocation_pct` becomes the notional cap when the toggle is ON. Existing rows default to FALSE — live trading parity preserved until operator explicitly flips the toggle.
 - **V56** — Backfills spec-engine rows (`strategy_code NOT IN ('LSR','LSR_V2','VCB','VBO','FCARRY')`) still at V55 defaults to `use_risk_based_sizing=TRUE` / `risk_pct=0.0200`, preserving their prior risk-based-2% behavior after engine code was rerouted through the unified `StrategyHelper` sizing helpers. Only touches rows still at V55 defaults — operator-customised rows are untouched.
 - **V57** — Adds `backtest_run.strategy_risk_pcts` JSONB (map of `strategy_code → fractional risk_pct`, 0 < x ≤ 0.20). Per-run override parallel to `strategy_allocations`; null/missing key falls back to `account_strategy.risk_pct`. Fractional scale (e.g. 0.03), distinct from the existing `risk_per_trade_pct` scalar which is percent-scale (e.g. 2.0) for research-orchestrator compatibility.
+- **V58** — Adds `backtest_run.strategy_allow_long` and `strategy_allow_short` (nullable JSONB, map of `strategy_code → boolean`). Per-run per-strategy direction overrides; null/missing key falls back to `account_strategy.allow_long/allow_short`, then to run-level `allow_long/allow_short` for ad-hoc spec strategies. Lets operators research direction variants without permanently flipping a live `account_strategy` row.
 
 ## Strategy Promotion Pipeline (V15 account-scope, V40 definition-scope)
 

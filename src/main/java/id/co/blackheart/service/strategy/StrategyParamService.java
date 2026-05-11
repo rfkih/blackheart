@@ -92,7 +92,7 @@ public class StrategyParamService {
                 Map<String, Object> map = (Map<String, Object>) cached;
                 return new HashMap<>(map);
             }
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             log.warn("Redis read failed for active strategy_param key={}, falling through to DB: {}",
                     key, e.getMessage());
         }

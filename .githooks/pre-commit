@@ -46,10 +46,13 @@ require_catalog() {
     fi
 }
 
-# 1. Strategy / engine catalog
+# 1. Strategy / engine catalog — only fires for actual engine/strategy implementation
+#    classes (*Engine.java, *StrategyService.java). Supporting helpers such as
+#    StrategyParamService, AccountStrategyService, StrategyHelper, etc. are excluded
+#    intentionally — they are not strategy implementations and don't need a catalog entry.
 require_catalog \
     "STRATEGIES.md" \
-    "^src/main/java/id/co/blackheart/(engine|service/strategy)/[A-Za-z0-9_]+\\.java$" \
+    "^src/main/java/id/co/blackheart/(engine/[A-Za-z0-9_]+Engine\\.java|service/strategy/[A-Za-z0-9_]+StrategyService\\.java)$" \
     "docs/agent-context/STRATEGIES.md"
 
 # 2. JobType + handler catalog
