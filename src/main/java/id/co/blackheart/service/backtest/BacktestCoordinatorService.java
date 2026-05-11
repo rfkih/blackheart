@@ -1282,7 +1282,7 @@ public class BacktestCoordinatorService {
      * Boolean.FALSE is a valid override value (force direction off).
      */
     private Boolean resolveBoolOverride(Map<String, Boolean> wizardOverrides, String code) {
-        if (wizardOverrides == null || code == null) return false;
+        if (wizardOverrides == null || code == null) return null;
         return wizardOverrides.get(code.toUpperCase());
     }
 
