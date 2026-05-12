@@ -11,9 +11,9 @@
 - **Baseline:** pre-Flyway state stamped V1 via `spring.flyway.baseline-on-migrate=true`. Legacy `db/migration/` is reference only.
 - **Trading JVM owns Flyway.** Research JVM has Flyway disabled.
 
-## Current head: V59
+## Current head: V61
 
-## V14–V59 catalog
+## V14–V61 catalog
 
 - **V14** — DB role separation (`blackheart_trading` full DML; `blackheart_research` SELECT operational + DML backtest/research/promotion; both NOLOGIN; see `research/DB_USER_SEPARATION.md`).
 - **V15** — Promotion pipeline: `account_strategy.simulated`, `paper_trade_run`, `strategy_promotion_log` w/ CHECK.
@@ -46,6 +46,8 @@
 - **V57** — Adds `backtest_run.strategy_risk_pcts` JSONB (map of `strategy_code → fractional risk_pct`, 0 < x ≤ 0.20). Per-run override parallel to `strategy_allocations`; null/missing key falls back to `account_strategy.risk_pct`. Fractional scale (e.g. 0.03), distinct from the existing `risk_per_trade_pct` scalar which is percent-scale (e.g. 2.0) for research-orchestrator compatibility.
 - **V59** — Partial index `idx_backtest_run_active_per_user` on `backtest_run(user_id) WHERE status IN ('PENDING','RUNNING')` for the Kafka concurrency gate count query.
 - **V58** — Adds `backtest_run.strategy_allow_long` and `strategy_allow_short` (nullable JSONB, map of `strategy_code → boolean`). Per-run per-strategy direction overrides; null/missing key falls back to `account_strategy.allow_long/allow_short`, then to run-level `allow_long/allow_short` for ad-hoc spec strategies. Lets operators research direction variants without permanently flipping a live `account_strategy` row.
+- **V60** — Adds `backtest_run.avg_trade_return_pct` (NUMERIC(14,6)) + `geometric_return_pct_at_alloc_90` (NUMERIC(28,6)). Sizing-independent return metrics computed in `BacktestMetricsService` and `BacktestAnalysisService`. `avg_trade_return_pct` = mean of `(pnl / notional × 100)`; `geometric_return_pct_at_alloc_90` = compounded equity multiplier minus one, in percent, assuming every trade was sized at 90% of equity (clamps to ruin if a step would zero equity). Sit alongside the existing capital-based `return_pct` so a tiny notional × strong per-trade edge no longer hides in the headline. Wide 22-integer-digit precision on the geometric column intentional — a 1000-trade backtest with +5%/trade compounds to ~10^21 %; narrower precisions overflow `saveAndFlush` mid-run.
+- **V61** — Flips research-agent (`account_id='99999999-9999-9999-9999-000000000002'`) `account_strategy` rows to `use_risk_based_sizing=FALSE` / `capital_allocation_pct=90.0000`. Scoped only to the research-agent account; admin's live LSR/VCB/VBO rows are untouched (different `account_id`). The protected-strategy hard rule stays intact. Idempotent (predicate skips already-normalised rows).
 
 ## Strategy Promotion Pipeline (V15 account-scope, V40 definition-scope)
 

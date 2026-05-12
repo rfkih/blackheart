@@ -199,6 +199,8 @@ public class BacktestQueryService {
                     .totalTrades(r.getTotalTrades())
                     .winningTrades(r.getTotalWins())
                     .losingTrades(r.getTotalLosses())
+                    .avgTradeReturnPct(r.getAvgTradeReturnPct())
+                    .geometricReturnPctAtAlloc90(r.getGeometricReturnPctAtAlloc90())
                     .build();
         }
 

@@ -6,6 +6,7 @@ import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.repository.BacktestTradeRepository;
+import id.co.blackheart.service.statistics.GeometricReturnCalculator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -108,7 +109,15 @@ public class BacktestAnalysisService {
         for (BacktestTrade t : chrono) {
             acc.add(t);
         }
-        return acc.toHeadline(trades.size(), safe(run.getInitialCapital()));
+        Headline h = acc.toHeadline(trades.size(), safe(run.getInitialCapital()));
+        GeometricReturnCalculator.Result tr = GeometricReturnCalculator.compute(
+                chrono.stream()
+                        .map(t -> new GeometricReturnCalculator.TradeReturn(
+                                t.getRealizedPnlAmount(), t.getTotalEntryQuoteQty()))
+                        .toList());
+        h.setAvgTradeReturnPct(tr.avgTradeReturnPct());
+        h.setGeometricReturnPctAtAlloc90(tr.geometricReturnPct());
+        return h;
     }
 
     /**

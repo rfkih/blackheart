@@ -30,6 +30,10 @@ public class Headline {
     private BigDecimal maxDrawdown;
     private int maxConsecutiveLosses;
     private BigDecimal initialCapital;
+    /** Mean per-trade return rate (pnl / notional × 100). */
+    private BigDecimal avgTradeReturnPct;
+    /** Compounded return assuming 90% of equity sized per trade, in percent. */
+    private BigDecimal geometricReturnPctAtAlloc90;
 
     public static Headline zero() {
         Headline h = new Headline();

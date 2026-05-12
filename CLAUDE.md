@@ -42,7 +42,7 @@ Two JVMs share Postgres. Trading JVM (8080) owns Binance + live; Research JVM (8
 - **Other symbols (SOL, BNB, …):** NOT plumbed. Backfill first via `MarketDataService` / `HistoricalDataService`.
 
 ## Current head
-- **Flyway:** V40 (definition-scope promotion). Recent: V34–V37 funding-rate, V38 cross-window, V39 alert_event, V40 definition-scope. See `MIGRATIONS.md` for catalog.
+- **Flyway:** V61 (research-agent capital-allocation sizing). Recent: V55–V58 risk-based sizing + per-strategy overrides, V59 active-per-user index, V60 sizing-independent return metrics on `backtest_run`, V61 flips research-agent rows to 90% capital-allocation sizing. See `MIGRATIONS.md` for catalog.
 
 ## Stat-rigor gate (V11+)
 Tick returns `verdict=PASS` only when **all**: n_trades≥100, PF 95% CI lower>1.0, +20bps slippage net PnL>0, statistical_verdict=SIGNIFICANT_EDGE. SIGNIFICANT_EDGE parks queue + emits `next_action` for `/walk-forward`; only graduation-eligible after `stability_verdict=ROBUST`.

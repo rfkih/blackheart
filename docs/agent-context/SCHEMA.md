@@ -31,7 +31,7 @@
 
 | Table | Path | Purpose / key columns |
 |---|---|---|
-| `backtest_run` | `V1__baseline.sql:424` | One backtest execution. Config snapshot, metrics (return, Sharpe, Sortino, max drawdown, profit factor), `triggered_by` (USER/RESEARCHER), `strategy_param_ids` JSONB pinning preset rows. |
+| `backtest_run` | `V1__baseline.sql:424` | One backtest execution. Config snapshot, metrics (return, Sharpe, Sortino, max drawdown, profit factor), `triggered_by` (USER/RESEARCHER), `strategy_param_ids` JSONB pinning preset rows. V60 adds `avg_trade_return_pct` + `geometric_return_pct_at_alloc_90` — sizing-independent companions to `return_pct`. |
 | `research_iteration_log` | `V1__baseline.sql:899` | Pre-registered research hypothesis + verdict (`PASS`/`ITERATE`/`DISCARD`/`FAILED`) and statistical verdict (`SIGNIFICANT_EDGE`/`NO_EDGE`/...). Stat-rigor gate from V11 enforced (n≥100, PF 95% CI lower>1.0). |
 | `walk_forward_run` | `V1__baseline.sql:992` | Out-of-sample stability verdict (`ROBUST`/`OVERFIT`/`NO_EDGE`) across n-fold train/test windows. Gates promotion from `SIGNIFICANT_EDGE` → production-eligible. |
 | `cross_window_run` | added V38 | Regime-labeled epoch results. `ROBUST_CROSS_WINDOW` = ≥80% windows net-positive after +20bps slippage. Window defs in `research-orchestrator/config/regime_windows.yml`. |

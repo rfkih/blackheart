@@ -186,6 +186,27 @@ public class BacktestRun extends BaseEntity {
     @Column(name = "return_pct", precision = 12, scale = 6)
     private BigDecimal returnPct;
 
+    /**
+     * V60 — Mean per-trade return rate (pnl / notional × 100). Sizing-
+     * independent companion to {@link #returnPct}; lets a strategy whose
+     * sized notional is only a sliver of capital still show its per-trade
+     * edge.
+     */
+    @Column(name = "avg_trade_return_pct", precision = 14, scale = 6)
+    private BigDecimal avgTradeReturnPct;
+
+    /**
+     * V60 — Compounded return assuming 90% of equity sized per trade, in
+     * percent. Walks trades chronologically; clamps to ruin (final
+     * multiplier 0) if any step would zero equity. Order-sensitive.
+     *
+     * <p>Width NUMERIC(28,6) — 22 integer digits — defends against
+     * compounding explosions on pathological / overfit sweep candidates
+     * (a 1000-trade backtest with +5%/trade reaches a ~10^19 multiplier).
+     */
+    @Column(name = "geometric_return_pct_at_alloc_90", precision = 28, scale = 6)
+    private BigDecimal geometricReturnPctAtAlloc90;
+
     @Column(name = "profit_factor", precision = 12, scale = 6)
     private BigDecimal profitFactor;
 

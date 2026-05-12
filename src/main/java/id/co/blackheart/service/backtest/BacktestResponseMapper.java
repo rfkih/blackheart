@@ -35,6 +35,8 @@ public class BacktestResponseMapper {
                 .grossLoss(run.getGrossLoss().setScale(3, RoundingMode.HALF_UP))
                 .netProfit(run.getNetProfit().setScale(3, RoundingMode.HALF_UP))
                 .maxDrawdownPct(run.getMaxDrawdownPct())
+                .avgTradeReturnPct(run.getAvgTradeReturnPct())
+                .geometricReturnPctAtAlloc90(run.getGeometricReturnPctAtAlloc90())
                 .createdTime(run.getCreatedTime())
                 .updatedTime(run.getUpdatedTime())
                 .triggeredBy(run.getTriggeredBy())

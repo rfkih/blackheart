@@ -121,6 +121,8 @@ public class BacktestPersistenceService {
         copyIfPresent(summary::getAvgLoss, backtestRun::setAvgLoss);
         copyIfPresent(summary::getMaxDrawdownAmount, backtestRun::setMaxDrawdownAmount);
         copyIfPresent(summary::getExpectancy, backtestRun::setExpectancy);
+        copyIfPresent(summary::getAvgTradeReturnPct, backtestRun::setAvgTradeReturnPct);
+        copyIfPresent(summary::getGeometricReturnPctAtAlloc90, backtestRun::setGeometricReturnPctAtAlloc90);
     }
 
     private static <T> void copyIfPresent(Supplier<T> getter, Consumer<T> setter) {

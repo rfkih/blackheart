@@ -9,6 +9,7 @@ import id.co.blackheart.model.Trades;
 import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.cache.CacheService;
+import id.co.blackheart.service.statistics.GeometricReturnCalculator;
 import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -61,6 +62,8 @@ public class PnlService {
         BigDecimal unrealizedPnl = computeUnrealizedPnl(open);
         BigDecimal totalPnl = realizedPnl.add(unrealizedPnl);
 
+        GeometricReturnCalculator.Result tr = computePerTradeReturnStats(closed);
+
         return PnlSummaryResponse.builder()
                 .period(period)
                 .realizedPnl(realizedPnl.setScale(8, RoundingMode.HALF_UP))
@@ -69,7 +72,29 @@ public class PnlService {
                 .tradeCount(closed.size())
                 .winRate(winRate)
                 .openCount(open.size())
+                .avgTradeReturnPct(tr.avgTradeReturnPct())
+                .geometricReturnPctAtAlloc90(tr.geometricReturnPct())
                 .build();
+    }
+
+    /**
+     * Per-trade return stats over the closed-trade slice. Sorts by entry time
+     * so the geometric compound walks the live sequence rather than whatever
+     * order the repo returned (defensive — repo currently sorts but we don't
+     * want this method to break if that changes). Trades with non-positive
+     * notional are skipped inside the calculator.
+     */
+    private GeometricReturnCalculator.Result computePerTradeReturnStats(List<Trades> closed) {
+        if (closed == null || closed.isEmpty()) {
+            return GeometricReturnCalculator.Result.zero();
+        }
+        List<GeometricReturnCalculator.TradeReturn> series = closed.stream()
+                .sorted(Comparator.comparing(Trades::getEntryTime,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(t -> new GeometricReturnCalculator.TradeReturn(
+                        t.getRealizedPnlAmount(), t.getTotalEntryQuoteQty()))
+                .toList();
+        return GeometricReturnCalculator.compute(series);
     }
 
     public List<DailyPnlResponse> getDaily(UUID userId, LocalDate from, LocalDate to, String strategyCode) {
@@ -126,11 +151,14 @@ public class PnlService {
                     .count();
             BigDecimal winRate = list.isEmpty() ? BigDecimal.ZERO
                     : BigDecimal.valueOf(wins).divide(BigDecimal.valueOf(list.size()), 4, RoundingMode.HALF_UP).multiply(HUNDRED);
+            GeometricReturnCalculator.Result tr = computePerTradeReturnStats(list);
             return StrategyPnlResponse.builder()
                     .strategyCode(e.getKey())
                     .realizedPnl(pnl.setScale(8, RoundingMode.HALF_UP))
                     .tradeCount(list.size())
                     .winRate(winRate)
+                    .avgTradeReturnPct(tr.avgTradeReturnPct())
+                    .geometricReturnPctAtAlloc90(tr.geometricReturnPct())
                     .build();
         }).toList();
     }
