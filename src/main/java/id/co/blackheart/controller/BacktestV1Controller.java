@@ -1,9 +1,12 @@
 package id.co.blackheart.controller;
 
+import id.co.blackheart.dto.request.ActivateBacktestStrategyRequest;
 import id.co.blackheart.dto.request.BacktestRunRequest;
+import id.co.blackheart.dto.response.AccountStrategyResponse;
 import id.co.blackheart.dto.response.BacktestRunDetailResponse;
 import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.service.backtest.BacktestActivationService;
 import id.co.blackheart.service.backtest.BacktestQueryService;
 import id.co.blackheart.service.backtest.BacktestService;
 import id.co.blackheart.service.user.JwtService;
@@ -30,6 +33,7 @@ public class BacktestV1Controller {
 
     private final BacktestService backtestService;
     private final BacktestQueryService backtestQueryService;
+    private final BacktestActivationService backtestActivationService;
     private final JwtService jwtService;
 
     /**
@@ -129,6 +133,25 @@ public class BacktestV1Controller {
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(backtestQueryService.getTrades(userId, id))
+                .build());
+    }
+
+    /**
+     * Promote a completed backtest run's parameter snapshot to a user-owned account
+     * strategy: saves the overrides as an active preset and enables the strategy.
+     * The strategy starts in paper-trading mode ({@code simulated=true}) unless it
+     * was already promoted to real capital.
+     */
+    @PostMapping("/{runId}/activate-strategy")
+    public ResponseEntity<ResponseDto> activateStrategy(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID runId,
+            @Valid @RequestBody ActivateBacktestStrategyRequest request) {
+        UUID userId = extractUserId(authHeader);
+        AccountStrategyResponse result = backtestActivationService.activate(userId, runId, request);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(result)
                 .build());
     }
 

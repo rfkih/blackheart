@@ -410,6 +410,8 @@ public class AccountStrategyService {
         dirty |= applyRegimeGateChange(strategy, req);
         dirty |= applyKellyChange(strategy, req);
         dirty |= applyRiskSizingChange(strategy, req);
+        dirty |= applyCapitalAllocationChange(strategy, req);
+        dirty |= applyDirectionChange(strategy, req);
 
         if (!dirty) {
             return toResponse(strategy);
@@ -525,6 +527,41 @@ public class AccountStrategyService {
         return dirty;
     }
 
+    private boolean applyCapitalAllocationChange(
+            AccountStrategy strategy, UpdateAccountStrategyRequest req) {
+        if (req.getCapitalAllocationPct() == null) return false;
+        if (req.getCapitalAllocationPct().compareTo(strategy.getCapitalAllocationPct()) == 0) {
+            return false;
+        }
+        strategy.setCapitalAllocationPct(req.getCapitalAllocationPct());
+        log.info("Updated strategy id={} capitalAllocationPct -> {}",
+                strategy.getAccountStrategyId(), req.getCapitalAllocationPct());
+        return true;
+    }
+
+    private boolean applyDirectionChange(AccountStrategy strategy, UpdateAccountStrategyRequest req) {
+        Boolean newLong = req.getAllowLong();
+        Boolean newShort = req.getAllowShort();
+        if (newLong == null && newShort == null) return false;
+        boolean effectiveLong = newLong != null ? newLong : Boolean.TRUE.equals(strategy.getAllowLong());
+        boolean effectiveShort = newShort != null ? newShort : Boolean.TRUE.equals(strategy.getAllowShort());
+        if (!effectiveLong && !effectiveShort) {
+            throw new IllegalArgumentException("At least one of allowLong or allowShort must be true.");
+        }
+        boolean dirty = false;
+        if (newLong != null && !newLong.equals(strategy.getAllowLong())) {
+            strategy.setAllowLong(newLong);
+            dirty = true;
+            log.info("Updated strategy id={} allowLong -> {}", strategy.getAccountStrategyId(), newLong);
+        }
+        if (newShort != null && !newShort.equals(strategy.getAllowShort())) {
+            strategy.setAllowShort(newShort);
+            dirty = true;
+            log.info("Updated strategy id={} allowShort -> {}", strategy.getAccountStrategyId(), newShort);
+        }
+        return dirty;
+    }
+
     /**
      * Lightweight before/after snapshot of the editable fields. Avoids
      * dragging the full entity (including non-serializable JPA lazy refs)
@@ -540,7 +577,10 @@ public class AccountStrategyService {
             Boolean kellySizingEnabled,
             BigDecimal kellyMaxFraction,
             Boolean useRiskBasedSizing,
-            BigDecimal riskPct
+            BigDecimal riskPct,
+            BigDecimal capitalAllocationPct,
+            Boolean allowLong,
+            Boolean allowShort
     ) {
         static AccountStrategySnapshot of(AccountStrategy s) {
             return new AccountStrategySnapshot(
@@ -553,7 +593,10 @@ public class AccountStrategyService {
                     s.getKellySizingEnabled(),
                     s.getKellyMaxFraction(),
                     s.getUseRiskBasedSizing(),
-                    s.getRiskPct()
+                    s.getRiskPct(),
+                    s.getCapitalAllocationPct(),
+                    s.getAllowLong(),
+                    s.getAllowShort()
             );
         }
     }

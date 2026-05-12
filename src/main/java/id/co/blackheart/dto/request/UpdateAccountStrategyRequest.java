@@ -69,4 +69,21 @@ public class UpdateAccountStrategyRequest {
      */
     @DecimalMin("0.0001") @DecimalMax("0.20")
     private BigDecimal riskPct;
+
+    /**
+     * Capital allocation as a percentage of account equity (0.01–100).
+     * In direct-allocation mode this is the trade size. In risk-based mode
+     * this acts as the notional position cap. Null leaves unchanged.
+     */
+    @DecimalMin("0.01") @DecimalMax("100.00")
+    private BigDecimal capitalAllocationPct;
+
+    /**
+     * Allow long entries. Null leaves unchanged. At least one of allowLong /
+     * allowShort must be true after the update — the service validates this.
+     */
+    private Boolean allowLong;
+
+    /** Allow short entries. Null leaves unchanged. */
+    private Boolean allowShort;
 }

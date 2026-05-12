@@ -48,9 +48,11 @@ public class AccountStrategyOwnershipGuard {
     /**
      * V54 — read-only access gate. Returns the row if the user owns it OR if
      * the row is PUBLIC. Use only on read paths (clone-source preview, list
-     * decoration). Write paths (backtest, edit, enable, delete) MUST keep
-     * using {@link #assertOwned} — PUBLIC means "browseable + cloneable",
-     * never "writable by anyone".
+     * decoration). Write paths (edit, enable, delete) MUST keep using
+     * {@link #assertOwned} — PUBLIC means "browseable + cloneable", never
+     * "writable by anyone". Backtest submission uses {@link #assertExists}
+     * (ownership not required — simulation runs are always stored under the
+     * requesting user's id).
      */
     public AccountStrategy assertReadable(UUID userId, UUID accountStrategyId) {
         if (userId == null || accountStrategyId == null) {
@@ -67,6 +69,25 @@ public class AccountStrategyOwnershipGuard {
         Account account = accountRepository.findByAccountId(strategy.getAccountId())
                 .orElseThrow(() -> new EntityNotFoundException(AppConstant.NOT_FOUND));
         if (!userId.equals(account.getUserId())) {
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
+        }
+        return strategy;
+    }
+
+    /**
+     * Backtest path — verifies the account strategy exists and is not deleted,
+     * but does NOT enforce ownership. Any active account strategy (including a
+     * researcher's) can serve as a backtest template; the resulting run is
+     * always stored under the requesting user's id. Write paths (live trading,
+     * edit, enable, delete) must continue to use {@link #assertOwned}.
+     */
+    public AccountStrategy assertExists(UUID accountStrategyId) {
+        if (accountStrategyId == null) {
+            throw new EntityNotFoundException(AppConstant.NOT_FOUND);
+        }
+        AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId)
+                .orElseThrow(() -> new EntityNotFoundException(AppConstant.NOT_FOUND));
+        if (Boolean.TRUE.equals(strategy.getIsDeleted())) {
             throw new EntityNotFoundException(AppConstant.NOT_FOUND);
         }
         return strategy;

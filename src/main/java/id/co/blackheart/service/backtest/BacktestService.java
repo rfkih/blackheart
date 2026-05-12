@@ -56,11 +56,15 @@ public class BacktestService {
                 request.getAsset(), request.getInterval(),
                 request.getStartTime(), request.getEndTime());
 
-        ownershipGuard.assertOwned(userId, request.getAccountStrategyId());
+        // Backtest is a read-only simulation — ownership is not required on the
+        // account strategy. A user may replicate a researcher's run (which
+        // carries the researcher's accountStrategyId). The resulting run is
+        // always stored under userId so it stays private to the requester.
+        ownershipGuard.assertExists(request.getAccountStrategyId());
         if (request.getStrategyAccountStrategyIds() != null) {
             for (UUID perStrategyId : request.getStrategyAccountStrategyIds().values()) {
                 if (perStrategyId != null) {
-                    ownershipGuard.assertOwned(userId, perStrategyId);
+                    ownershipGuard.assertExists(perStrategyId);
                 }
             }
         }
