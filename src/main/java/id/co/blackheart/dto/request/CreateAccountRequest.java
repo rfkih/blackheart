@@ -37,14 +37,13 @@ public class CreateAccountRequest {
     private String username;
 
     /**
-     * Three-letter exchange code - matches the DB column length. Only
-     * Binance variants are supported today; "BIN" for spot, "BIF" for
-     * USD-M futures.
+     * Three-letter exchange code - matches the DB column length. Only Binance
+     * spot ("BNC") is supported today.
      */
     @NotBlank(message = "Exchange is required")
     @Pattern(
-            regexp = "^(BIN|BIF)$",
-            message = "Exchange must be one of: BIN, BIF"
+            regexp = "^BNC$",
+            message = "Exchange must be BNC"
     )
     private String exchange;
 
@@ -78,5 +77,6 @@ public class CreateAccountRequest {
      * payload entirely.
      */
     @AssertTrue(message = "You must confirm withdrawal permissions are disabled on this API key")
+    @Builder.Default
     private Boolean acknowledgedSafety = Boolean.FALSE;
 }

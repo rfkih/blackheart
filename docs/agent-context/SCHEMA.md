@@ -25,13 +25,13 @@
 |---|---|---|
 | `strategy_definition` | `V1__baseline.sql:115` | Strategy archetype registry (`archetype`, `archetype_version`, `spec_jsonb`). `enabled` + `simulated` (V40 definition-scope) gate live execution. |
 | `strategy_param` | redesigned in V29 | 1:N saved presets per `account_strategy`. `is_active` flags the live preset; soft-deleted presets remain resolvable for backtest reproducibility. PK `param_id`. |
-| `account_strategy` | search the file | Per-account strategy enablement; `simulated` flag (V15) diverts OPEN_LONG/OPEN_SHORT only — see WORKING_RULES.md. `visibility` (V54) is `PRIVATE` (default) or `PUBLIC`; PUBLIC rows are listed to every user for browse-and-clone (research-agent's catalogue is PUBLIC). Backtest/edit/enable still gated on ownership regardless of visibility. |
+| `account_strategy` | search the file | Per-account strategy enablement; `simulated` flag (V15) diverts OPEN_LONG/OPEN_SHORT only — see WORKING_RULES.md. `visibility` (V54) is `PRIVATE` (default) or `PUBLIC`; PUBLIC rows are listed to every user for browse-and-clone (research-agent's catalogue is PUBLIC). Backtest/edit/enable still gated on ownership regardless of visibility. **V62**: gate toggles `kill_switch_gate_enabled` / `regime_gate_enabled` (V43) / `correlation_gate_enabled` / `concurrent_cap_gate_enabled` — all default FALSE; `RiskGuardService.evaluate` skips each gate whose toggle is off. |
 
 ## Research plane
 
 | Table | Path | Purpose / key columns |
 |---|---|---|
-| `backtest_run` | `V1__baseline.sql:424` | One backtest execution. Config snapshot, metrics (return, Sharpe, Sortino, max drawdown, profit factor), `triggered_by` (USER/RESEARCHER), `strategy_param_ids` JSONB pinning preset rows. V60 adds `avg_trade_return_pct` + `geometric_return_pct_at_alloc_90` — sizing-independent companions to `return_pct`. |
+| `backtest_run` | `V1__baseline.sql:424` | One backtest execution. Config snapshot, metrics (return, Sharpe, Sortino, max drawdown, profit factor), `triggered_by` (USER/RESEARCHER), `strategy_param_ids` JSONB pinning preset rows. V60 adds `avg_trade_return_pct` + `geometric_return_pct_at_alloc_90` — sizing-independent companions to `return_pct`. **V62**: four nullable JSONB override columns (`strategy_kill_switch_overrides`, `strategy_regime_overrides`, `strategy_correlation_overrides`, `strategy_concurrent_cap_overrides`) — per-run per-strategy gate toggle overrides; null/missing key falls back to `account_strategy.<gate>_gate_enabled`. |
 | `research_iteration_log` | `V1__baseline.sql:899` | Pre-registered research hypothesis + verdict (`PASS`/`ITERATE`/`DISCARD`/`FAILED`) and statistical verdict (`SIGNIFICANT_EDGE`/`NO_EDGE`/...). Stat-rigor gate from V11 enforced (n≥100, PF 95% CI lower>1.0). |
 | `walk_forward_run` | `V1__baseline.sql:992` | Out-of-sample stability verdict (`ROBUST`/`OVERFIT`/`NO_EDGE`) across n-fold train/test windows. Gates promotion from `SIGNIFICANT_EDGE` → production-eligible. |
 | `cross_window_run` | added V38 | Regime-labeled epoch results. `ROBUST_CROSS_WINDOW` = ≥80% windows net-positive after +20bps slippage. Window defs in `research-orchestrator/config/regime_windows.yml`. |

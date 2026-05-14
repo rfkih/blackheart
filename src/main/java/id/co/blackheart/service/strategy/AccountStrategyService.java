@@ -14,6 +14,7 @@ import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.alert.AlertService;
 import id.co.blackheart.service.alert.AlertSeverity;
 import id.co.blackheart.service.audit.AuditService;
+import id.co.blackheart.service.promotion.StrategyPromotionService;
 import id.co.blackheart.service.risk.KellySizingService;
 import id.co.blackheart.util.AppConstant;
 import jakarta.persistence.EntityNotFoundException;
@@ -31,6 +32,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -50,6 +52,7 @@ public class AccountStrategyService {
     private final StrategyParamService strategyParamService;
     private final AlertService alertService;
     private final KellySizingService kellySizingService;
+    private final StrategyPromotionService strategyPromotionService;
 
     /**
      * V54 — pinned UUID of the dedicated research-agent user (Flyway V54).
@@ -187,14 +190,21 @@ public class AccountStrategyService {
                     req.getIntervalName());
         }
 
-        // V15+ promotion-pipeline default: every new strategy starts in
-        // simulated=true so the safe path (paper-trade quarantine) is the
-        // default path. To go live, an admin must explicitly transition
-        // via POST /api/v1/strategy-promotion/{id}/promote with reason +
-        // evidence — the audit trail of "we considered this and approved
-        // it" is then recorded. Direct UPDATE on simulated still works
-        // for emergency operations but bypasses the workflow. (Bug 5 fix,
-        // 2026-04-28.)
+        // V66 — `simulated` default is creator-driven:
+        //   - research-agent (autonomous loop)   → simulated=true  (paper)
+        //   - admin or regular user (human)      → simulated=false (real)
+        // Rationale: the autonomous loop creates rows constantly during
+        // sweeps and must never touch real capital without explicit
+        // operator promotion; humans creating a strategy expressly intend
+        // it for real use, and the prior "always-true" default forced an
+        // additional manual promote step that operators consistently
+        // forgot, leaving the row stranded in paper while the dashboard
+        // showed LIVE. The definition-scope `simulated` flag still gates
+        // execution globally, so flipping this per-row knob alone won't
+        // wake a quarantined strategy code without a separate definition
+        // promotion via /research. (Replaces the V15-era "always paper"
+        // default — see commit history for the prior rationale.)
+        boolean creatorIsAgent = isResearchAgent(userId);
         // V54 — research-agent-owned strategies default to PUBLIC so the
         // autonomous loop's catalogue is browsable to all tenants without
         // manual flag-flipping. Everyone else defaults PRIVATE (entity
@@ -221,13 +231,12 @@ public class AccountStrategyService {
                 .symbol(req.getSymbol())
                 .intervalName(req.getIntervalName())
                 .enabled(shouldActivate)
-                .simulated(Boolean.TRUE)
+                .simulated(creatorIsAgent)
                 .allowLong(req.getAllowLong())
                 .allowShort(req.getAllowShort())
                 .maxOpenPositions(req.getMaxOpenPositions())
                 .capitalAllocationPct(req.getCapitalAllocationPct())
                 .priorityOrder(req.getPriorityOrder())
-                .currentStatus("STOPPED")
                 .isDeleted(false)
                 .deletedAt(null)
                 .visibility(visibility)
@@ -253,6 +262,19 @@ public class AccountStrategyService {
                 /*sourceBacktestRunId=*/null,
                 "system");
 
+        // V66 — same trigger as activateStrategy: if the just-created row is
+        // going to run in real mode (enabled=true AND simulated=false AND not
+        // owned by the research-agent), walk the strategy_definition to
+        // PROMOTED so the live executor doesn't silently divert to paper
+        // because of an unpromoted definition. Without this, "Create + start"
+        // looks LIVE on the UI but executes paper at the divert check.
+        boolean willRunReal = shouldActivate
+                && !creatorIsAgent
+                && !Boolean.TRUE.equals(saved.getSimulated());
+        if (willRunReal) {
+            ensureDefinitionPromoted(saved.getStrategyCode(), userId);
+        }
+
         log.info("Created account strategy id={} code={} preset={} account={} enabled={}",
                 saved.getAccountStrategyId(), saved.getStrategyCode(),
                 saved.getPresetName(), saved.getAccountId(), saved.getEnabled());
@@ -276,42 +298,110 @@ public class AccountStrategyService {
     public AccountStrategyResponse activateStrategy(UUID userId, UUID accountStrategyId) {
         AccountStrategy target = loadOwnedActive(userId, accountStrategyId);
 
-        if (Boolean.TRUE.equals(target.getEnabled())) {
-            // Idempotent — already active.
+        // V66 — non-research-agent activation = explicit "go real" intent.
+        // If the row is still in paper mode, flip simulated=false alongside
+        // the enabled flip so the operator doesn't have to call a separate
+        // promotion endpoint. The autonomous loop activates rows via the
+        // same endpoint but should never flip simulated — research stays
+        // paper unless an operator promotes it deliberately.
+        boolean shouldFlipSimulated = !isResearchAgent(userId)
+                && Boolean.TRUE.equals(target.getSimulated());
+
+        if (Boolean.TRUE.equals(target.getEnabled()) && !shouldFlipSimulated) {
+            // Idempotent — already active and already in the operator's
+            // intended simulated state.
             return toResponse(target);
         }
 
-        Optional<AccountStrategy> currentActive = accountStrategyRepository.findActivePreset(
+        // V66 — list variant so seeded rows that share a tuple (e.g. the V64
+        // TEST rig pairs LONG+SHORT on the same interval) don't crash with
+        // NonUniqueResultException. Deactivate every sibling that isn't the
+        // target before enabling the target — restores the
+        // "one active per (account, def, symbol, interval)" invariant.
+        List<AccountStrategy> siblings = accountStrategyRepository.findActivePresets(
                 target.getAccountId(),
                 target.getStrategyDefinitionId(),
                 target.getSymbol(),
                 target.getIntervalName());
 
-        if (currentActive.isPresent()) {
-            AccountStrategy active = currentActive.get();
-            long openTrades = tradesRepository.countOpenByAccountStrategyId(active.getAccountStrategyId());
+        for (AccountStrategy sibling : siblings) {
+            if (sibling.getAccountStrategyId().equals(target.getAccountStrategyId())) continue;
+            long openTrades = tradesRepository.countOpenByAccountStrategyId(sibling.getAccountStrategyId());
             if (openTrades > 0) {
                 throw new IllegalStateException(
-                        "Current preset \"" + active.getPresetName() + "\" has "
+                        "Current preset \"" + sibling.getPresetName() + "\" has "
                                 + openTrades + " open trade(s). Close positions before switching presets.");
             }
-            active.setEnabled(false);
-            accountStrategyRepository.save(active);
-            // Flush so the partial unique index sees the deactivation before
+            sibling.setEnabled(false);
+            accountStrategyRepository.save(sibling);
+        }
+        if (!siblings.isEmpty()) {
+            // Flush so the partial unique index sees the deactivations before
             // we enable the new preset within the same transaction.
             accountStrategyRepository.flush();
         }
+        Optional<AccountStrategy> currentActive = siblings.stream()
+                .filter(s -> !s.getAccountStrategyId().equals(target.getAccountStrategyId()))
+                .findFirst();
 
         target.setEnabled(true);
+        if (shouldFlipSimulated) {
+            target.setSimulated(false);
+        }
         AccountStrategy saved = accountStrategyRepository.save(target);
 
-        log.info("Activated preset id={} name={} (deactivated previous active={})",
-                saved.getAccountStrategyId(), saved.getPresetName(),
+        // V66 — when a human activates a row that will run in real mode, the
+        // definition's own simulated/enabled flags would still gate the live
+        // executor (OR-semantics in handlePaperTradeShortCircuit). Walk the
+        // definition state through the legal transition graph to PROMOTED
+        // so the operator's single LIVE click is sufficient. The trigger
+        // is the END-STATE of the row, not "did we need to flip simulated":
+        // an admin-created row already lands with simulated=false from V66's
+        // createStrategy default, so shouldFlipSimulated would be false but
+        // the def still needs promotion. (Without this, the row goes LIVE in
+        // the UI but stays paper at execution time — misleading.)
+        boolean willRunReal = !isResearchAgent(userId) && !Boolean.TRUE.equals(saved.getSimulated());
+        if (willRunReal) {
+            ensureDefinitionPromoted(saved.getStrategyCode(), userId);
+        }
+
+        log.info("Activated preset id={} name={} simulated={} (deactivated previous active={})",
+                saved.getAccountStrategyId(), saved.getPresetName(), saved.getSimulated(),
                 currentActive.map(AccountStrategy::getAccountStrategyId).orElse(null));
 
         auditService.recordEvent(userId, "STRATEGY_ACTIVATED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
                 saved.getAccountStrategyId(), null, saved);
         return toResponse(saved);
+    }
+
+    /**
+     * V66 — walk the strategy_definition state to PROMOTED via legal
+     * transitions so the row can actually execute real trades. Skipped
+     * when already PROMOTED. RESEARCH state requires two steps
+     * (RESEARCH → PAPER_TRADE → PROMOTED) per the chk_promotion_states
+     * constraint. DEMOTED/REJECTED states are NOT auto-revived — those
+     * carry operator intent ("we took this off-line") and require explicit
+     * promotion via the /research dashboard.
+     */
+    private void ensureDefinitionPromoted(String strategyCode, UUID actorUserId) {
+        try {
+            String state = strategyPromotionService.currentDefinitionStateByCode(strategyCode);
+            if ("PROMOTED".equals(state)) return;
+
+            String reason = "Auto-promote: human operator activated an account_strategy row";
+            if ("RESEARCH".equals(state)) {
+                strategyPromotionService.promoteDefinition(strategyCode, "PAPER_TRADE", reason, null, actorUserId);
+                strategyPromotionService.promoteDefinition(strategyCode, "PROMOTED", reason, null, actorUserId);
+            } else if ("PAPER_TRADE".equals(state)) {
+                strategyPromotionService.promoteDefinition(strategyCode, "PROMOTED", reason, null, actorUserId);
+            } else {
+                log.warn("[V66] Definition {} in state {} not auto-promoted — operator must intervene via /research",
+                        strategyCode, state);
+            }
+        } catch (Exception e) {
+            log.warn("[V66] Failed to auto-promote definition {} on activation: {}",
+                    strategyCode, e.getMessage());
+        }
     }
 
     /**
@@ -408,6 +498,7 @@ public class AccountStrategyService {
         dirty |= applyIntervalChange(strategy, req, accountStrategyId);
         dirty |= applyPriorityOrderChange(strategy, req);
         dirty |= applyRegimeGateChange(strategy, req);
+        dirty |= applyGateConfigChange(strategy, req);
         dirty |= applyKellyChange(strategy, req);
         dirty |= applyRiskSizingChange(strategy, req);
         dirty |= applyCapitalAllocationChange(strategy, req);
@@ -417,9 +508,29 @@ public class AccountStrategyService {
             return toResponse(strategy);
         }
         AccountStrategy saved = accountStrategyRepository.save(strategy);
+        AccountStrategySnapshot after = AccountStrategySnapshot.of(saved);
         auditService.recordEvent(userId, "STRATEGY_UPDATED", AppConstant.ENTITY_ACCOUNT_STRATEGY,
-                saved.getAccountStrategyId(), before, AccountStrategySnapshot.of(saved));
+                saved.getAccountStrategyId(), before, after);
+        // V62 — when ANY gate toggle moved (regime/kill-switch/correlation/
+        // concurrent-cap), emit a dedicated event on top of STRATEGY_UPDATED so
+        // "who toggled which gate when" is a direct audit-log filter
+        // (action = STRATEGY_GATE_CONFIG_UPDATED) rather than a JSONB diff scan
+        // over every strategy update. before/after carry the full snapshot for
+        // diffing.
+        if (gateConfigChanged(before, after)) {
+            auditService.recordEvent(userId, "STRATEGY_GATE_CONFIG_UPDATED",
+                    AppConstant.ENTITY_ACCOUNT_STRATEGY,
+                    saved.getAccountStrategyId(), before, after);
+        }
         return toResponse(saved);
+    }
+
+    private static boolean gateConfigChanged(
+            AccountStrategySnapshot before, AccountStrategySnapshot after) {
+        return !Objects.equals(before.regimeGateEnabled(),       after.regimeGateEnabled())
+            || !Objects.equals(before.killSwitchGateEnabled(),   after.killSwitchGateEnabled())
+            || !Objects.equals(before.correlationGateEnabled(),  after.correlationGateEnabled())
+            || !Objects.equals(before.concurrentCapGateEnabled(), after.concurrentCapGateEnabled());
     }
 
     private boolean applyIntervalChange(
@@ -485,6 +596,34 @@ public class AccountStrategyService {
 
     private static String normalizeRegimeCsv(String raw) {
         return !StringUtils.hasText(raw) ? null : raw.trim().toUpperCase();
+    }
+
+    // V62 — kill-switch / correlation / concurrent-cap gate toggles.
+    // Mirrors the same pattern applyRegimeGateChange uses for the V43 toggle.
+    private boolean applyGateConfigChange(AccountStrategy strategy, UpdateAccountStrategyRequest req) {
+        boolean dirty = false;
+        if (req.getKillSwitchGateEnabled() != null
+                && !req.getKillSwitchGateEnabled().equals(strategy.getKillSwitchGateEnabled())) {
+            strategy.setKillSwitchGateEnabled(req.getKillSwitchGateEnabled());
+            dirty = true;
+            log.info("Updated strategy id={} killSwitchGateEnabled -> {}",
+                    strategy.getAccountStrategyId(), req.getKillSwitchGateEnabled());
+        }
+        if (req.getCorrelationGateEnabled() != null
+                && !req.getCorrelationGateEnabled().equals(strategy.getCorrelationGateEnabled())) {
+            strategy.setCorrelationGateEnabled(req.getCorrelationGateEnabled());
+            dirty = true;
+            log.info("Updated strategy id={} correlationGateEnabled -> {}",
+                    strategy.getAccountStrategyId(), req.getCorrelationGateEnabled());
+        }
+        if (req.getConcurrentCapGateEnabled() != null
+                && !req.getConcurrentCapGateEnabled().equals(strategy.getConcurrentCapGateEnabled())) {
+            strategy.setConcurrentCapGateEnabled(req.getConcurrentCapGateEnabled());
+            dirty = true;
+            log.info("Updated strategy id={} concurrentCapGateEnabled -> {}",
+                    strategy.getAccountStrategyId(), req.getConcurrentCapGateEnabled());
+        }
+        return dirty;
     }
 
     // V45 — Kelly / bankroll sizing fields.
@@ -580,7 +719,12 @@ public class AccountStrategyService {
             BigDecimal riskPct,
             BigDecimal capitalAllocationPct,
             Boolean allowLong,
-            Boolean allowShort
+            Boolean allowShort,
+            // V62 — gate toggles. gateConfigChanged() in the parent class diffs
+            // these to decide whether to emit STRATEGY_GATE_CONFIG_UPDATED.
+            Boolean killSwitchGateEnabled,
+            Boolean correlationGateEnabled,
+            Boolean concurrentCapGateEnabled
     ) {
         static AccountStrategySnapshot of(AccountStrategy s) {
             return new AccountStrategySnapshot(
@@ -596,7 +740,10 @@ public class AccountStrategyService {
                     s.getRiskPct(),
                     s.getCapitalAllocationPct(),
                     s.getAllowLong(),
-                    s.getAllowShort()
+                    s.getAllowShort(),
+                    s.getKillSwitchGateEnabled(),
+                    s.getCorrelationGateEnabled(),
+                    s.getConcurrentCapGateEnabled()
             );
         }
     }
@@ -635,11 +782,23 @@ public class AccountStrategyService {
      */
     private boolean isResearchAgentAccount(Account account) {
         if (account == null || account.getUserId() == null) return false;
+        return isResearchAgent(account.getUserId());
+    }
+
+    /**
+     * V66 — true when {@code userId} matches the dedicated research-agent
+     * pinned by {@code blackheart.research-agent.user-id}. Used to discriminate
+     * between the autonomous loop (which must stay paper-by-default so its
+     * sweep churn never touches real capital) and human operators (admin or
+     * regular users — whose explicit create/activate gestures signal real
+     * intent and should not be muted behind a separate promotion workflow).
+     * Misconfigured property → fail closed (treat as non-agent so humans win).
+     */
+    private boolean isResearchAgent(UUID userId) {
+        if (userId == null) return false;
         try {
-            UUID agentUuid = UUID.fromString(researchAgentUserId);
-            return agentUuid.equals(account.getUserId());
+            return UUID.fromString(researchAgentUserId).equals(userId);
         } catch (IllegalArgumentException e) {
-            // Misconfigured property — fail closed (treat as not-agent).
             log.warn("blackheart.research-agent.user-id is not a valid UUID: {}", researchAgentUserId);
             return false;
         }
@@ -664,20 +823,25 @@ public class AccountStrategyService {
 
     private void deactivateActiveSibling(
             UUID accountId, UUID strategyDefinitionId, String symbol, String intervalName) {
-        Optional<AccountStrategy> active = accountStrategyRepository.findActivePreset(
+        // V66 — list variant so a tuple with >1 enabled rows (e.g. V64-style
+        // LONG+SHORT seeds on the same interval) doesn't crash this path with
+        // NonUniqueResultException. Deactivate every sibling; the caller
+        // proceeds to enable the new preset under the same tuple.
+        List<AccountStrategy> siblings = accountStrategyRepository.findActivePresets(
                 accountId, strategyDefinitionId, symbol, intervalName);
-        if (active.isEmpty()) return;
+        if (siblings.isEmpty()) return;
 
-        AccountStrategy row = active.get();
-        long openTrades = tradesRepository.countOpenByAccountStrategyId(row.getAccountStrategyId());
-        if (openTrades > 0) {
-            throw new IllegalStateException(
-                    "Current preset \"" + row.getPresetName() + "\" has "
-                            + openTrades + " open trade(s). Close positions before creating "
-                            + "a new active preset for the same strategy.");
+        for (AccountStrategy row : siblings) {
+            long openTrades = tradesRepository.countOpenByAccountStrategyId(row.getAccountStrategyId());
+            if (openTrades > 0) {
+                throw new IllegalStateException(
+                        "Current preset \"" + row.getPresetName() + "\" has "
+                                + openTrades + " open trade(s). Close positions before creating "
+                                + "a new active preset for the same strategy.");
+            }
+            row.setEnabled(false);
+            accountStrategyRepository.save(row);
         }
-        row.setEnabled(false);
-        accountStrategyRepository.save(row);
         accountStrategyRepository.flush();
     }
 
@@ -751,7 +915,6 @@ public class AccountStrategyService {
                 .maxOpenPositions(s.getMaxOpenPositions())
                 .capitalAllocationPct(s.getCapitalAllocationPct())
                 .priorityOrder(s.getPriorityOrder())
-                .currentStatus(s.getCurrentStatus())
                 .createdTime(s.getCreatedTime())
                 .updatedTime(s.getUpdatedTime())
                 .ddKillThresholdPct(s.getDdKillThresholdPct())
@@ -765,6 +928,9 @@ public class AccountStrategyService {
                 .kellyMaxFraction(s.getKellyMaxFraction())
                 .useRiskBasedSizing(s.getUseRiskBasedSizing())
                 .riskPct(s.getRiskPct())
+                .killSwitchGateEnabled(s.getKillSwitchGateEnabled())
+                .correlationGateEnabled(s.getCorrelationGateEnabled())
+                .concurrentCapGateEnabled(s.getConcurrentCapGateEnabled())
                 .visibility(s.getVisibility())
                 .ownedByCurrentUser(owned)
                 .ownerLabel(ownerLabel)

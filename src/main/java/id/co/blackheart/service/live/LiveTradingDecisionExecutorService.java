@@ -16,6 +16,7 @@ import id.co.blackheart.service.risk.BookVolTargetingService;
 import id.co.blackheart.service.risk.KellySizingService;
 import id.co.blackheart.service.risk.RiskGuardService;
 import id.co.blackheart.service.strategy.StrategyDecisionInvariants;
+import id.co.blackheart.service.trade.TradeExecutionLogService;
 import id.co.blackheart.service.trade.TradeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -54,6 +55,7 @@ public class LiveTradingDecisionExecutorService {
     private final BookVolTargetingService bookVolTargetingService;
     private final StrategyPromotionService strategyPromotionService;
     private final StrategyDefinitionRepository strategyDefinitionRepository;
+    private final TradeExecutionLogService tradeExecutionLogService;
 
     public void execute(
             Trades activeTrade,
@@ -106,6 +108,8 @@ public class LiveTradingDecisionExecutorService {
         if (!verdict.allowed()) {
             log.warn("[RiskGuard] BLOCKED {} | strategy={} reason={}",
                     decision.getDecisionType(), decision.getStrategyCode(), verdict.reason());
+            logExecutorRejection(context, decision, side,
+                    "RiskGuard: " + verdict.reason());
             return false;
         }
 
@@ -148,11 +152,16 @@ public class LiveTradingDecisionExecutorService {
                 .map(d -> Boolean.TRUE.equals(d.getSimulated()))
                 .orElse(false);
 
+        String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                ? SIDE_LONG : SIDE_SHORT;
+
         // Kill-switch: definition disabled → drop entry silently (no paper
         // trade either). CLOSE_*/UPDATE bypass this block entirely.
         if (definitionDisabled) {
             log.info("[KillSwitch] {} {} — definition disabled, dropping entry signal",
                     decision.getStrategyCode(), decision.getDecisionType());
+            logExecutorRejection(context, decision, side,
+                    "Definition disabled (kill-switch): " + decision.getStrategyCode());
             return true;
         }
         if (accountSimulated || definitionSimulated) {
@@ -161,6 +170,14 @@ public class LiveTradingDecisionExecutorService {
                     decision.getStrategyCode(), decision.getDecisionType(),
                     definitionSimulated, accountSimulated);
             strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
+            // V66 — also surface the divert in trade_execution_log so the
+            // operator has a single auditable feed for every entry attempt,
+            // regardless of whether it lands real or paper. paper_trade_run
+            // still holds the full decision/context snapshot for forensics;
+            // this row just notes "attempted, diverted to paper".
+            logExecutorRejection(context, decision, side,
+                    "Diverted to paper (def.simulated=" + definitionSimulated
+                            + ", acct.simulated=" + accountSimulated + ")");
             return true;
         }
         return false;
@@ -312,6 +329,8 @@ public class LiveTradingDecisionExecutorService {
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid LONG trade amount. tradeAmount={}", tradeAmount);
+            logExecutorRejection(context, decision, SIDE_LONG,
+                    "Invalid LONG trade amount: " + tradeAmount);
             return;
         }
 
@@ -322,6 +341,8 @@ public class LiveTradingDecisionExecutorService {
                     balance,
                     tradeAmount
             );
+            logExecutorRejection(context, decision, SIDE_LONG,
+                    "Insufficient " + quoteAsset + " balance: " + balance + " < " + tradeAmount);
             return;
         }
 
@@ -331,6 +352,8 @@ public class LiveTradingDecisionExecutorService {
         }
 
         log.warn("Unsupported exchange for LONG entry: {}", account.getExchange());
+        logExecutorRejection(context, decision, SIDE_LONG,
+                "Unsupported exchange for LONG entry: " + account.getExchange());
     }
 
     private void executeOpenShort(
@@ -349,6 +372,8 @@ public class LiveTradingDecisionExecutorService {
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid SHORT trade amount. tradeAmount={}", tradeAmount);
+            logExecutorRejection(context, decision, SIDE_SHORT,
+                    "Invalid SHORT trade amount: " + tradeAmount);
             return;
         }
 
@@ -359,6 +384,8 @@ public class LiveTradingDecisionExecutorService {
                     balance,
                     tradeAmount
             );
+            logExecutorRejection(context, decision, SIDE_SHORT,
+                    "Insufficient " + baseAsset + " balance: " + balance + " < " + tradeAmount);
             return;
         }
 
@@ -376,6 +403,39 @@ public class LiveTradingDecisionExecutorService {
         }
 
         log.warn("Unsupported exchange for SHORT entry: {}", account.getExchange());
+        logExecutorRejection(context, decision, SIDE_SHORT,
+                "Unsupported exchange for SHORT entry: " + account.getExchange());
+    }
+
+    /**
+     * V66 — record every executor-side rejection that prevents an OPEN_* from
+     * reaching {@code tradeService.binanceOpenLongMarketOrder}/Short.
+     * Pre-V66, these paths only emitted a log line; the operator had no audit
+     * row in {@code trade_execution_log} to tell them why a strategy didn't
+     * fire. Best-effort — the log service swallows its own write failures.
+     */
+    private void logExecutorRejection(
+            EnrichedStrategyContext context,
+            StrategyDecision decision,
+            String side,
+            String reason
+    ) {
+        if (context == null || context.getAccount() == null) return;
+        String strategyName = decision != null && decision.getStrategyCode() != null
+                ? decision.getStrategyCode()
+                : (context.getAccountStrategy() != null
+                        ? context.getAccountStrategy().getStrategyCode()
+                        : null);
+        String entryReason = decision != null ? decision.getReason() : null;
+        tradeExecutionLogService.logOpenFailure(
+                context.getAccount(),
+                context.getAsset(),
+                strategyName,
+                side,
+                entryReason,
+                null,
+                reason
+        );
     }
 
     private void executeUpdatePositionManagement(Trades activeTrade, StrategyDecision decision) {

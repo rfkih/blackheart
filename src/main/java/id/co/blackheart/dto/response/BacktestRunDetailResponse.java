@@ -50,6 +50,13 @@ public class BacktestRunDetailResponse {
      *  the wizard for this run only. */
     private Map<String, Boolean> strategyAllowLong;
     private Map<String, Boolean> strategyAllowShort;
+    /** V62 — per-strategy risk-gate override maps. Null on legacy runs;
+     *  populated when the operator flipped a gate in the wizard for this run.
+     *  The frontend re-run flow reads these to round-trip the wizard state. */
+    private Map<String, Boolean> strategyKillSwitchOverrides;
+    private Map<String, Boolean> strategyRegimeOverrides;
+    private Map<String, Boolean> strategyCorrelationOverrides;
+    private Map<String, Boolean> strategyConcurrentCapOverrides;
     private Map<String, String> strategyIntervals;
     /** Flat funding-rate stub used at submit time (basis points per 8h),
      *  applied per-position at close. Null on legacy runs that pre-date V22. */

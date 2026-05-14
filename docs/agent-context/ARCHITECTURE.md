@@ -132,12 +132,12 @@ Engine ticks on `5m` monitor candle (`BacktestCoordinatorService.MONITOR_INTERVA
 
 ## Account Strategy Lifecycle
 
-- **Create** `POST /api/v1/account-strategies` — verifies user owns account, `strategyCode` resolves. Defaults: `enabled=false`, `currentStatus="STOPPED"`, `is_deleted=false`. Emits `STRATEGY_CREATED`.
+- **Create** `POST /api/v1/account-strategies` — verifies user owns account, `strategyCode` resolves. Defaults: `enabled=false`, `is_deleted=false`. Emits `STRATEGY_CREATED`.
 - **Activate/Deactivate** `POST /:id/activate`|`/deactivate` — flips `enabled`. Activate atomically deactivates sibling on same `(account, strategyDefinition, symbol, interval)`, blocking if sibling has open trades. Emits `STRATEGY_ACTIVATED`/`DEACTIVATED`.
 - **Update** `PATCH /:id` — `intervalName` blocked if open trades; `priorityOrder` (1-99) no guard. Emits `STRATEGY_UPDATED` w/ before/after.
 - **Soft-delete** `DELETE /:id` — sets `is_deleted=true`, `enabled=false`, `deleted_at=now()`. Blocked if `countOpenByAccountStrategyId>0` (throws `IllegalStateException`). Historical trades still resolve. Emits `STRATEGY_DELETED`.
 - **Re-arm kill switch** `POST /:id/rearm` — clears DD trip. Emits `KILL_SWITCH_REARMED`.
-- **Liveness flag is `enabled`, not `currentStatus`**: `current_status` is legacy, no service writes it. All active queries filter `enabled=true AND is_deleted=false`. Frontend status badge derived from `enabled`.
+- **Liveness flag is `enabled`**: all active queries filter `enabled=true AND is_deleted=false`. Frontend status badge derived from `enabled` (`LIVE`/`STOPPED`). The legacy `current_status` column was dropped in V65 (it was perpetually `'STOPPED'` and confused operators).
 - **`is_deleted` filter**: every `AccountStrategyRepository` query filters it (live orchestration, scheduler, UI list). Trade/P&L joins must **NOT** filter `is_deleted` — historical attribution depends on resolving deleted strategies.
 
 ## Per-Strategy Parameter System (LSR + VCB + VBO)

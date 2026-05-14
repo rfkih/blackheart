@@ -58,7 +58,9 @@ class BacktestAllocationResolutionTest {
                 null, // backtestPersistenceService
                 null, // backtestEquityPointRecorder
                 null, // progressTracker
-                accountStrategyRepository
+                accountStrategyRepository,
+                null, // riskGuardService (V62 — gate stack; resolveAllocationsForRun doesn't touch it)
+                null  // accountRepository (V62 — same)
         );
     }
 
@@ -399,5 +401,91 @@ class BacktestAllocationResolutionTest {
         BacktestCoordinatorService.StrategySizing s = sizing.get("lsr");
         assertEquals(Boolean.TRUE, s.useRiskBasedSizing());
         assertEquals(new BigDecimal("0.0300"), s.riskPct());
+    }
+
+    // ── V62 — gate-toggle + kill-switch-state propagation ──────────────────
+
+    @Test
+    void sizingResolverPropagatesAllFourGateTogglesFromPersistedRow() {
+        // Each gate flag flows independently from the persisted row to the
+        // synthetic AccountStrategy via StrategySizing. Without this, the
+        // backtest gate evaluator would see all-false and apply no gates
+        // even when the live row has them on.
+        UUID accountStrategyId = UUID.randomUUID();
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(accountStrategyId);
+
+        AccountStrategy persisted = new AccountStrategy();
+        persisted.setCapitalAllocationPct(new BigDecimal("50"));
+        persisted.setKillSwitchGateEnabled(Boolean.TRUE);
+        persisted.setRegimeGateEnabled(Boolean.FALSE);
+        persisted.setCorrelationGateEnabled(Boolean.TRUE);
+        persisted.setConcurrentCapGateEnabled(Boolean.FALSE);
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(persisted));
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(Boolean.TRUE,  s.killSwitchGateEnabled());
+        assertEquals(Boolean.FALSE, s.regimeGateEnabled());
+        assertEquals(Boolean.TRUE,  s.correlationGateEnabled());
+        assertEquals(Boolean.FALSE, s.concurrentCapGateEnabled());
+    }
+
+    @Test
+    void sizingResolverPropagatesKillSwitchTrippedStateAndAccountId() {
+        // V62 review-fix #1 — kill-switch RUNTIME state (tripped flag +
+        // reason) must travel through to the synthetic AS so a backtest
+        // launched against a currently-tripped live strategy honours that
+        // state when the kill-switch gate is enabled.
+        // V62 review-fix #3 — accountId pre-resolved so the backtest gate
+        // evaluator can read Account from a state-level cache rather than
+        // re-issuing an accountStrategyRepository.findById per entry.
+        UUID accountStrategyId = UUID.randomUUID();
+        UUID accountId = UUID.randomUUID();
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(accountStrategyId);
+
+        AccountStrategy persisted = new AccountStrategy();
+        persisted.setAccountId(accountId);
+        persisted.setCapitalAllocationPct(new BigDecimal("40"));
+        persisted.setKillSwitchGateEnabled(Boolean.TRUE);
+        persisted.setIsKillSwitchTripped(Boolean.TRUE);
+        persisted.setKillSwitchReason("30-day DD 32.4% reached threshold 25.00%");
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(persisted));
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(Boolean.TRUE, s.isKillSwitchTripped(),
+                "tripped flag must propagate so backtest kill-switch gate denies in parity with live");
+        assertEquals("30-day DD 32.4% reached threshold 25.00%", s.killSwitchReason());
+        assertEquals(accountId, s.accountId(),
+                "accountId must propagate so gate evaluator can resolve Account from cache");
+    }
+
+    @Test
+    void sizingResolverDefaultsLegacyWhenPersistedRowMissingNullsTripFields() {
+        // Unbound run: legacy fallback. Tripped=false, reason=null, accountId
+        // null. The backtest gate evaluator sees a null accountId and
+        // short-circuits to allow (cannot evaluate account-level gates
+        // without an account).
+        BacktestRun run = new BacktestRun();
+        run.setAccountStrategyId(UUID.randomUUID());
+
+        Map<String, BacktestCoordinatorService.StrategySizing> sizing =
+                coordinator.resolveStrategySizingForRun(run, List.of(entry("LSR")));
+
+        BacktestCoordinatorService.StrategySizing s = sizing.get("LSR");
+        assertEquals(Boolean.FALSE, s.isKillSwitchTripped());
+        assertEquals(null, s.killSwitchReason());
+        assertEquals(null, s.accountId());
+        // Gate toggles also default off.
+        assertEquals(Boolean.FALSE, s.killSwitchGateEnabled());
+        assertEquals(Boolean.FALSE, s.regimeGateEnabled());
+        assertEquals(Boolean.FALSE, s.correlationGateEnabled());
+        assertEquals(Boolean.FALSE, s.concurrentCapGateEnabled());
     }
 }

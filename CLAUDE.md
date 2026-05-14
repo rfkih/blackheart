@@ -42,10 +42,10 @@ Two JVMs share Postgres. Trading JVM (8080) owns Binance + live; Research JVM (8
 - **Other symbols (SOL, BNB, …):** NOT plumbed. Backfill first via `MarketDataService` / `HistoricalDataService`.
 
 ## Current head
-- **Flyway:** V61 (research-agent capital-allocation sizing). Recent: V55–V58 risk-based sizing + per-strategy overrides, V59 active-per-user index, V60 sizing-independent return metrics on `backtest_run`, V61 flips research-agent rows to 90% capital-allocation sizing. See `MIGRATIONS.md` for catalog.
+- **Flyway:** V62 (toggleable risk gates). Recent: V55–V58 risk-based sizing + per-strategy overrides, V59 active-per-user index, V60 sizing-independent return metrics on `backtest_run`, V61 flips research-agent rows to 90% capital-allocation sizing, V62 adds per-strategy gate toggles (`kill_switch_gate_enabled` / `correlation_gate_enabled` / `concurrent_cap_gate_enabled`) and `backtest_run.strategy_*_overrides` JSONB overrides — backfill FALSE (live behaviour now matches backtest = no gates) so operator opts back in per strategy. See `MIGRATIONS.md` for catalog.
 
-## Stat-rigor gate (V11+)
-Tick returns `verdict=PASS` only when **all**: n_trades≥100, PF 95% CI lower>1.0, +20bps slippage net PnL>0, statistical_verdict=SIGNIFICANT_EDGE. SIGNIFICANT_EDGE parks queue + emits `next_action` for `/walk-forward`; only graduation-eligible after `stability_verdict=ROBUST`.
+## Stat-rigor gate (V11+, economic threshold V60+)
+Tick returns `verdict=PASS` only when **all**: n_trades≥100, PF 95% CI lower>1.0, DSR≥0.95, statistical_verdict=SIGNIFICANT_EDGE, **and** annualized geometric_return_pct_at_alloc_90 ≥ 10.0 (compounded at 90% sizing, 365-day year). The +20bps slippage net check was retired — slippage_haircut_pnl is still computed and logged for audit, but the economic gate is now the 10%/yr annualized compound threshold. SIGNIFICANT_EDGE without the geom threshold → ITERATE (edge is real but doesn't justify promotion). SIGNIFICANT_EDGE with the threshold parks queue + emits `next_action` for `/walk-forward`; only graduation-eligible after `stability_verdict=ROBUST`.
 
 ## Working rules (headline — full text in `WORKING_RULES.md`)
 - **Targeted minimal changes** over refactors. Don't rename DTOs/columns or change public APIs unless asked.

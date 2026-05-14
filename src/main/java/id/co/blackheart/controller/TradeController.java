@@ -39,8 +39,12 @@ import java.util.UUID;
  *       operation and is not exposed to ordinary users.</li>
  *   <li>The client supplies {@code accountId} only; the API key and secret are
  *       loaded from the authenticated admin's account row. The request DTO
- *       {@code @JsonIgnore}s the credential fields so a malicious client cannot
- *       supply them.</li>
+ *       annotates the credential fields with
+ *       {@code @JsonProperty(access = READ_ONLY)} so a malicious client cannot
+ *       deserialize values into them — but the server-injected values still
+ *       serialise outbound to the Node Binance proxy (which validates them
+ *       as required). The earlier {@code @JsonIgnore} blocked both directions
+ *       and silently stripped credentials from the outbound call.</li>
  *   <li>Account ownership is verified against the JWT user id.</li>
  * </ul>
  */

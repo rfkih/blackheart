@@ -32,8 +32,6 @@ public class AccountStrategyResponse {
     private Integer maxOpenPositions;
     private BigDecimal capitalAllocationPct;
     private Integer priorityOrder;
-    @JsonProperty("status")
-    private String currentStatus;
     @JsonProperty("createdAt")
     private LocalDateTime createdTime;
     @JsonProperty("updatedAt")
@@ -48,6 +46,12 @@ public class AccountStrategyResponse {
     private Boolean regimeGateEnabled;
     private String allowedTrendRegimes;
     private String allowedVolatilityRegimes;
+    /** Kill-switch entry gate (V62). When true, is_kill_switch_tripped blocks new entries. */
+    private Boolean killSwitchGateEnabled;
+    /** Correlation / concentration gate (V62). When true, CorrelationGuardService runs. */
+    private Boolean correlationGateEnabled;
+    /** Account-level concurrent-position cap gate (V62). When true, account max_concurrent_* applies. */
+    private Boolean concurrentCapGateEnabled;
     /** Kelly/bankroll sizing (V45) — PSR-discounted half-Kelly multiplier. */
     private Boolean kellySizingEnabled;
     private BigDecimal kellyMaxFraction;

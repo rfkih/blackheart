@@ -243,6 +243,14 @@ public class BacktestQueryService {
                 .strategyRiskPcts(r.getStrategyRiskPcts())
                 .strategyAllowLong(r.getStrategyAllowLong())
                 .strategyAllowShort(r.getStrategyAllowShort())
+                // V62 — round-trip the gate override maps so "Re-run with these
+                // params" in the frontend reproduces the wizard state. Without
+                // these the detail endpoint silently drops the maps and the
+                // wizard's re-run path falls back to "no overrides."
+                .strategyKillSwitchOverrides(r.getStrategyKillSwitchOverrides())
+                .strategyRegimeOverrides(r.getStrategyRegimeOverrides())
+                .strategyCorrelationOverrides(r.getStrategyCorrelationOverrides())
+                .strategyConcurrentCapOverrides(r.getStrategyConcurrentCapOverrides())
                 .strategyIntervals(r.getStrategyIntervals())
                 .fundingRateBpsPer8h(r.getFundingRateBpsPer8h())
                 .metrics(metrics)

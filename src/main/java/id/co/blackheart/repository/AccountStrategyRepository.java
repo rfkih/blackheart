@@ -142,6 +142,32 @@ public interface AccountStrategyRepository extends JpaRepository<AccountStrategy
             @Param("intervalName") String intervalName);
 
     /**
+     * V66 — List variant of {@link #findActivePreset}. Used by
+     * {@code AccountStrategyService.activateStrategy} when V64-style seeds
+     * have left more than one enabled row on the same tuple (e.g. paired
+     * LONG/SHORT TEST rows). The single-result variant throws
+     * NonUniqueResultException in that case; this variant returns every
+     * matching row so the activate path can deactivate ALL siblings before
+     * enabling the target — restoring the "one active per tuple" invariant
+     * even when prior writes bypassed it.
+     */
+    @Query(value = """
+            SELECT acs.*
+            FROM account_strategy acs
+            WHERE acs.account_id = :accountId
+              AND acs.strategy_definition_id = :strategyDefinitionId
+              AND acs.symbol = :symbol
+              AND acs.interval_name = :intervalName
+              AND acs.is_deleted = false
+              AND acs.enabled = true
+            """, nativeQuery = true)
+    List<AccountStrategy> findActivePresets(
+            @Param("accountId") UUID accountId,
+            @Param("strategyDefinitionId") UUID strategyDefinitionId,
+            @Param("symbol") String symbol,
+            @Param("intervalName") String intervalName);
+
+    /**
      * V54 — every row visible to the calling user: their own (any visibility)
      * plus every other user's PUBLIC rows. The `visibility='PUBLIC'` half is
      * what surfaces the research-agent's strategy catalogue to all tenants

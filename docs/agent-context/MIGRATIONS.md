@@ -11,9 +11,9 @@
 - **Baseline:** pre-Flyway state stamped V1 via `spring.flyway.baseline-on-migrate=true`. Legacy `db/migration/` is reference only.
 - **Trading JVM owns Flyway.** Research JVM has Flyway disabled.
 
-## Current head: V61
+## Current head: V62
 
-## V14–V61 catalog
+## V14–V62 catalog
 
 - **V14** — DB role separation (`blackheart_trading` full DML; `blackheart_research` SELECT operational + DML backtest/research/promotion; both NOLOGIN; see `research/DB_USER_SEPARATION.md`).
 - **V15** — Promotion pipeline: `account_strategy.simulated`, `paper_trade_run`, `strategy_promotion_log` w/ CHECK.
@@ -48,6 +48,7 @@
 - **V58** — Adds `backtest_run.strategy_allow_long` and `strategy_allow_short` (nullable JSONB, map of `strategy_code → boolean`). Per-run per-strategy direction overrides; null/missing key falls back to `account_strategy.allow_long/allow_short`, then to run-level `allow_long/allow_short` for ad-hoc spec strategies. Lets operators research direction variants without permanently flipping a live `account_strategy` row.
 - **V60** — Adds `backtest_run.avg_trade_return_pct` (NUMERIC(14,6)) + `geometric_return_pct_at_alloc_90` (NUMERIC(28,6)). Sizing-independent return metrics computed in `BacktestMetricsService` and `BacktestAnalysisService`. `avg_trade_return_pct` = mean of `(pnl / notional × 100)`; `geometric_return_pct_at_alloc_90` = compounded equity multiplier minus one, in percent, assuming every trade was sized at 90% of equity (clamps to ruin if a step would zero equity). Sit alongside the existing capital-based `return_pct` so a tiny notional × strong per-trade edge no longer hides in the headline. Wide 22-integer-digit precision on the geometric column intentional — a 1000-trade backtest with +5%/trade compounds to ~10^21 %; narrower precisions overflow `saveAndFlush` mid-run.
 - **V61** — Flips research-agent (`account_id='99999999-9999-9999-9999-000000000002'`) `account_strategy` rows to `use_risk_based_sizing=FALSE` / `capital_allocation_pct=90.0000`. Scoped only to the research-agent account; admin's live LSR/VCB/VBO rows are untouched (different `account_id`). The protected-strategy hard rule stays intact. Idempotent (predicate skips already-normalised rows).
+- **V62** — Toggleable risk gates. Adds three booleans on `account_strategy` (`kill_switch_gate_enabled`, `correlation_gate_enabled`, `concurrent_cap_gate_enabled`; `regime_gate_enabled` already exists from V43); all default FALSE and backfill FALSE — **deliberate live regression** so live behaviour matches what backtest has always done (no gates). Operator opts back in per strategy via PATCH. Adds four nullable JSONB cols on `backtest_run` (`strategy_kill_switch_overrides`, `strategy_regime_overrides`, `strategy_correlation_overrides`, `strategy_concurrent_cap_overrides`) — per-run per-strategy gate overrides, same shape as `strategy_allow_long`/`strategy_allow_short` (V58). `RiskGuardService.evaluate(EvaluationContext)` now runs the same gate stack in live (via the existing `canOpen` wrapper) and backtest (called from `BacktestCoordinatorService.tryFireEntry`/`manageOwnerActiveTrade`/`handleSingleStrategyStep` for every OPEN_* decision). Lot/min-notional remains live-only (exchange enforces). Closes Phase A parity audit findings 1/2/3/7. New audit action `STRATEGY_GATE_CONFIG_UPDATED` fires alongside `STRATEGY_UPDATED` whenever any gate toggle moves.
 
 ## Strategy Promotion Pipeline (V15 account-scope, V40 definition-scope)
 

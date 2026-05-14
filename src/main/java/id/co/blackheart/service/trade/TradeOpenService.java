@@ -81,6 +81,18 @@ public class TradeOpenService {
                         tradeQuoteNotional,
                         validation.reason
                 );
+                // V66 — pre-trade validation rejections (insufficient qty,
+                // bad price, exit-plan invalid, balance check, …) used to
+                // exit silently here; only post-Binance failures landed in
+                // trade_execution_log. The "rejected_before_execution"
+                // rows give operators a single auditable surface for every
+                // attempted entry, success or fail.
+                tradeExecutionLogService.logOpenFailure(
+                        context != null ? context.getAccount() : null,
+                        asset, strategyName, tradeType.name(),
+                        entryReason, null,
+                        "Pre-trade validation: " + validation.reason
+                );
                 return null;
             }
 

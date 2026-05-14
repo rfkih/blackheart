@@ -1,6 +1,6 @@
 package id.co.blackheart.dto.request;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -11,9 +11,11 @@ import java.io.Serializable;
 import java.util.UUID;
 
 /**
- * SECURITY: {@code apiKey}/{@code apiSecret} are {@link JsonIgnore}d. The client
- * supplies {@code accountId}; the controller looks up credentials after
- * verifying JWT ownership.
+ * SECURITY: {@code apiKey}/{@code apiSecret} use {@code READ_ONLY} access —
+ * outbound serialisation to the Node Binance proxy includes them (the proxy
+ * requires both), but client JSON cannot supply them (the controller injects
+ * after JWT-ownership lookup). See BinanceOrderRequest for the parallel
+ * rationale and the prior {@code @JsonIgnore} bug.
  */
 @Data
 @AllArgsConstructor
@@ -25,11 +27,11 @@ public class BinanceOrderDetailRequest implements Serializable {
     private Integer recvWindow;
     private UUID accountId;
 
-    @JsonIgnore
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     @ToString.Exclude
     private String apiKey;
 
-    @JsonIgnore
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     @ToString.Exclude
     private String apiSecret;
 }

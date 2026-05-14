@@ -198,6 +198,28 @@ public class BacktestRunRequest {
     private Map<String, Boolean> strategyAllowShort;
 
     /**
+     * V62 — per-strategy kill-switch gate override for this run. Map of
+     * strategy_code → boolean. Missing key falls back to
+     * {@code account_strategy.kill_switch_gate_enabled}. Lets the wizard
+     * flip the gate for one research run without changing the persisted
+     * row. Same shape as {@link #strategyAllowLong}.
+     */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyKillSwitchOverrides;
+
+    /** V62 — per-strategy regime gate override. See {@link #strategyKillSwitchOverrides}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyRegimeOverrides;
+
+    /** V62 — per-strategy correlation gate override. See {@link #strategyKillSwitchOverrides}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyCorrelationOverrides;
+
+    /** V62 — per-strategy concurrent-cap gate override. See {@link #strategyKillSwitchOverrides}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyConcurrentCapOverrides;
+
+    /**
      * Per-strategy interval for multi-timeframe runs. Key = strategy code,
      * value = interval string (e.g. "15m"). When non-null, the coordinator
      * loads one candle stream per unique interval and each strategy fires

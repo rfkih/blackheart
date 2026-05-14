@@ -64,9 +64,6 @@ public class AccountStrategy extends BaseEntity {
     @Column(name = "priority_order", nullable = false)
     private Integer priorityOrder;
 
-    @Column(name = "current_status", nullable = false, length = 30)
-    private String currentStatus;
-
     @Column(name = "is_deleted", nullable = false)
     private Boolean isDeleted;
 
@@ -121,14 +118,46 @@ public class AccountStrategy extends BaseEntity {
     private String killSwitchReason;
 
     /**
-     * Regime-aware entry gate (V43). When {@code true}, live entries are blocked
+     * Regime-aware entry gate (V43). When {@code true}, entries are blocked
      * unless the current bar's {@code trend_regime} / {@code volatility_regime}
      * are in the allowed sets below. Default {@code false} preserves all
-     * pre-V43 behaviour.
+     * pre-V43 behaviour. V62+ — the gate runs symmetrically in live and
+     * backtest via {@link id.co.blackheart.service.risk.StrategyGateService}.
      */
     @Column(name = "regime_gate_enabled", nullable = false)
     @Builder.Default
     private Boolean regimeGateEnabled = Boolean.FALSE;
+
+    /**
+     * Kill-switch entry gate (V62). When {@code true}, new entries are blocked
+     * whenever {@link #isKillSwitchTripped} is {@code true}. When {@code false}
+     * the trip flag is still recorded by the executor for visibility but does
+     * not block trading. Default {@code false} (backfilled).
+     */
+    @Column(name = "kill_switch_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean killSwitchGateEnabled = Boolean.FALSE;
+
+    /**
+     * Correlation / concentration entry gate (V62). When {@code true},
+     * {@link id.co.blackheart.service.risk.CorrelationGuardService} caps
+     * correlated same-side stacking via the account-level thresholds. When
+     * {@code false} the guard is skipped entirely. Default {@code false}
+     * (backfilled).
+     */
+    @Column(name = "correlation_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean correlationGateEnabled = Boolean.FALSE;
+
+    /**
+     * Account-level concurrent-position cap gate (V62). When {@code true},
+     * entry attempts are gated by {@code accounts.max_concurrent_longs /
+     * max_concurrent_shorts / max_concurrent_trades}. When {@code false} the
+     * caps are not applied. Default {@code false} (backfilled).
+     */
+    @Column(name = "concurrent_cap_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean concurrentCapGateEnabled = Boolean.FALSE;
 
     /** Comma-separated {@code trend_regime} values allowed for new entries (e.g. "BULL,NEUTRAL"). Null = any. */
     @Column(name = "allowed_trend_regimes", length = 100)

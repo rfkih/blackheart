@@ -89,6 +89,16 @@ dependencies {
 		testCompileOnly 'org.projectlombok:lombok:1.18.32'
 		testAnnotationProcessor 'org.projectlombok:lombok:1.18.32'
 
+		// JSR-305 — silences the recurring "unknown enum constant When.MAYBE"
+		// javac warnings. Spring's @Nullable / @NonNullApi / etc. carry meta-
+		// annotations from com.google.code.findbugs:jsr305 (the
+		// javax.annotation.meta.When enum); without this on the compile
+		// classpath, javac can't resolve them and emits a warning per file
+		// that references a Spring nullability annotation transitively. The
+		// jar is annotations-only — zero runtime impact, compileOnly so it
+		// doesn't ship in the bootJar.
+		compileOnly 'com.google.code.findbugs:jsr305:3.0.2'
+
 		// Testing
 		testImplementation 'org.springframework.boot:spring-boot-starter-test'
 		testImplementation 'org.springframework.security:spring-security-test'

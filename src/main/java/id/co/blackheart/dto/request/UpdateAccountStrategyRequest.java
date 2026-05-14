@@ -50,6 +50,15 @@ public class UpdateAccountStrategyRequest {
     @Size(max = 100)
     private String allowedVolatilityRegimes;
 
+    /** Enable/disable the kill-switch entry gate (V62). Null leaves unchanged. */
+    private Boolean killSwitchGateEnabled;
+
+    /** Enable/disable the correlation / concentration gate (V62). Null leaves unchanged. */
+    private Boolean correlationGateEnabled;
+
+    /** Enable/disable the account-level concurrent-position cap gate (V62). Null leaves unchanged. */
+    private Boolean concurrentCapGateEnabled;
+
     /** Enable/disable Kelly/bankroll sizing (V45). Null leaves unchanged. */
     private Boolean kellySizingEnabled;
 

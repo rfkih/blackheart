@@ -6,6 +6,7 @@ import id.co.blackheart.dto.strategy.StrategyDecision;
 import id.co.blackheart.dto.strategy.StrategyRequirements;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
+import id.co.blackheart.repository.StrategyParamRepository;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +22,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 public class ExecutionTestService implements StrategyExecutor {
+
+    private final StrategyParamRepository strategyParamRepository;
 
     public static final String STRATEGY_CODE = "TEST";
     public static final String STRATEGY_NAME = "TEST";
@@ -143,7 +146,13 @@ public class ExecutionTestService implements StrategyExecutor {
                 .setupType("TEST_OPEN_LONG")
                 .side(SIDE_LONG)
                 .reason("Execution test open long with structure " + exitStructure)
-                .positionSize(BigDecimal.ONE)
+                // Leave notionalSize/positionSize null. The live executor's
+                // calculateLongTradeAmount() will compute the actual USDT
+                // notional from capital_allocation_pct × USDT balance, with the
+                // MIN_USDT_NOTIONAL floor. Hard-coding a value here would
+                // override that and either over-trade or fail the balance
+                // check (the latter is what was happening with BigDecimal.ONE
+                // — 1 BTC required, ~0 BTC available).
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(resolveTakeProfit1(exitStructure, tp1))
@@ -188,7 +197,12 @@ public class ExecutionTestService implements StrategyExecutor {
                 .setupType("TEST_OPEN_SHORT")
                 .side(SIDE_SHORT)
                 .reason("Execution test open short with structure " + exitStructure)
-                .positionSize(BigDecimal.ONE)
+                // Leave positionSize null — see buildLongEntry note. The live
+                // executor's calculateShortTradeAmount() sizes from
+                // capital_allocation_pct × BTC balance, with the MIN_BTC_NOTIONAL
+                // floor. The old hardcoded BigDecimal.ONE meant 1 BTC required
+                // on every SHORT entry — guaranteed insufficient-balance silent
+                // skip on any realistic account.
                 .stopLossPrice(stopLoss)
                 .trailingStopPrice(null)
                 .takeProfitPrice1(resolveTakeProfit1(exitStructure, tp1))
@@ -415,7 +429,15 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private String resolveExitStructure(EnrichedStrategyContext context) {
-        String interval = context.getInterval();
+        // Test-only: an active strategy_param preset can pin the exit structure
+        // so the operator can exercise RUNNER_ONLY (no supported live interval
+        // maps to it) and force any structure on any interval for coverage.
+        String override = resolveExitStructureOverride(context);
+        if (override != null) {
+            return override;
+        }
+
+        String interval = context != null ? context.getInterval() : null;
         if (interval == null) {
             return EXIT_STRUCTURE_SINGLE;
         }
@@ -427,6 +449,21 @@ public class ExecutionTestService implements StrategyExecutor {
             case "1d" -> EXIT_STRUCTURE_RUNNER_ONLY;
             default -> EXIT_STRUCTURE_SINGLE;
         };
+    }
+
+    private String resolveExitStructureOverride(EnrichedStrategyContext context) {
+        if (context == null || context.getAccountStrategy() == null) return null;
+        UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
+        if (accountStrategyId == null) return null;
+        return strategyParamRepository.findActiveByAccountStrategyId(accountStrategyId)
+                .map(p -> {
+                    Map<String, Object> overrides = p.getParamOverrides();
+                    if (overrides == null) return null;
+                    Object value = overrides.get(KEY_EXIT_STRUCTURE);
+                    return value == null ? null : value.toString().toUpperCase();
+                })
+                .filter(s -> !s.isBlank())
+                .orElse(null);
     }
 
     private BigDecimal resolveTakeProfit1(String exitStructure, BigDecimal tp1) {

@@ -1,6 +1,7 @@
 package id.co.blackheart.dto.backtest;
 
 import id.co.blackheart.dto.strategy.StrategyDecision;
+import id.co.blackheart.model.Account;
 import id.co.blackheart.model.BacktestEquityPoint;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
@@ -12,8 +13,11 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 @Data
 @Builder
@@ -110,6 +114,16 @@ public class BacktestState {
     private java.util.Map<String, PendingEntry> pendingEntriesByStrategy = new java.util.LinkedHashMap<>();
 
     /**
+     * V62 — per-run cache of {@link Account} keyed by accountId. Populated
+     * lazily on first lookup by the backtest gate evaluator so the gate
+     * stack doesn't hit the DB on every entry decision. Single-entry for
+     * the typical single-account run; multi-entry only when a multi-strategy
+     * run spans different accounts.
+     */
+    @Builder.Default
+    private Map<UUID, Account> accountCache = new HashMap<>();
+
+    /**
      * Deferred entry order. {@code interval} carries the strategy's resolved
      * timeframe so the trade row gets stamped correctly — null/blank falls
      * back to the run-level interval.
@@ -135,6 +149,7 @@ public class BacktestState {
                 .completedTrades(new ArrayList<>())
                 .completedTradePositions(new ArrayList<>())
                 .equityPoints(new ArrayList<>())
+                .accountCache(new HashMap<>())
                 .build();
     }
 
@@ -161,6 +176,22 @@ public class BacktestState {
     public boolean hasActiveTradeFor(String strategyCode) {
         if (strategyCode == null || activeTradesByStrategy == null) return false;
         return activeTradesByStrategy.containsKey(key(strategyCode));
+    }
+
+    /**
+     * V62 — count active trades on a given side ("LONG" / "SHORT"). Used by
+     * {@code RiskGuardService.evaluate}'s account-level concurrent-cap gate
+     * when running the backtest path: backtest is single-account so we can
+     * ignore the {@code accountId} parameter the gate passes and just count
+     * matching trades in the current state.
+     */
+    public long countOpenTradesBySide(String side) {
+        if (side == null || activeTradesByStrategy == null) return 0L;
+        long count = 0L;
+        for (BacktestTrade t : activeTradesByStrategy.values()) {
+            if (t != null && side.equalsIgnoreCase(t.getSide())) count++;
+        }
+        return count;
     }
 
     /**

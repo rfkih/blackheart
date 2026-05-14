@@ -271,8 +271,9 @@ Protected. All strategies for the authenticated user.
 
 > **Field name gap:** Backend returns `accountStrategyId` but frontend may expect `id`.
 > Backend returns `intervalName` but frontend expects `interval`.
-> Backend returns `currentStatus` but frontend expects `status`.
 > Backend returns `createdTime`/`updatedTime` but frontend expects `createdAt`/`updatedAt`.
+> The `status`/`currentStatus` wire field was removed in V65 — frontend now derives
+> `status` (`LIVE`/`STOPPED`) locally from `enabled`.
 
 ```json
 [
@@ -282,7 +283,8 @@ Protected. All strategies for the authenticated user.
     "strategyCode": "LSR_V2",
     "symbol": "BTCUSDT",
     "interval": "1h",
-    "status": "LIVE",
+    "enabled": true,
+    "simulated": false,
     "capitalAllocatedUsdt": 1000.00,
     "allowLong": true,
     "allowShort": false,
@@ -765,9 +767,9 @@ Discrepancies that must be resolved (backend field → frontend expected field):
 | `LoginResponse` | `accessToken` | `LoginResponse.token` | login, register |
 | `AccountStrategyResponse` | `accountStrategyId` | `id` | /account-strategies |
 | `AccountStrategyResponse` | `intervalName` | `interval` | /account-strategies |
-| `AccountStrategyResponse` | `currentStatus` | `status` | /account-strategies |
 | `AccountStrategyResponse` | `createdTime` | `createdAt` | /account-strategies |
 | `AccountStrategyResponse` | `updatedTime` | `updatedAt` | /account-strategies |
+| `AccountStrategyResponse` | _(removed V65: status/currentStatus — frontend derives from `enabled`)_ | — | /account-strategies |
 
 ---
 

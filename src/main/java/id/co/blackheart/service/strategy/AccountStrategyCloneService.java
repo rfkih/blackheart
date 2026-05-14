@@ -106,7 +106,6 @@ public class AccountStrategyCloneService {
                 .maxOpenPositions(source.getMaxOpenPositions())
                 .capitalAllocationPct(source.getCapitalAllocationPct())
                 .priorityOrder(newPriority)
-                .currentStatus("STOPPED")
                 .isDeleted(false)
                 .ddKillThresholdPct(source.getDdKillThresholdPct())
                 .isKillSwitchTripped(false)
@@ -117,6 +116,14 @@ public class AccountStrategyCloneService {
                 .kellyMaxFraction(source.getKellyMaxFraction())
                 .useRiskBasedSizing(source.getUseRiskBasedSizing())
                 .riskPct(source.getRiskPct())
+                // V62 — propagate the three new gate toggles so the clone
+                // inherits the source's full gate configuration, not just
+                // regime. Without this the clone silently lands with three
+                // gates forced off regardless of the source row's state,
+                // which is a footgun the operator cannot easily spot.
+                .killSwitchGateEnabled(source.getKillSwitchGateEnabled())
+                .correlationGateEnabled(source.getCorrelationGateEnabled())
+                .concurrentCapGateEnabled(source.getConcurrentCapGateEnabled())
                 .visibility("PRIVATE")
                 .build();
         clone.setCreatedBy(createdBy);
@@ -172,7 +179,6 @@ public class AccountStrategyCloneService {
         revived.setMaxOpenPositions(source.getMaxOpenPositions());
         revived.setCapitalAllocationPct(source.getCapitalAllocationPct());
         revived.setPriorityOrder(newPriority);
-        revived.setCurrentStatus("STOPPED");
         revived.setDdKillThresholdPct(source.getDdKillThresholdPct());
         revived.setIsKillSwitchTripped(false);
         revived.setKillSwitchTrippedAt(null);
@@ -184,6 +190,11 @@ public class AccountStrategyCloneService {
         revived.setKellyMaxFraction(source.getKellyMaxFraction());
         revived.setUseRiskBasedSizing(source.getUseRiskBasedSizing());
         revived.setRiskPct(source.getRiskPct());
+        // V62 — propagate the three new gate toggles into the revived row,
+        // matching the fresh-clone branch above.
+        revived.setKillSwitchGateEnabled(source.getKillSwitchGateEnabled());
+        revived.setCorrelationGateEnabled(source.getCorrelationGateEnabled());
+        revived.setConcurrentCapGateEnabled(source.getConcurrentCapGateEnabled());
         revived.setVisibility("PRIVATE");
         revived.setUpdatedBy(createdBy);
         AccountStrategy saved = accountStrategyRepository.save(revived);
@@ -214,7 +225,6 @@ public class AccountStrategyCloneService {
             String intervalName,
             String presetName,
             Boolean isDeleted,
-            String currentStatus,
             Integer priorityOrder
     ) {}
 
@@ -226,7 +236,6 @@ public class AccountStrategyCloneService {
                 s.getIntervalName(),
                 s.getPresetName(),
                 s.getIsDeleted(),
-                s.getCurrentStatus(),
                 s.getPriorityOrder());
     }
 

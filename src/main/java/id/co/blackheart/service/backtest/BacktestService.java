@@ -146,6 +146,22 @@ public class BacktestService {
                 .strategyRiskPcts(nullIfEmpty(canonicaliseStrategyRiskPcts(request.getStrategyRiskPcts())))
                 .strategyAllowLong(nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyAllowLong())))
                 .strategyAllowShort(nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyAllowShort())))
+                // V62 — per-strategy risk-gate overrides. Same canonicalisation
+                // (uppercase + trim keys) as the direction overrides so the
+                // resolver lookup in BacktestCoordinatorService.resolveBoolOverride
+                // (which calls code.toUpperCase()) matches reliably regardless of
+                // how the caller cased the strategy code in the wizard / API.
+                // Without this wiring the override maps fall to NULL on the
+                // persisted backtest_run row even when the wizard supplied them,
+                // so the gate evaluator's override layer becomes a no-op.
+                .strategyKillSwitchOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyKillSwitchOverrides())))
+                .strategyRegimeOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyRegimeOverrides())))
+                .strategyCorrelationOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyCorrelationOverrides())))
+                .strategyConcurrentCapOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyConcurrentCapOverrides())))
                 .strategyIntervals(nullIfEmpty(canonicaliseIntervals(request.getStrategyIntervals())))
                 // Origin tag — RESEARCHER when the autonomous orchestrator
                 // submits, USER for everything else (wizard, scripts). This

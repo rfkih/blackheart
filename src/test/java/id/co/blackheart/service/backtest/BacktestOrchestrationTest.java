@@ -79,7 +79,11 @@ class BacktestOrchestrationTest {
                 null, // backtestPersistenceService
                 null, // backtestEquityPointRecorder
                 null, // progressTracker
-                accountStrategyRepository
+                accountStrategyRepository,
+                null, // riskGuardService (V62 — gate stack; null is safe for
+                      // the orchestration tests below which don't exercise
+                      // tryFireEntry / manageOwnerActiveTrade)
+                null  // accountRepository (V62 — same reason)
         );
     }
 

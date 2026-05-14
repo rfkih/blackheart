@@ -332,6 +332,43 @@ public class BacktestRun extends BaseEntity {
     private Map<String, Boolean> strategyAllowShort;
 
     /**
+     * V62 — per-strategy kill-switch gate override for this run. Map of
+     * strategy_code (uppercase) → boolean. Missing key falls back to
+     * {@code account_strategy.kill_switch_gate_enabled}. Mirrors
+     * {@link #strategyAllowLong} shape.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_kill_switch_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyKillSwitchOverrides;
+
+    /**
+     * V62 — per-strategy regime gate override. Map of strategy_code →
+     * boolean. Missing key falls back to
+     * {@code account_strategy.regime_gate_enabled} (V43).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_regime_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyRegimeOverrides;
+
+    /**
+     * V62 — per-strategy correlation gate override. Map of strategy_code →
+     * boolean. Missing key falls back to
+     * {@code account_strategy.correlation_gate_enabled}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_correlation_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyCorrelationOverrides;
+
+    /**
+     * V62 — per-strategy concurrent-cap gate override. Map of strategy_code →
+     * boolean. Missing key falls back to
+     * {@code account_strategy.concurrent_cap_gate_enabled}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_concurrent_cap_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyConcurrentCapOverrides;
+
+    /**
      * Per-strategy interval map for multi-timeframe runs. Key = uppercase
      * strategy code, value = interval string (e.g. "15m"). When non-null,
      * the coordinator routes each strategy only to its own interval's bar

@@ -61,6 +61,14 @@ class RiskGuardServiceTest {
                 .accountId(accountId)
                 .ddKillThresholdPct(new BigDecimal("25.00"))
                 .isKillSwitchTripped(Boolean.FALSE)
+                // V62 — gate toggles default FALSE on a freshly-built entity.
+                // The pre-V62 tests below expect the kill-switch and concurrent-
+                // cap gates to fire; explicitly enable them in setup so those
+                // tests still exercise the behaviour. New tests below cover
+                // the gate-off / override paths separately.
+                .killSwitchGateEnabled(Boolean.TRUE)
+                .correlationGateEnabled(Boolean.TRUE)
+                .concurrentCapGateEnabled(Boolean.TRUE)
                 .build();
         account = new Account();
         account.setAccountId(accountId);
@@ -263,5 +271,145 @@ class RiskGuardServiceTest {
         t.setRealizedPnlAmount(new BigDecimal(pnl));
         t.setExitTime(LocalDateTime.now().minusDays(1));
         return t;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // V62 — gate toggle behaviour tests. The gate stack is the same in live
+    // and backtest; these tests target evaluate() directly so they cover both
+    // paths in one shape.
+    // ────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void evaluateAllowsWhenAllGatesDisabled() {
+        // V62 default-off state. The strategy has every gate off; even with
+        // is_kill_switch_tripped=true the gate stack skips and returns allow.
+        AccountStrategy s = AccountStrategy.builder()
+                .accountStrategyId(accountStrategyId)
+                .accountId(accountId)
+                .isKillSwitchTripped(Boolean.TRUE) // would deny if gate were on
+                .killSwitchGateEnabled(Boolean.FALSE)
+                .regimeGateEnabled(Boolean.FALSE)
+                .correlationGateEnabled(Boolean.FALSE)
+                .concurrentCapGateEnabled(Boolean.FALSE)
+                .build();
+        RiskGuardService.EvaluationContext ctx = new RiskGuardService.EvaluationContext(
+                s, account, "LONG", null, null,
+                (id, side) -> 99L); // would breach cap if gate were on
+
+        GateVerdict v = guard.evaluate(ctx);
+
+        assertTrue(v.allowed(),
+                "evaluate must allow when every gate toggle is off, even with would-deny state");
+    }
+
+    @Test
+    void evaluateDeniesKillSwitchWhenGateOnAndTripped() {
+        AccountStrategy s = AccountStrategy.builder()
+                .accountStrategyId(accountStrategyId)
+                .accountId(accountId)
+                .isKillSwitchTripped(Boolean.TRUE)
+                .killSwitchReason("manual review")
+                .killSwitchGateEnabled(Boolean.TRUE)
+                .build();
+        RiskGuardService.EvaluationContext ctx = new RiskGuardService.EvaluationContext(
+                s, account, "LONG", null, null, (id, side) -> 0L);
+
+        GateVerdict v = guard.evaluate(ctx);
+
+        assertFalse(v.allowed());
+        assertTrue(v.reason().contains("Kill-switch"));
+    }
+
+    @Test
+    void evaluateOverrideTrueForcesGateOnEvenWhenStrategyHasItOff() {
+        // Per-backtest-run override: strategy's persisted toggle is FALSE,
+        // but the wizard flipped this gate ON for the run.
+        AccountStrategy s = AccountStrategy.builder()
+                .accountStrategyId(accountStrategyId)
+                .accountId(accountId)
+                .isKillSwitchTripped(Boolean.TRUE)
+                .killSwitchGateEnabled(Boolean.FALSE) // off persistently
+                .build();
+        java.util.Map<String, Boolean> overrides = java.util.Map.of(
+                RiskGuardService.GATE_KILL_SWITCH, Boolean.TRUE);
+        RiskGuardService.EvaluationContext ctx = new RiskGuardService.EvaluationContext(
+                s, account, "LONG", null, overrides, (id, side) -> 0L);
+
+        GateVerdict v = guard.evaluate(ctx);
+
+        assertFalse(v.allowed(),
+                "override=TRUE must force the gate on even when strategy toggle is FALSE");
+    }
+
+    @Test
+    void evaluateOverrideFalseForcesGateOffEvenWhenStrategyHasItOn() {
+        // Inverse: persistent toggle ON, run-level override OFF. Override wins.
+        AccountStrategy s = AccountStrategy.builder()
+                .accountStrategyId(accountStrategyId)
+                .accountId(accountId)
+                .isKillSwitchTripped(Boolean.TRUE)
+                .killSwitchGateEnabled(Boolean.TRUE) // on persistently
+                .build();
+        java.util.Map<String, Boolean> overrides = java.util.Map.of(
+                RiskGuardService.GATE_KILL_SWITCH, Boolean.FALSE);
+        RiskGuardService.EvaluationContext ctx = new RiskGuardService.EvaluationContext(
+                s, account, "LONG", null, overrides, (id, side) -> 0L);
+
+        GateVerdict v = guard.evaluate(ctx);
+
+        assertTrue(v.allowed(),
+                "override=FALSE must skip the gate even when strategy toggle is TRUE");
+    }
+
+    @Test
+    void canOpenSkipsAllDbLookupsWhenEveryGateDisabled() {
+        // V62 review-fix #2 — when none of the four gate toggles is on, the
+        // gate stack would skip every gate and return allow anyway. The
+        // shortcut at the top of canOpen avoids the wasted account / FS /
+        // concurrent-count lookups on freshly-migrated installs where the
+        // operator hasn't opted any gate back in.
+        AccountStrategy noGates = AccountStrategy.builder()
+                .accountStrategyId(accountStrategyId)
+                .accountId(accountId)
+                .killSwitchGateEnabled(Boolean.FALSE)
+                .regimeGateEnabled(Boolean.FALSE)
+                .correlationGateEnabled(Boolean.FALSE)
+                .concurrentCapGateEnabled(Boolean.FALSE)
+                // even with state that would otherwise deny, gates-off means no work
+                .isKillSwitchTripped(Boolean.TRUE)
+                .build();
+        when(accountStrategyRepository.findById(accountStrategyId)).thenReturn(Optional.of(noGates));
+
+        RiskGuardService.GuardVerdict verdict = guard.canOpen(accountStrategyId, "LONG");
+
+        assertTrue(verdict.allowed(),
+                "all gates disabled must short-circuit to allow without touching downstream repos");
+        // Hot-path invariant: zero downstream lookups when gates are off.
+        verifyNoInteractions(accountRepository);
+        verifyNoInteractions(tradesRepository);
+        verifyNoInteractions(featureStoreRepository);
+        verify(accountStrategyRepository, never()).save(any());
+    }
+
+    @Test
+    void evaluateConcurrentCapUsesCallerSuppliedCounter() {
+        // Backtest path: openCountFor lambda is over BacktestState, not the
+        // live trades repo. Verify evaluate() routes through it.
+        AccountStrategy s = AccountStrategy.builder()
+                .accountStrategyId(accountStrategyId)
+                .accountId(accountId)
+                .concurrentCapGateEnabled(Boolean.TRUE)
+                .build();
+        account.setMaxConcurrentLongs(1);
+
+        // Backtest-side: 1 LONG already open in BacktestState.
+        RiskGuardService.EvaluationContext ctx = new RiskGuardService.EvaluationContext(
+                s, account, "LONG", null, null, (id, side) -> 1L);
+
+        GateVerdict v = guard.evaluate(ctx);
+
+        assertFalse(v.allowed());
+        assertTrue(v.reason().contains("Concurrent"),
+                "concurrent-cap gate must use the caller-supplied counter, not the live trades repo");
     }
 }

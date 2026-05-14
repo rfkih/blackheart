@@ -15,8 +15,12 @@ import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.model.BacktestTradePosition;
 import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.model.MarketData;
+import id.co.blackheart.model.Account;
+import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.service.risk.GateVerdict;
+import id.co.blackheart.service.risk.RiskGuardService;
 import id.co.blackheart.service.strategy.StrategyContextEnrichmentService;
 import id.co.blackheart.service.strategy.StrategyExecutor;
 import id.co.blackheart.service.strategy.StrategyExecutorFactory;
@@ -55,6 +59,10 @@ public class BacktestCoordinatorService {
     private final BacktestEquityPointRecorder backtestEquityPointRecorder;
     private final BacktestProgressTracker progressTracker;
     private final id.co.blackheart.repository.AccountStrategyRepository accountStrategyRepository;
+    // V62 — gate evaluation for parity with the live path. Looked up at
+    // entry time in tryFireEntry; null verdict from evaluate() means allow.
+    private final RiskGuardService riskGuardService;
+    private final AccountRepository accountRepository;
 
     /** Report progress at most every N candles. With MIN_INTERVAL_MS also
      *  throttling inside the tracker, this just cheaply avoids calling into
@@ -396,6 +404,18 @@ public class BacktestCoordinatorService {
         StrategyDecision decision = ownerEntry.executor().execute(enrichedContext);
         log.debug("Orchestrator active-trade | owner={} interval={} reason={}",
                 ownerEntry.code(), ic.interval(), decision.getReason());
+        // V62 — defensively gate any OPEN_* re-entry from a strategy that
+        // already owns a trade. Live's applyEntryGates does the same. CLOSE_*
+        // and UPDATE_* pass through unconditionally (per CLAUDE.md hard rule).
+        if (isEntryDecision(decision)) {
+            GateVerdict gateVerdict = evaluateBacktestGates(
+                    backtestRun, state, syntheticAs, decision, strategyFeature);
+            if (!gateVerdict.allowed()) {
+                log.debug("Orchestrator active-trade entry BLOCKED by gate | owner={} reason={}",
+                        ownerEntry.code(), gateVerdict.reason());
+                return;
+            }
+        }
         backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
     }
 
@@ -453,9 +473,100 @@ public class BacktestCoordinatorService {
         if (!StringUtils.hasText(decision.getStrategyCode())) {
             decision.setStrategyCode(entry.code());
         }
+
+        // V62 — gate evaluation. Same gate stack live runs, applied to
+        // backtest entries so backtest results reflect what live would
+        // actually have admitted. All gates default off post-V62 backfill,
+        // so this is a no-op until the operator opts in per strategy or
+        // per run.
+        GateVerdict gateVerdict = evaluateBacktestGates(
+                backtestRun, state, syntheticAs, decision, strategyFeature);
+        if (!gateVerdict.allowed()) {
+            log.debug("Orchestrator entry BLOCKED by gate | strategy={} interval={} reason={}",
+                    entry.code(), ic.interval(), gateVerdict.reason());
+            return;
+        }
+
         log.debug("Orchestrator entry | strategy={} interval={} side={}",
                 entry.code(), ic.interval(), decision.getSide());
         backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
+    }
+
+    /**
+     * V62 — build EvaluationContext and call RiskGuardService.evaluate. Same
+     * gate semantics as the live executor; gate toggles are read from the
+     * synthetic AccountStrategy (which mirrors the bound persisted row's
+     * per-gate enabled flags) plus per-run overrides from
+     * {@code backtest_run.strategy_*_overrides}.
+     *
+     * <p>Returns {@code GateVerdict.allow()} when no Account can be resolved
+     * (ad-hoc spec strategies with no bound account_strategy) — we cannot
+     * evaluate account-level gates without an account, so we fall through
+     * rather than block.
+     */
+    private GateVerdict evaluateBacktestGates(
+            BacktestRun backtestRun, BacktestState state, AccountStrategy syntheticAs,
+            StrategyDecision decision, FeatureStore strategyFeature
+    ) {
+        Account account = resolveBacktestAccount(state, syntheticAs);
+        if (account == null) return GateVerdict.allow();
+
+        String side = decision.getSide();
+        Map<String, Boolean> overrides = resolveGateOverrides(backtestRun, decision.getStrategyCode());
+
+        RiskGuardService.EvaluationContext ctx = new RiskGuardService.EvaluationContext(
+                syntheticAs,
+                account,
+                side,
+                strategyFeature,
+                overrides,
+                // accountId param is required by the ToLongBiFunction signature
+                // (live needs it to scope the query) but unused here — backtest
+                // state is single-account and the side string is the only
+                // filter we need.
+                (accountId, sideArg) -> state.countOpenTradesBySide(sideArg)
+        );
+        return riskGuardService.evaluate(ctx);
+    }
+
+    /**
+     * V62 — resolve the Account behind a backtest's synthetic AccountStrategy.
+     * Pulls account_id off the synthetic row (pre-resolved at run start via
+     * {@code StrategySizing.accountId}), then reads through
+     * {@link BacktestState#getAccountCache} so the lookup is a single DB hit
+     * per (run, account) — the typical single-account backtest pays one query
+     * across the whole run instead of one per entry decision. Returns
+     * {@code null} for ad-hoc / unbound runs where no real account exists —
+     * caller short-circuits to allow.
+     */
+    private Account resolveBacktestAccount(BacktestState state, AccountStrategy syntheticAs) {
+        if (syntheticAs == null || syntheticAs.getAccountId() == null) return null;
+        UUID accountId = syntheticAs.getAccountId();
+        return state.getAccountCache().computeIfAbsent(
+                accountId,
+                id -> accountRepository.findByAccountId(id).orElse(null));
+    }
+
+    /**
+     * V62 — build per-strategy gate-override map from the four backtest_run
+     * JSONB columns. Returns {@code null} when no overrides apply, signalling
+     * "use persisted per-strategy toggles only."
+     */
+    private Map<String, Boolean> resolveGateOverrides(BacktestRun run, String code) {
+        Map<String, Boolean> out = new LinkedHashMap<>();
+        putIfPresent(out, RiskGuardService.GATE_KILL_SWITCH,
+                resolveBoolOverride(run.getStrategyKillSwitchOverrides(), code));
+        putIfPresent(out, RiskGuardService.GATE_REGIME,
+                resolveBoolOverride(run.getStrategyRegimeOverrides(), code));
+        putIfPresent(out, RiskGuardService.GATE_CORRELATION,
+                resolveBoolOverride(run.getStrategyCorrelationOverrides(), code));
+        putIfPresent(out, RiskGuardService.GATE_CONCURRENT_CAP,
+                resolveBoolOverride(run.getStrategyConcurrentCapOverrides(), code));
+        return out.isEmpty() ? null : out;
+    }
+
+    private static void putIfPresent(Map<String, Boolean> map, String key, Boolean v) {
+        if (v != null) map.put(key, v);
     }
 
     /**
@@ -500,6 +611,18 @@ public class BacktestCoordinatorService {
 
         StrategyDecision decision = only.executor().execute(enrichedContext);
         log.debug("Strategy decision reason={}", decision.getReason());
+        // V62 — gate entry decisions on the single-strategy fast path so the
+        // gate stack runs uniformly regardless of how many strategies the
+        // run carries. CLOSE_* / UPDATE_* pass through.
+        if (isEntryDecision(decision)) {
+            GateVerdict gateVerdict = evaluateBacktestGates(
+                    backtestRun, state, syntheticAs, decision, strategyFeature);
+            if (!gateVerdict.allowed()) {
+                log.debug("Single-strategy entry BLOCKED by gate | strategy={} reason={}",
+                        only.code(), gateVerdict.reason());
+                return;
+            }
+        }
         backtestTradeExecutorService.execute(backtestRun, state, enrichedContext, decision);
     }
 
@@ -1092,6 +1215,10 @@ public class BacktestCoordinatorService {
 
         return AccountStrategy.builder()
                 .accountStrategyId(resolvedId)
+                // V62 review-fix #3 — accountId pre-resolved at run start
+                // (from the bound persisted row). Lets the backtest gate path
+                // skip a per-call accountStrategyRepository lookup.
+                .accountId(sizing.accountId())
                 .strategyCode(strategyCode)
                 .intervalName(interval)
                 // V58 — direction flags now travel through StrategySizing,
@@ -1104,6 +1231,20 @@ public class BacktestCoordinatorService {
                 .capitalAllocationPct(sizing.allocationPct())
                 .useRiskBasedSizing(sizing.useRiskBasedSizing())
                 .riskPct(sizing.riskPct())
+                // V62 — gate toggles mirrored from the persisted row so
+                // RiskGuardService.evaluate sees the same state live would.
+                // Per-run overrides (from backtest_run.strategy_*_overrides)
+                // are applied separately via EvaluationContext.gateOverrides.
+                .killSwitchGateEnabled(sizing.killSwitchGateEnabled())
+                .regimeGateEnabled(sizing.regimeGateEnabled())
+                .correlationGateEnabled(sizing.correlationGateEnabled())
+                .concurrentCapGateEnabled(sizing.concurrentCapGateEnabled())
+                // V62 review-fix #1 — kill-switch runtime state on the
+                // synthetic AS so the gate (when enabled) denies entries
+                // for a currently-tripped strategy in backtest, matching live.
+                .isKillSwitchTripped(
+                        sizing.isKillSwitchTripped() != null ? sizing.isKillSwitchTripped() : Boolean.FALSE)
+                .killSwitchReason(sizing.killSwitchReason())
                 .build();
     }
 
@@ -1121,7 +1262,28 @@ public class BacktestCoordinatorService {
             Boolean useRiskBasedSizing,
             BigDecimal riskPct,
             Boolean allowLong,
-            Boolean allowShort
+            Boolean allowShort,
+            // V62 — gate toggles resolved at run start so the synthetic
+            // AccountStrategy carries the persisted row's gate state without
+            // a per-bar DB lookup. All four default false matching the V62
+            // backfill — a strategy with no persisted row gets every gate
+            // off, so the backtest applies no gates.
+            Boolean killSwitchGateEnabled,
+            Boolean regimeGateEnabled,
+            Boolean correlationGateEnabled,
+            Boolean concurrentCapGateEnabled,
+            // V62 review-fix #1 — kill-switch runtime state propagated from
+            // the bound persisted row. Backtest's kill-switch gate (when
+            // enabled) honours this so a currently-tripped live strategy
+            // produces zero trades in a parity backtest. Null/false when
+            // unbound.
+            Boolean isKillSwitchTripped,
+            String killSwitchReason,
+            // V62 review-fix #3 — pre-resolved accountId so the backtest
+            // gate evaluator looks up Account from the BacktestState cache
+            // instead of issuing an accountStrategyRepository.findById +
+            // accountRepository.findByAccountId pair per entry decision.
+            UUID accountId
     ) {
         static StrategySizing legacy(BigDecimal alloc) {
             // Used when no persisted row backs the run (synthetic / pre-V55
@@ -1129,9 +1291,13 @@ public class BacktestCoordinatorService {
             // preserved when the operator hasn't opted in. Direction flags
             // default permissive — the run-level allowLong/allowShort still
             // act as the override layer for ad-hoc spec strategies that
-            // don't pin an account_strategy.
+            // don't pin an account_strategy. Gate toggles default false so
+            // an unbound run never accidentally enforces gates it can't
+            // evaluate against a real account.
             return new StrategySizing(alloc, Boolean.FALSE, new BigDecimal("0.0500"),
-                    Boolean.TRUE, Boolean.TRUE);
+                    Boolean.TRUE, Boolean.TRUE,
+                    Boolean.FALSE, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE,
+                    Boolean.FALSE, null, null);
         }
     }
 
@@ -1239,9 +1405,12 @@ public class BacktestCoordinatorService {
         if (persisted == null) {
             // No persisted row resolved. A wizard riskOverride is explicit operator
             // intent — honour it even without a persisted anchor so it isn't dropped
-            // on ad-hoc runs that don't pin an account_strategy.
+            // on ad-hoc runs that don't pin an account_strategy. Gate toggles
+            // default off (StrategySizing.legacy would also produce this).
             if (riskOverride != null) {
-                return new StrategySizing(allocation, Boolean.TRUE, riskOverride, allowLong, allowShort);
+                return new StrategySizing(allocation, Boolean.TRUE, riskOverride, allowLong, allowShort,
+                        Boolean.FALSE, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE,
+                        Boolean.FALSE, null, null);
             }
             return StrategySizing.legacy(allocation);
         }
@@ -1254,8 +1423,24 @@ public class BacktestCoordinatorService {
         } else {
             riskPct = persisted.getRiskPct() != null ? persisted.getRiskPct() : new BigDecimal("0.0500");
         }
+        // V62 — copy gate toggles from the persisted row so the synthetic
+        // AccountStrategy the engine sees during backtest mirrors live's gate
+        // state. nullSafe()'d to FALSE because the column is NOT NULL with
+        // default false (post-V62 backfill); paranoia for any pre-V62 caller
+        // that constructs an AccountStrategy without the field set.
+        // V62 review-fix #1 — also propagate kill-switch RUNTIME state
+        // (tripped flag + reason) so an enabled kill-switch gate in backtest
+        // produces parity behaviour: a currently-tripped live strategy
+        // refuses to open trades in its backtest too.
         return new StrategySizing(
-                allocation, useRisk != null ? useRisk : Boolean.FALSE, riskPct, allowLong, allowShort);
+                allocation, useRisk != null ? useRisk : Boolean.FALSE, riskPct, allowLong, allowShort,
+                Boolean.TRUE.equals(persisted.getKillSwitchGateEnabled()),
+                Boolean.TRUE.equals(persisted.getRegimeGateEnabled()),
+                Boolean.TRUE.equals(persisted.getCorrelationGateEnabled()),
+                Boolean.TRUE.equals(persisted.getConcurrentCapGateEnabled()),
+                Boolean.TRUE.equals(persisted.getIsKillSwitchTripped()),
+                persisted.getKillSwitchReason(),
+                persisted.getAccountId());
     }
 
     /**

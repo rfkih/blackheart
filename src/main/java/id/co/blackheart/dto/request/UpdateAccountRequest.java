@@ -29,8 +29,8 @@ public class UpdateAccountRequest {
     private String username;
 
     @Pattern(
-            regexp = "^(BIN|BIF)$",
-            message = "Exchange must be one of: BIN, BIF"
+            regexp = "^BNC$",
+            message = "Exchange must be BNC"
     )
     private String exchange;
 }
