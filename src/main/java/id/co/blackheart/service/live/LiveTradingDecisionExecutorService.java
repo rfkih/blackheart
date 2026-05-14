@@ -218,13 +218,12 @@ public class LiveTradingDecisionExecutorService {
             return;
         }
 
-        activeTradePosition.setExitReason(listenerDecision.getExitReason());
-        tradePositionRepository.save(activeTradePosition);
+        String exitReason = listenerDecision.getExitReason();
 
         if (SIDE_LONG.equalsIgnoreCase(activeTradePosition.getSide())) {
-            tradeService.binanceCloseLongPositionMarketOrder(account, activeTradePosition, asset);
+            tradeService.binanceCloseLongPositionMarketOrder(account, activeTradePosition, asset, exitReason);
         } else if (SIDE_SHORT.equalsIgnoreCase(activeTradePosition.getSide())) {
-            tradeService.binanceCloseShortPositionMarketOrder(account, activeTradePosition, asset);
+            tradeService.binanceCloseShortPositionMarketOrder(account, activeTradePosition, asset, exitReason);
         } else {
             log.warn(
                     "Unknown side for listener close | tradePositionId={} side={}",
@@ -240,13 +239,12 @@ public class LiveTradingDecisionExecutorService {
             return;
         }
 
-        tradePosition.setExitReason(EXIT_REASON_MANUAL_CLOSE);
-        tradePositionRepository.save(tradePosition);
-
         if (SIDE_LONG.equalsIgnoreCase(tradePosition.getSide())) {
-            tradeService.binanceCloseLongPositionMarketOrder(account, tradePosition, tradePosition.getAsset());
+            tradeService.binanceCloseLongPositionMarketOrder(
+                    account, tradePosition, tradePosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else if (SIDE_SHORT.equalsIgnoreCase(tradePosition.getSide())) {
-            tradeService.binanceCloseShortPositionMarketOrder(account, tradePosition, tradePosition.getAsset());
+            tradeService.binanceCloseShortPositionMarketOrder(
+                    account, tradePosition, tradePosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else {
             log.warn(
                     "Unknown side for manual close | tradePositionId={} side={}",
@@ -268,16 +266,12 @@ public class LiveTradingDecisionExecutorService {
         }
 
         TradePosition firstPosition = activeTradePositions.getFirst();
-
-        for (TradePosition tradePosition : activeTradePositions) {
-            tradePosition.setExitReason(listenerDecision.getExitReason());
-        }
-        tradePositionRepository.saveAll(activeTradePositions);
+        String exitReason = listenerDecision.getExitReason();
 
         if (SIDE_LONG.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseLongPositionsMarketOrder(account, activeTradePositions, asset);
+            tradeService.binanceCloseLongPositionsMarketOrder(account, activeTradePositions, asset, exitReason);
         } else if (SIDE_SHORT.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseShortPositionsMarketOrder(account, activeTradePositions, asset);
+            tradeService.binanceCloseShortPositionsMarketOrder(account, activeTradePositions, asset, exitReason);
         } else {
             log.warn(
                     "Unknown side for grouped listener close | tradeId={} side={}",
@@ -295,15 +289,12 @@ public class LiveTradingDecisionExecutorService {
 
         TradePosition firstPosition = openPositions.getFirst();
 
-        for (TradePosition tradePosition : openPositions) {
-            tradePosition.setExitReason(EXIT_REASON_MANUAL_CLOSE);
-        }
-        tradePositionRepository.saveAll(openPositions);
-
         if (SIDE_LONG.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseLongPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseLongPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else if (SIDE_SHORT.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseShortPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseShortPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else {
             log.warn(
                     "Unknown side for manual trade close | tradeId={} side={}",
@@ -459,16 +450,14 @@ public class LiveTradingDecisionExecutorService {
         }
 
         TradePosition firstPosition = openPositions.getFirst();
-
-        for (TradePosition tradePosition : openPositions) {
-            tradePosition.setExitReason(exitReason != null ? exitReason : EXIT_REASON_STRATEGY_EXIT);
-        }
-        tradePositionRepository.saveAll(openPositions);
+        String resolvedExitReason = exitReason != null ? exitReason : EXIT_REASON_STRATEGY_EXIT;
 
         if (SIDE_LONG.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseLongPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseLongPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), resolvedExitReason);
         } else if (SIDE_SHORT.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseShortPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseShortPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), resolvedExitReason);
         } else {
             log.warn(
                     "Unknown side for close trade | tradeId={} side={}",

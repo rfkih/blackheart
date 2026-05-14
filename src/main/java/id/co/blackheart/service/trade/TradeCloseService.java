@@ -36,12 +36,15 @@ public class TradeCloseService {
             Account user,
             TradePosition tradePosition,
             String asset,
-            TradeType tradeType
+            TradeType tradeType,
+            String exitReason
     ) {
         TradePosition validated = validateClosePositionInputs(user, tradePosition, asset, tradeType);
         if (validated == null) {
             return;
         }
+
+        String resolvedExitReason = requireExitReason(exitReason);
 
         try {
             BigDecimal closeQty = normalizeCloseQty(validated);
@@ -53,20 +56,20 @@ public class TradeCloseService {
 
             FillProcessingResult result = processOrderFills(response);
 
-            updateTradePositionWithExitData(validated, result, tradeType);
+            updateTradePositionWithExitData(validated, result, tradeType, resolvedExitReason);
             tradePositionRepository.save(validated);
 
             tradeSummaryService.refreshParentTradeSummary(validated.getTradeId());
             tradeStateSyncService.syncTradeState(validated.getTradeId());
 
             tradeExecutionLogService.logCloseSuccess(
-                    user, asset, tradeType.name(), validated.getExitReason(), validated.getTradeId()
+                    user, asset, tradeType.name(), resolvedExitReason, validated.getTradeId()
             );
 
         } catch (Exception e) {
             log.error("❌ Error closing {} position | tradePositionId={}", tradeType, tradePosition.getTradePositionId(), e);
             tradeExecutionLogService.logCloseFailure(
-                    user, asset, tradeType.name(), tradePosition.getExitReason(),
+                    user, asset, tradeType.name(), resolvedExitReason,
                     tradePosition.getTradeId(), e.getMessage()
             );
         }
@@ -76,7 +79,8 @@ public class TradeCloseService {
             Account user,
             List<TradePosition> tradePositions,
             String asset,
-            TradeType tradeType
+            TradeType tradeType,
+            String exitReason
     ) {
         if (user == null || CollectionUtils.isEmpty(tradePositions)) {
             return;
@@ -91,6 +95,7 @@ public class TradeCloseService {
         }
 
         TradePosition first = validOpenPositions.getFirst();
+        String resolvedExitReason = requireExitReason(exitReason);
 
         try {
             BigDecimal totalQty = validOpenPositions.stream()
@@ -111,20 +116,20 @@ public class TradeCloseService {
 
             FillProcessingResult result = processOrderFills(response);
 
-            applyGroupedExitToPositions(validOpenPositions, result, tradeType);
+            applyGroupedExitToPositions(validOpenPositions, result, tradeType, resolvedExitReason);
             tradePositionRepository.saveAll(validOpenPositions);
 
             tradeSummaryService.refreshParentTradeSummary(first.getTradeId());
             tradeStateSyncService.syncTradeState(first.getTradeId());
 
             tradeExecutionLogService.logCloseSuccess(
-                    user, asset, tradeType.name(), first.getExitReason(), first.getTradeId()
+                    user, asset, tradeType.name(), resolvedExitReason, first.getTradeId()
             );
 
         } catch (Exception e) {
             log.error("❌ Error closing grouped {} positions | tradeId={}", tradeType, first.getTradeId(), e);
             tradeExecutionLogService.logCloseFailure(
-                    user, asset, tradeType.name(), first.getExitReason(), first.getTradeId(), e.getMessage()
+                    user, asset, tradeType.name(), resolvedExitReason, first.getTradeId(), e.getMessage()
             );
         }
     }
@@ -165,8 +170,6 @@ public class TradeCloseService {
             if (updatedTakeProfit != null || "RUNNER".equalsIgnoreCase(position.getPositionRole())) {
                 position.setTakeProfitPrice(updatedTakeProfit);
             }
-
-            position.setExitReason("STRATEGY_MANAGEMENT_UPDATE");
         }
 
         tradePositionRepository.saveAll(openPositions);
@@ -375,7 +378,8 @@ public class TradeCloseService {
     private void updateTradePositionWithExitData(
             TradePosition tradePosition,
             FillProcessingResult result,
-            TradeType tradeType
+            TradeType tradeType,
+            String exitReason
     ) {
         tradePosition.setExitExecutedQty(result.totalQty);
         tradePosition.setExitExecutedQuoteQty(result.totalQuote);
@@ -385,6 +389,7 @@ public class TradeCloseService {
         tradePosition.setExitTime(LocalDateTime.now());
         tradePosition.setStatus(STATUS_CLOSED);
         tradePosition.setRemainingQty(BigDecimal.ZERO);
+        tradePosition.setExitReason(exitReason);
 
         BigDecimal pnlAmount = calculatePLAmount(
                 tradePosition.getEntryPrice(),
@@ -406,7 +411,8 @@ public class TradeCloseService {
     private void applyGroupedExitToPositions(
             List<TradePosition> positions,
             FillProcessingResult result,
-            TradeType tradeType
+            TradeType tradeType,
+            String exitReason
     ) {
         BigDecimal totalQty = positions.stream()
                 .map(TradePosition::getRemainingQty)
@@ -452,6 +458,7 @@ public class TradeCloseService {
             position.setExitTime(LocalDateTime.now());
             position.setStatus(STATUS_CLOSED);
             position.setRemainingQty(BigDecimal.ZERO);
+            position.setExitReason(exitReason);
 
             BigDecimal pnlAmount = calculatePLAmount(
                     position.getEntryPrice(),
@@ -602,6 +609,22 @@ public class TradeCloseService {
     }
 
     private BigDecimal safe(BigDecimal value) { return value == null ? BigDecimal.ZERO : value; }
+
+    /**
+     * Every close path must declare its specific reason (STOP_LOSS / TRAILING_STOP
+     * / TAKE_PROFIT / MANUAL_CLOSE / STRATEGY_EXIT / ...). Refuse to close a
+     * position with a blank reason — that produces "—" on the trade detail page
+     * and erases forensic context. Caller bug → fail loud, not silently fall
+     * back to an ambiguous sentinel.
+     */
+    private String requireExitReason(String exitReason) {
+        if (!StringUtils.hasText(exitReason)) {
+            throw new IllegalArgumentException(
+                    "exit_reason is required to close a position — caller must declare why"
+            );
+        }
+        return exitReason.trim();
+    }
 
     private static class FillProcessingResult {
         final BigDecimal totalQty;
