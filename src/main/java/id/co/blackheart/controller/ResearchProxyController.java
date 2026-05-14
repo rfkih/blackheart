@@ -48,6 +48,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *   - /api/v1/research/**       → research:8081/api/v1/research/**
  *   - /api/v1/montecarlo/**     → research:8081/api/v1/montecarlo/**
  *   - /api/v1/historical/**     → research:8081/api/v1/historical/**
+ *   - /api/v1/ml-ingest/**      → research:8081/api/v1/ml-ingest/**  (V67, admin
+ *                                  control plane for ML ingestion: schedules,
+ *                                  health, manual backfill triggers)
  *   - /research-actuator/**     → research:8081/actuator/**   (path rewritten,
  *                                  so SecurityConfig can admin-gate it
  *                                  separately from the local /actuator/** rule)
@@ -117,6 +120,7 @@ public class ResearchProxyController {
             "/api/v1/research", "/api/v1/research/**",
             "/api/v1/montecarlo", "/api/v1/montecarlo/**",
             "/api/v1/historical", "/api/v1/historical/**",
+            "/api/v1/ml-ingest", "/api/v1/ml-ingest/**",
             "/research-actuator", "/research-actuator/**"
     })
     public ResponseEntity<byte[]> proxy(HttpServletRequest req) throws IOException {

@@ -47,6 +47,90 @@
 | `idempotency_record` | added V28 | TTL ~24h table backing the FastAPI orchestrator's idempotency keys. |
 | `research_control` | added V23 | Kill-switch + global research flags (e.g. `live_research_enabled`). |
 
+## ML / sentiment plane (V66, Phase 1 of project_ml_blueprint.md)
+
+> Symbol-keyed throughout; BTC-first, ETH/others add via config not migration. All tables follow `BaseEntity` (4 audit cols: `created_time`, `created_by`, `updated_time`, `updated_by`).
+
+### Raw data (4 tables, monthly-partitioned by `event_time`)
+
+| Table | Path | Purpose / key columns |
+|---|---|---|
+| `macro_raw` | added V66 | Macro feeds: FRED/ALFRED (DXY, real yields, VIX, M2), CoinGecko (dominance), Binance funding/OI/L/S, alternative.me F&G. Dual timestamps (`event_time` publisher, `ingestion_time` ours). `series_id` joins to `feature_registry.inputs`. UNIQUE on `(source, source_uri, event_time)`. |
+| `onchain_raw` | added V66 | DefiLlama stablecoin supply, CoinMetrics community netflow + active-addresses. Same shape as `macro_raw`. |
+| `news_raw` | added V66 | Empty in v1 — populated in V2 / Phase 7a. `body_uri` points to blob storage; PG holds metadata + `sentiment_score`. |
+| `social_raw` | added V66 | Empty in v1 — V2 deferred. Reddit/etc. |
+
+### Registries
+
+| Table | Path | Purpose / key columns |
+|---|---|---|
+| `feature_registry` | added V66 | Catalog of features + labels. PK `(feature_name, version)`. `pit_safe`, `publish_schedule`, `ffill_policy`, `max_ffill_age_hours`, `backfill_strategy`, `label_for_model`, `label_direction` (`forward`/`backward`). Static check enforces no PIT violations at `/features/register`. |
+| `feature_compute_run` | added V66 | Audit log of feature backfill/compute ops. Status `pending`→`running`→`done`/`failed`/`cancelled`. FK to `feature_registry`. |
+
+### Model layer
+
+| Table | Path | Purpose / key columns |
+|---|---|---|
+| `model_registry` | added V66 | First-class artifact registry. `artifact_sha256` enforced verification on every inference load. `purpose IN (regime, positioning, flow, directional, meta_label, stacker)`. `parent_model_id` links meta-labels to their primary. `bootstrap_metrics` JSONB carries per-fold CIs. UNIQUE on `(purpose, symbol, interval, horizon_bars, version)`. `strategy_definition_id_at_train` binds meta-labels to a specific strategy state. |
+| `training_run` | added V66 | Per-fold training audit. `features_offered`/`features_selected` track Fix 5 feature selection. `capacity_estimate_usd` + `capacity_method`. `random_seed` mandatory for reproducibility. |
+
+### Signal layer
+
+| Table | Path | Purpose / key columns |
+|---|---|---|
+| `signal_definition` | added V66 | Catalog of signal streams (e.g. `regime_btc_1h_v1`). One row per producing model. `value_range` JSONB. |
+| `signal_history` | added V66 | Per-bar signal values, partitioned monthly on `ts`. PK `(signal_id, symbol, ts)`. `source IN (stream, catchup_scan, historical_replay)` — distinguishes how the row was produced. Live trading reads Redis hot key; this table is durable audit + research input. |
+| `signal_health` | added V66 | Rolling metrics per signal: IC, IR, hit rate, decay halflife, capacity, coverage. `health_window` column (NOT `window` — keyword conflict): `7d`/`30d`/`90d`/`lifetime`. Recomputed quarterly (Phase 6). |
+
+### Research workflow
+
+| Table | Path | Purpose / key columns |
+|---|---|---|
+| `research_runs` | added V66 | Pre-registered hypotheses. Agent posts BEFORE any sweep/training. `branch IN (ALGO, DL, HYBRID, DL_STANDALONE)` selects reviewer checklist strictness. `unconventional_methodology` + `override_rationale` (Fix 15 — researcher override budget). |
+| `reviews` | added V66 | Reviewer agent verdicts (`APPROVED`/`CONDITIONAL_APPROVAL`/`REJECTED`). `checklist` JSONB carries structured pass/fail per gate. Either `research_run_id` or `model_id` non-null (CHECK enforced). |
+
+### Promotion & audit
+
+| Table | Path | Purpose / key columns |
+|---|---|---|
+| `model_promotion_gauntlet` | added V66 | 13-gate gauntlet per model (gate 1: PIT labels … gate 12: operator approval + 7-day cooldown … gate 13: retraining stability ≥ 0.6 corr). `iteration_n` + `parent_gauntlet_id` link successive attempts (DSR threshold scales with cumulative iterations per Fix 8). `cooldown_until` enforced via CHECK constraint. |
+| `order_audit` | added V66 | Per-order ML decision snapshot. Partitioned monthly on `decided_at`, retained forever. PK `(order_id, decided_at)`. `guard_chain`/`sizing_chain` JSONB ordered lists. `feature_set_hash` + `feature_store_bar_ts` reconstruct full decision context. `exit_type IN (tp_hit, sl_hit, horizon_end, manual, liquidation)`. |
+| `ml_kill_switch_audit` | added V66 | Log of every `ml:enabled` / `ml:enabled:{strategy}` Redis-flag flip. `actor` (operator/agent/auto), `scope` (`global`/`strategy:LSR`/etc.), `reason`. |
+| `reviewer_audit` | added V66 | Operator quarterly meta-audits of reviewer verdicts. `audit_verdict IN (CONFIRMED, OVERRIDDEN, CONCERN_RAISED)`. FK to `reviews`. |
+| `researcher_override_budget` | added V66 | Per-quarter override counter. PK `quarter` (e.g. `'2026-Q2'`). `overrides_max` default 3. Seeded with 2026-Q2 row by V66. Reviewer rejects when budget exhausted. |
+
+### Extended in V66
+
+| Table | Column | Purpose |
+|---|---|---|
+| `strategy_definition` | `ml_mode` (OFF\|HYBRID), `ml_mode_shadow` | Per-strategy ML mode + shadow flag. OFF = pure algo; HYBRID = ML guards/modifiers active. Shadow=TRUE logs decisions to `order_audit` without enforcing. New `ML_DIRECTIONAL` strategy archetype seeded (enabled=false, simulated=true). |
+| `account_strategy` | `per_symbol_exposure_cap_pct` | Cap on total notional exposure per (account, symbol) across all strategies. Default 1.5 = 150% account equity. Used by `MultiStrategyExposureGuard` (Phase 4 / M7). |
+
+### Ingestion control plane (V67, admin frontend integration)
+
+> Reuses existing `historical_backfill_job` (V47) for manual backfill execution — no schema change for that. Adds two new tables for admin-managed scheduling + per-source health dashboard.
+
+| Table | Path | Purpose / key columns |
+|---|---|---|
+| `ml_ingest_schedule` | added V67 | Admin-configurable cron schedules per (source, symbol). `cron_expression` (Spring 6-field) editable via Blackridge admin UI. Spring TaskScheduler reads this on 60s refresh tick → registers dynamic CronTriggers. `config` JSONB carries source-specific params (FRED series IDs, Binance feeds, etc.). `enabled` defaults FALSE — operator opts in per source after Python module verified. UNIQUE on `(source, symbol)`. |
+| `ml_source_health` | added V67, renamed V68 | Per-source health snapshot (one row per source). Updated by every live-ingest tick. Drives the Blackridge "ML Data Sources" dashboard. `health_status IN (healthy, degraded, failed, disabled, unknown)`. Tracks `consecutive_failures`, `rows_inserted_total`, `errors_total`, `rejected_pit_violations_total` (V68 renamed from `*_24h` — counters are cumulative lifetime, not rolling). Monitor cron alerts (Telegram) on transitions to degraded/failed. |
+
+### Manual backfill workflow (extends V47 historical_backfill_job)
+
+```
+Operator clicks "Backfill FRED 17mo" in Blackridge
+  → Java MlIngestController inserts historical_backfill_job row
+    {job_type='BACKFILL_ML_FRED', params={start, end, series_ids}, status='PENDING'}
+  → HistoricalBackfillJobAsyncRunner picks it up
+  → BackfillMlFredHandler (new bean) delegates to Python ingest service via HTTP
+  → Python heavy_ingest.py runs pull, writes macro_raw rows
+  → Handler tracks progress via ctx.setPhase()/setProgress()
+  → Status flips PENDING → RUNNING → SUCCESS/FAILED/CANCELLED
+  → Frontend polls GET /api/v1/historical/jobs/{id} for live progress
+```
+
+New `JobType` enum values to add (Java code, not migration): `BACKFILL_ML_FRED`, `BACKFILL_ML_BINANCE_MACRO`, `BACKFILL_ML_DEFILLAMA`, `BACKFILL_ML_COINMETRICS`, `BACKFILL_ML_COINGECKO`, `BACKFILL_ML_ALTERNATIVE_ME`, `BACKFILL_ML_FOREXFACTORY`.
+
 ## Adding a new table
 
 1. **New Flyway migration** — `V<n>__<verb>_<noun>.sql`. Idempotent (`IF NOT EXISTS`). See WORKING_RULES.md "Migrations are immutable once applied".
