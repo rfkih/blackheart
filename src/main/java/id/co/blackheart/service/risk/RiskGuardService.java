@@ -288,33 +288,29 @@ public class RiskGuardService {
                     BigDecimal.ZERO, 0);
         }
 
-        Account account = accountRepository.findByAccountId(strategy.getAccountId()).orElse(null);
-        if (account == null) {
-            // Defensive fallback for the impossible case where a strategy
-            // has no account row. Allow rather than block on missing data.
-            return GuardVerdict.allow(BigDecimal.ZERO, 0);
-        }
-
-        // V62 — kill-switch DD trip check runs only when:
-        //   (a) the gate is active for this strategy, AND
-        //   (b) the strategy is not already tripped (else DD compute is wasted
-        //       work and breaks the pre-V62 cheap-path invariant that
-        //       already-tripped short-circuits before touching tradesRepository).
-        // If the gate is active and the strategy is already tripped, evaluate()
-        // below will see the flag and deny via the kill-switch gate naturally.
+        // V62 — kill-switch DD trip check. Runs BEFORE the account lookup
+        // because the DD compute only needs the strategy and its trade
+        // history; placing it after would let a missing-account scenario
+        // (the defensive fallback below) bypass the kill switch entirely.
+        // Only runs when the gate is active and the switch isn't already
+        // tripped (the already-tripped case was short-circuited above).
         BigDecimal ddPct = BigDecimal.ZERO;
-        if (Boolean.TRUE.equals(strategy.getKillSwitchGateEnabled())
-                && !Boolean.TRUE.equals(strategy.getIsKillSwitchTripped())) {
+        if (Boolean.TRUE.equals(strategy.getKillSwitchGateEnabled())) {
             ddPct = computeRolling30DayDdPct(accountStrategyId);
             BigDecimal threshold = strategy.getDdKillThresholdPct();
             if (threshold != null && ddPct.compareTo(threshold) >= 0) {
                 String reason = String.format("30-day DD %s%% reached threshold %s%%",
                         ddPct.setScale(2, RoundingMode.HALF_UP), threshold);
                 tripKillSwitch(strategy, reason);
-                // tripKillSwitch saved the row; refresh the in-memory copy
-                // so the evaluate() call below reads the new state.
-                strategy.setIsKillSwitchTripped(Boolean.TRUE);
+                return GuardVerdict.deny(reason, ddPct, 0);
             }
+        }
+
+        Account account = accountRepository.findByAccountId(strategy.getAccountId()).orElse(null);
+        if (account == null) {
+            // Defensive fallback for the impossible case where a strategy
+            // has no account row. Allow rather than block on missing data.
+            return GuardVerdict.allow(ddPct, 0);
         }
 
         FeatureStore effectiveFs = featureStore != null ? featureStore
