@@ -1466,6 +1466,10 @@ public class BacktestCoordinatorService {
      * this strategy, signaling "no override → use the persisted AS flag".
      * Boolean.FALSE is a valid override value (force direction off).
      */
+    // 3-state Boolean: null = no override (use persisted AS flag), TRUE = force
+    // on, FALSE = force off. The null sentinel is load-bearing — collapsing it
+    // to false would silently override every strategy not in the map.
+    @SuppressWarnings("java:S2447")
     private Boolean resolveBoolOverride(Map<String, Boolean> wizardOverrides, String code) {
         if (wizardOverrides == null || code == null) return null;
         return wizardOverrides.get(code.toUpperCase());

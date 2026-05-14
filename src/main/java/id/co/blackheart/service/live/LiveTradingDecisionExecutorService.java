@@ -172,9 +172,10 @@ public class LiveTradingDecisionExecutorService {
             strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
             // V66 — also surface the divert in trade_execution_log so the
             // operator has a single auditable feed for every entry attempt,
-            // regardless of whether it lands real or paper. paper_trade_run
-            // still holds the full decision/context snapshot for forensics;
-            // this row just notes "attempted, diverted to paper".
+            // regardless of whether it lands real or paper. The
+            // paper_trade_run table still holds the full decision and context
+            // snapshot for forensics, while this row just notes the attempt
+            // was diverted to paper.
             logExecutorRejection(context, decision, side,
                     "Diverted to paper (def.simulated=" + definitionSimulated
                             + ", acct.simulated=" + accountSimulated + ")");
@@ -412,11 +413,7 @@ public class LiveTradingDecisionExecutorService {
             String reason
     ) {
         if (context == null || context.getAccount() == null) return;
-        String strategyName = decision != null && decision.getStrategyCode() != null
-                ? decision.getStrategyCode()
-                : (context.getAccountStrategy() != null
-                        ? context.getAccountStrategy().getStrategyCode()
-                        : null);
+        String strategyName = resolveStrategyNameForLog(decision, context);
         String entryReason = decision != null ? decision.getReason() : null;
         tradeExecutionLogService.logOpenFailure(
                 context.getAccount(),
@@ -427,6 +424,16 @@ public class LiveTradingDecisionExecutorService {
                 null,
                 reason
         );
+    }
+
+    private String resolveStrategyNameForLog(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (decision != null && decision.getStrategyCode() != null) {
+            return decision.getStrategyCode();
+        }
+        if (context.getAccountStrategy() != null) {
+            return context.getAccountStrategy().getStrategyCode();
+        }
+        return null;
     }
 
     private void executeUpdatePositionManagement(Trades activeTrade, StrategyDecision decision) {

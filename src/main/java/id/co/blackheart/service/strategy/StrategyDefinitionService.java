@@ -132,8 +132,8 @@ public class StrategyDefinitionService {
                 .archetypeVersion(archetypeVersion)
                 .specJsonb(specJsonb)
                 .specSchemaVersion(specSchemaVersion)
-                .enabled(request.getEnabled() != null ? request.getEnabled() : false)
-                .simulated(request.getSimulated() != null ? request.getSimulated() : true)
+                .enabled(Boolean.TRUE.equals(request.getEnabled()))
+                .simulated(!Boolean.FALSE.equals(request.getSimulated()))
                 .isDeleted(false)
                 .build();
         entity.setCreatedBy(actorEmail);

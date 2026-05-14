@@ -12,8 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class GeometricReturnCalculatorTest {
 
-    private static final BigDecimal ALPHA_90 = new BigDecimal("0.90");
-
     @Test
     void emptyListReturnsZero() {
         Result r = GeometricReturnCalculator.compute(List.of());

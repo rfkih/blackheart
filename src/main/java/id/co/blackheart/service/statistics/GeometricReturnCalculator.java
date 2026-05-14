@@ -73,13 +73,14 @@ public final class GeometricReturnCalculator {
             counted++;
             sumReturn = sumReturn.add(r);
 
-            if (ruined) continue;
-            BigDecimal step = BigDecimal.ONE.add(allocationFraction.multiply(r, MC), MC);
-            if (step.signum() <= 0) {
-                multiplier = BigDecimal.ZERO;
-                ruined = true;
-            } else {
-                multiplier = multiplier.multiply(step, MC);
+            if (!ruined) {
+                BigDecimal step = BigDecimal.ONE.add(allocationFraction.multiply(r, MC), MC);
+                if (step.signum() <= 0) {
+                    multiplier = BigDecimal.ZERO;
+                    ruined = true;
+                } else {
+                    multiplier = multiplier.multiply(step, MC);
+                }
             }
         }
 

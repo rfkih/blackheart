@@ -200,19 +200,30 @@ public class RiskGuardService {
             if (!v.allowed()) return v;
         }
 
-        // 4. Account-level concurrent-cap. openCountFor is supplied by the
-        //    caller (live: tradesRepository; backtest: BacktestState).
-        if (gateActive(ctx, GATE_CONCURRENT_CAP) && ctx.openCountFor() != null) {
-            long concurrent = ctx.openCountFor().applyAsLong(
-                    ctx.account().getAccountId(), ctx.side());
-            Integer cap = resolveConcurrentCap(ctx.account(), ctx.side());
-            if (cap != null && concurrent >= cap) {
-                return GateVerdict.deny(String.format(
-                        "Concurrent %s positions (%d) at account cap %d",
-                        ctx.side().toUpperCase(), concurrent, cap));
-            }
-        }
+        // 4. Account-level concurrent-cap.
+        GateVerdict concurrentVerdict = evaluateConcurrentCap(ctx);
+        if (!concurrentVerdict.allowed()) return concurrentVerdict;
 
+        return GateVerdict.allow();
+    }
+
+    /**
+     * Account-level concurrent-cap gate. {@code openCountFor} is supplied by
+     * the caller (live: tradesRepository; backtest: BacktestState). Returns
+     * allow when the gate is disabled or no counter is available.
+     */
+    private GateVerdict evaluateConcurrentCap(EvaluationContext ctx) {
+        if (!gateActive(ctx, GATE_CONCURRENT_CAP) || ctx.openCountFor() == null) {
+            return GateVerdict.allow();
+        }
+        long concurrent = ctx.openCountFor().applyAsLong(
+                ctx.account().getAccountId(), ctx.side());
+        Integer cap = resolveConcurrentCap(ctx.account(), ctx.side());
+        if (cap != null && concurrent >= cap) {
+            return GateVerdict.deny(String.format(
+                    "Concurrent %s positions (%d) at account cap %d",
+                    ctx.side().toUpperCase(), concurrent, cap));
+        }
         return GateVerdict.allow();
     }
 

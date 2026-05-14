@@ -386,14 +386,14 @@ public class AccountStrategyService {
     private void ensureDefinitionPromoted(String strategyCode, UUID actorUserId) {
         try {
             String state = strategyPromotionService.currentDefinitionStateByCode(strategyCode);
-            if ("PROMOTED".equals(state)) return;
+            if (StrategyPromotionService.STATE_PROMOTED.equals(state)) return;
 
             String reason = "Auto-promote: human operator activated an account_strategy row";
-            if ("RESEARCH".equals(state)) {
-                strategyPromotionService.promoteDefinition(strategyCode, "PAPER_TRADE", reason, null, actorUserId);
-                strategyPromotionService.promoteDefinition(strategyCode, "PROMOTED", reason, null, actorUserId);
-            } else if ("PAPER_TRADE".equals(state)) {
-                strategyPromotionService.promoteDefinition(strategyCode, "PROMOTED", reason, null, actorUserId);
+            if (StrategyPromotionService.STATE_RESEARCH.equals(state)) {
+                strategyPromotionService.promoteDefinition(strategyCode, StrategyPromotionService.STATE_PAPER_TRADE, reason, null, actorUserId);
+                strategyPromotionService.promoteDefinition(strategyCode, StrategyPromotionService.STATE_PROMOTED, reason, null, actorUserId);
+            } else if (StrategyPromotionService.STATE_PAPER_TRADE.equals(state)) {
+                strategyPromotionService.promoteDefinition(strategyCode, StrategyPromotionService.STATE_PROMOTED, reason, null, actorUserId);
             } else {
                 log.warn("[V66] Definition {} in state {} not auto-promoted — operator must intervene via /research",
                         strategyCode, state);
