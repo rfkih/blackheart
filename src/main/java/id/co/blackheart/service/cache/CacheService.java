@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -77,7 +78,7 @@ public class CacheService {
     }
 
     public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
-        if (!StringUtils.hasText(symbol) || price == null) {
+        if (!StringUtils.hasText(symbol) || ObjectUtils.isEmpty(price)) {
             return;
         }
 
@@ -86,7 +87,7 @@ public class CacheService {
         Map<String, String> value = new HashMap<>();
         value.put("symbol", symbol);
         value.put("price", price.toPlainString());
-        if (updatedAt != null) {
+        if (ObjectUtils.isNotEmpty(updatedAt)) {
             value.put(FIELD_UPDATED_AT, updatedAt.format(DATE_TIME_FORMATTER));
         }
 
@@ -102,14 +103,14 @@ public class CacheService {
     }
 
     public BigDecimal getLatestPrice(String symbol) {
-        if (symbol == null) {
+        if (ObjectUtils.isEmpty(symbol)) {
             return null;
         }
 
         String key = LATEST_PRICE_KEY_PREFIX + symbol;
         Object value = redisTemplate.opsForHash().get(key, "price");
 
-        if (value == null) {
+        if (ObjectUtils.isEmpty(value)) {
             return null;
         }
 
@@ -141,7 +142,7 @@ public class CacheService {
     }
 
     public boolean isPriceUnavailable(String symbol) {
-        if (symbol == null) {
+        if (ObjectUtils.isEmpty(symbol)) {
             return false;
         }
         String key = MISSING_PRICE_KEY_PREFIX + symbol;
@@ -154,14 +155,14 @@ public class CacheService {
     }
 
     public LocalDateTime getLatestPriceUpdatedAt(String symbol) {
-        if (symbol == null) {
+        if (ObjectUtils.isEmpty(symbol)) {
             return null;
         }
 
         String key = LATEST_PRICE_KEY_PREFIX + symbol;
         Object value = redisTemplate.opsForHash().get(key, FIELD_UPDATED_AT);
 
-        if (value == null) {
+        if (ObjectUtils.isEmpty(value)) {
             return null;
         }
 
@@ -402,7 +403,7 @@ public class CacheService {
      * which can silently fail if the key is partially evicted.
      */
     public void removeClosedTrade(UUID accountId, UUID tradeId) {
-        if (accountId == null || tradeId == null) {
+        if (ObjectUtils.isEmpty(accountId) || ObjectUtils.isEmpty(tradeId)) {
             log.warn("[Cache] removeClosedTrade called with null | accountId={} tradeId={}", accountId, tradeId);
             return;
         }
@@ -463,15 +464,15 @@ public class CacheService {
     }
 
     private String asString(Object value) {
-        return value == null ? null : String.valueOf(value);
+        return ObjectUtils.isEmpty(value) ? null : String.valueOf(value);
     }
 
     private String toDateTimeString(LocalDateTime value) {
-        return value == null ? null : value.format(DATE_TIME_FORMATTER);
+        return ObjectUtils.isEmpty(value) ? null : value.format(DATE_TIME_FORMATTER);
     }
 
     private BigDecimal asBigDecimal(Object value) {
-        if (value == null) return null;
+        if (ObjectUtils.isEmpty(value)) return null;
         if (value instanceof BigDecimal bd) return bd;
         String raw = String.valueOf(value).trim();
         if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) return null;
@@ -484,7 +485,7 @@ public class CacheService {
     }
 
     private UUID asUuid(Object value, UUID fallback) {
-        if (value == null) return fallback;
+        if (ObjectUtils.isEmpty(value)) return fallback;
         if (value instanceof UUID uuid) return uuid;
         try {
             return UUID.fromString(String.valueOf(value));
@@ -507,7 +508,7 @@ public class CacheService {
      * never crashes the live trading path.
      */
     private LocalDateTime asLocalDateTime(Object value) {
-        if (value == null) return null;
+        if (ObjectUtils.isEmpty(value)) return null;
         if (value instanceof LocalDateTime ldt) return ldt;
 
         if (value instanceof Long epochMillis) {

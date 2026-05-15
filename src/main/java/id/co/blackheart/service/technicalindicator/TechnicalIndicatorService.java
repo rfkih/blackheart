@@ -13,6 +13,7 @@ import id.co.blackheart.util.MapperUtil;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -96,7 +97,7 @@ public class TechnicalIndicatorService {
     public FeatureStore computeIndicatorsAndStore(String symbol, String interval, LocalDateTime startTime) {
         List<MarketData> historicalData = marketDataRepository.findLast300BySymbolAndIntervalAndTime(symbol, interval, startTime);
 
-        if (historicalData == null || historicalData.size() < MIN_WARMUP_ROWS) {
+        if (CollectionUtils.isEmpty(historicalData) || historicalData.size() < MIN_WARMUP_ROWS) {
             log.warn("Not enough historical data to compute indicators for {} {}", symbol, interval);
             return null;
         }
@@ -335,12 +336,12 @@ public class TechnicalIndicatorService {
     }
 
     private boolean isBullishPullback(FeatureStore feature, BigDecimal price) {
-        if (feature == null || price == null) {
+        if (ObjectUtils.isEmpty(feature) || ObjectUtils.isEmpty(price)) {
             log.debug("Bullish pullback check failed: feature or price is null");
             return false;
         }
 
-        if (feature.getEma20() == null || feature.getEma50() == null) {
+        if (ObjectUtils.isEmpty(feature.getEma20()) || ObjectUtils.isEmpty(feature.getEma50())) {
             log.debug("Bullish pullback check failed: ema20 or ema50 is null");
             return false;
         }
@@ -359,7 +360,7 @@ public class TechnicalIndicatorService {
 
         boolean stillAboveEma50 = price.compareTo(ema50) >= 0;
 
-        boolean acceptableCandle = feature.getCloseLocationValue() == null
+        boolean acceptableCandle = ObjectUtils.isEmpty(feature.getCloseLocationValue())
                 || feature.getCloseLocationValue().compareTo(new BigDecimal("0.4")) >= 0;
 
         boolean result = bullishStructure
@@ -383,12 +384,12 @@ public class TechnicalIndicatorService {
     }
 
     private boolean isBearishPullback(FeatureStore feature, BigDecimal price) {
-        if (feature == null || price == null) {
+        if (ObjectUtils.isEmpty(feature) || ObjectUtils.isEmpty(price)) {
             log.debug("Bearish pullback check failed: feature or price is null");
             return false;
         }
 
-        if (feature.getEma20() == null || feature.getEma50() == null) {
+        if (ObjectUtils.isEmpty(feature.getEma20()) || ObjectUtils.isEmpty(feature.getEma50())) {
             log.debug("Bearish pullback check failed: ema20 or ema50 is null");
             return false;
         }
@@ -431,7 +432,7 @@ public class TechnicalIndicatorService {
     }
 
     private boolean isBullishBreakout(FeatureStore feature, BigDecimal price) {
-        if (feature.getDonchianUpper20() == null || price == null) {
+        if (ObjectUtils.isEmpty(feature.getDonchianUpper20()) || ObjectUtils.isEmpty(price)) {
             log.debug("Bullish breakout check failed: Donchian upper or price is null");
             return false;
         }
@@ -450,7 +451,7 @@ public class TechnicalIndicatorService {
     }
 
     private boolean isBearishBreakout(FeatureStore feature, BigDecimal price) {
-        if (feature.getDonchianLower20() == null || price == null) {
+        if (ObjectUtils.isEmpty(feature.getDonchianLower20()) || ObjectUtils.isEmpty(price)) {
             log.debug("Bearish breakout check failed: Donchian lower or price is null");
             return false;
         }
@@ -479,7 +480,7 @@ public class TechnicalIndicatorService {
     }
 
     private String resolveTrendRegime(Integer trendScore) {
-        if (trendScore == null) {
+        if (ObjectUtils.isEmpty(trendScore)) {
             return "NEUTRAL";
         }
         if (trendScore >= 4) {
@@ -492,7 +493,7 @@ public class TechnicalIndicatorService {
     }
 
     private String resolveVolatilityRegime(BigDecimal atrPct) {
-        if (atrPct == null) {
+        if (ObjectUtils.isEmpty(atrPct)) {
             return "NORMAL";
         }
 
@@ -508,12 +509,12 @@ public class TechnicalIndicatorService {
     private Integer calculateTrendScore(FeatureStore feature, BigDecimal price) {
         int score = 0;
 
-        if (feature.getEma20() != null && price.compareTo(feature.getEma20()) > 0) score++;
-        if (feature.getEma50() != null && price.compareTo(feature.getEma50()) > 0) score++;
-        if (feature.getEma200() != null && price.compareTo(feature.getEma200()) > 0) score++;
-        if (feature.getEma50() != null && feature.getEma200() != null
+        if (ObjectUtils.isNotEmpty(feature.getEma20()) && price.compareTo(feature.getEma20()) > 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getEma50()) && price.compareTo(feature.getEma50()) > 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getEma200()) && price.compareTo(feature.getEma200()) > 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getEma50()) && ObjectUtils.isNotEmpty(feature.getEma200())
                 && feature.getEma50().compareTo(feature.getEma200()) > 0) score++;
-        if (feature.getAdx() != null && feature.getAdx().compareTo(new BigDecimal("20")) >= 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("20")) >= 0) score++;
 
         return score;
     }

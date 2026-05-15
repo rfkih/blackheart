@@ -38,6 +38,7 @@ import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicReference;
+import org.apache.commons.lang3.ObjectUtils;
 
 /**
  * Live trading entry point. Subscribes to Binance kline WebSocket and
@@ -68,7 +69,7 @@ public class BinanceWebSocketClient {
      * Trading pair this client subscribes to. Single-symbol today (BTCUSDT);
      * pulled out of a constant so adding ETHUSDT etc. is a config change
      * rather than a code edit. Multi-symbol routing is a separate, larger
-     * change to this class — see SymbolUtils and the data-plane backlog
+     * change to this class â€” see SymbolUtils and the data-plane backlog
      * note in CLAUDE.md ("Multi-symbol live needs trading-JVM restart").
      */
     @Value("${app.live.symbol:BTCUSDT}")
@@ -276,7 +277,7 @@ public class BinanceWebSocketClient {
 
     /**
      * Builds the combined-stream URL for the configured symbol across all
-     * subscribed intervals — e.g. {@code wss://.../stream?streams=btcusdt@kline_5m/btcusdt@kline_15m/...}.
+     * subscribed intervals â€” e.g. {@code wss://.../stream?streams=btcusdt@kline_5m/btcusdt@kline_15m/...}.
      * Lower-cased per Binance's stream-name contract; intervals iterated in
      * declaration order so the URL is deterministic for log diffing.
      */

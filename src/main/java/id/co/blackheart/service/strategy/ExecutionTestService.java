@@ -10,6 +10,7 @@ import id.co.blackheart.repository.StrategyParamRepository;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -73,7 +74,7 @@ public class ExecutionTestService implements StrategyExecutor {
 
     @Override
     public StrategyDecision execute(EnrichedStrategyContext context) {
-        if (context == null || context.getMarketData() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData())) {
             return hold(context, "Invalid context");
         }
 
@@ -82,12 +83,12 @@ public class ExecutionTestService implements StrategyExecutor {
         PositionSnapshot positionSnapshot = context.getPositionSnapshot();
 
         BigDecimal closePrice = marketData.getClosePrice();
-        if (closePrice == null) {
+        if (ObjectUtils.isEmpty(closePrice)) {
             return hold(context, "Close price is null");
         }
 
         BigDecimal atr = resolveAtr(featureStore);
-        if (atr == null) {
+        if (ObjectUtils.isEmpty(atr)) {
             return hold(context, "ATR unavailable, cannot compute trade levels");
         }
         String exitStructure = resolveExitStructure(context);
@@ -227,15 +228,15 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private static BigDecimal adxOrNull(FeatureStore fs) {
-        return fs == null ? null : fs.getAdx();
+        return ObjectUtils.isEmpty(fs) ? null : fs.getAdx();
     }
 
     private static BigDecimal rsiOrNull(FeatureStore fs) {
-        return fs == null ? null : fs.getRsi();
+        return ObjectUtils.isEmpty(fs) ? null : fs.getRsi();
     }
 
     private static String regimeOrNull(FeatureStore fs) {
-        return fs == null ? null : fs.getTrendRegime();
+        return ObjectUtils.isEmpty(fs) ? null : fs.getTrendRegime();
     }
 
     private StrategyDecision handleActiveTrade(
@@ -302,7 +303,7 @@ public class ExecutionTestService implements StrategyExecutor {
             String exitStructure
     ) {
         BigDecimal entryPrice = positionSnapshot.getEntryPrice();
-        if (entryPrice == null || atr == null || atr.compareTo(ZERO) <= 0) {
+        if (ObjectUtils.isEmpty(entryPrice) || ObjectUtils.isEmpty(atr) || atr.compareTo(ZERO) <= 0) {
             return hold(context, "Long management skipped due to invalid inputs");
         }
 
@@ -433,12 +434,12 @@ public class ExecutionTestService implements StrategyExecutor {
         // so the operator can exercise RUNNER_ONLY (no supported live interval
         // maps to it) and force any structure on any interval for coverage.
         String override = resolveExitStructureOverride(context);
-        if (override != null) {
+        if (ObjectUtils.isNotEmpty(override)) {
             return override;
         }
 
-        String interval = context != null ? context.getInterval() : null;
-        if (interval == null) {
+        String interval = ObjectUtils.isNotEmpty(context) ? context.getInterval() : null;
+        if (ObjectUtils.isEmpty(interval)) {
             return EXIT_STRUCTURE_SINGLE;
         }
 
@@ -452,15 +453,15 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private String resolveExitStructureOverride(EnrichedStrategyContext context) {
-        if (context == null || context.getAccountStrategy() == null) return null;
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getAccountStrategy())) return null;
         UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
-        if (accountStrategyId == null) return null;
+        if (ObjectUtils.isEmpty(accountStrategyId)) return null;
         return strategyParamRepository.findActiveByAccountStrategyId(accountStrategyId)
                 .map(p -> {
                     Map<String, Object> overrides = p.getParamOverrides();
-                    if (overrides == null) return null;
+                    if (ObjectUtils.isEmpty(overrides)) return null;
                     Object value = overrides.get(KEY_EXIT_STRUCTURE);
-                    return value == null ? null : value.toString().toUpperCase();
+                    return ObjectUtils.isNotEmpty(value) ? value.toString().toUpperCase() : null;
                 })
                 .filter(s -> !s.isBlank())
                 .orElse(null);
@@ -479,7 +480,7 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private String resolveTargetRole(PositionSnapshot snapshot, String exitStructure) {
-        if (snapshot == null || snapshot.getPositionRole() == null) {
+        if (ObjectUtils.isEmpty(snapshot) || ObjectUtils.isEmpty(snapshot.getPositionRole())) {
             return TARGET_ALL;
         }
 
@@ -495,7 +496,7 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private BigDecimal resolveManagementTp1(PositionSnapshot snapshot, BigDecimal updatedTp) {
-        if (snapshot == null || snapshot.getPositionRole() == null) {
+        if (ObjectUtils.isEmpty(snapshot) || ObjectUtils.isEmpty(snapshot.getPositionRole())) {
             return updatedTp;
         }
 
@@ -506,7 +507,7 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private BigDecimal resolveManagementTp2(PositionSnapshot snapshot, BigDecimal updatedTp) {
-        if (snapshot == null || snapshot.getPositionRole() == null) {
+        if (ObjectUtils.isEmpty(snapshot) || ObjectUtils.isEmpty(snapshot.getPositionRole())) {
             return null;
         }
 
@@ -514,8 +515,8 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private BigDecimal resolveAtr(FeatureStore featureStore) {
-        if (featureStore != null
-                && featureStore.getAtr() != null
+        if (ObjectUtils.isNotEmpty(featureStore)
+                && ObjectUtils.isNotEmpty(featureStore.getAtr())
                 && featureStore.getAtr().compareTo(BigDecimal.ZERO) > 0) {
             return featureStore.getAtr();
         }
@@ -523,20 +524,20 @@ public class ExecutionTestService implements StrategyExecutor {
     }
 
     private BigDecimal maxNonNull(BigDecimal a, BigDecimal b) {
-        if (a == null) {
+        if (ObjectUtils.isEmpty(a)) {
             return b;
         }
-        if (b == null) {
+        if (ObjectUtils.isEmpty(b)) {
             return a;
         }
         return a.max(b);
     }
 
     private BigDecimal minNonNull(BigDecimal a, BigDecimal b) {
-        if (a == null) {
+        if (ObjectUtils.isEmpty(a)) {
             return b;
         }
-        if (b == null) {
+        if (ObjectUtils.isEmpty(b)) {
             return a;
         }
         return a.min(b);

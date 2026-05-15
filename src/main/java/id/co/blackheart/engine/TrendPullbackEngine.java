@@ -10,6 +10,7 @@ import id.co.blackheart.service.strategy.StrategyHelper;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -115,7 +116,7 @@ public class TrendPullbackEngine implements StrategyEngine {
 
     @Override
     public StrategyDecision evaluate(StrategySpec spec, EnrichedStrategyContext context) {
-        if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData()) || ObjectUtils.isEmpty(context.getFeatureStore())) {
             return hold(spec, context, "Invalid context");
         }
         Tuning t = Tuning.from(spec);
@@ -128,17 +129,17 @@ public class TrendPullbackEngine implements StrategyEngine {
 
         if (EngineContextHelpers.isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
 
-        if (context.hasTradablePosition() && snap != null) {
+        if (context.hasTradablePosition() && ObjectUtils.isNotEmpty(snap)) {
             return managePosition(spec, context, md, f, snap, t);
         }
 
         if (context.isLongAllowed()) {
             StrategyDecision d = tryLongEntry(spec, context, md, f, t);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
         if (context.isShortAllowed()) {
             StrategyDecision d = tryShortEntry(spec, context, md, f, t);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
         return hold(spec, context, "No qualified TPR setup");
     }
@@ -151,7 +152,7 @@ public class TrendPullbackEngine implements StrategyEngine {
 
         BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         BigDecimal ema20 = f.getEma20();
-        if (atr == null || ema20 == null) return null;
+        if (ObjectUtils.isEmpty(atr) || ObjectUtils.isEmpty(ema20)) return null;
 
         BigDecimal low = strategyHelper.safe(md.getLowPrice());
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
@@ -208,16 +209,16 @@ public class TrendPullbackEngine implements StrategyEngine {
                                         BigDecimal ema20, BigDecimal atr) {
         BigDecimal pullbackTol = atr.multiply(t.pullbackTouchAtr);
         if (low.subtract(ema20).compareTo(pullbackTol) > 0) return false;
-        if (f.getRsi() == null
+        if (ObjectUtils.isEmpty(f.getRsi())
                 || f.getRsi().compareTo(t.longRsiMin) < 0
                 || f.getRsi().compareTo(t.longRsiMax) > 0) return false;
         if (close.compareTo(ema20) <= 0) return false;
-        if (f.getBodyToRangeRatio() == null
+        if (ObjectUtils.isEmpty(f.getBodyToRangeRatio())
                 || f.getBodyToRangeRatio().compareTo(t.bodyRatioMin) < 0) return false;
-        if (f.getCloseLocationValue() == null
+        if (ObjectUtils.isEmpty(f.getCloseLocationValue())
                 || f.getCloseLocationValue().compareTo(t.clvMin) < 0
                 || f.getCloseLocationValue().compareTo(t.clvMax) > 0) return false;
-        return f.getRelativeVolume20() != null
+        return ObjectUtils.isNotEmpty(f.getRelativeVolume20())
                 && f.getRelativeVolume20().compareTo(t.rvolMin) >= 0;
     }
 
@@ -244,7 +245,7 @@ public class TrendPullbackEngine implements StrategyEngine {
 
         BigDecimal atr = EngineContextHelpers.resolveAtr(f);
         BigDecimal ema20 = f.getEma20();
-        if (atr == null || ema20 == null) return null;
+        if (ObjectUtils.isEmpty(atr) || ObjectUtils.isEmpty(ema20)) return null;
 
         BigDecimal high = strategyHelper.safe(md.getHighPrice());
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
@@ -298,19 +299,19 @@ public class TrendPullbackEngine implements StrategyEngine {
                                          BigDecimal ema20, BigDecimal atr) {
         BigDecimal pullbackTol = atr.multiply(t.pullbackTouchAtr);
         if (ema20.subtract(high).compareTo(pullbackTol) > 0) return false;
-        if (f.getRsi() == null
+        if (ObjectUtils.isEmpty(f.getRsi())
                 || f.getRsi().compareTo(t.shortRsiMin) < 0
                 || f.getRsi().compareTo(t.shortRsiMax) > 0) return false;
         if (close.compareTo(ema20) >= 0) return false;
-        if (f.getBodyToRangeRatio() == null
+        if (ObjectUtils.isEmpty(f.getBodyToRangeRatio())
                 || f.getBodyToRangeRatio().compareTo(t.bodyRatioMin) < 0) return false;
 
         BigDecimal clv = f.getCloseLocationValue();
         BigDecimal clvShortMax = ONE.subtract(t.clvMin);
         BigDecimal clvShortMin = ONE.subtract(t.clvMax);
-        if (clv == null || clv.compareTo(clvShortMax) > 0 || clv.compareTo(clvShortMin) < 0) return false;
+        if (ObjectUtils.isEmpty(clv) || clv.compareTo(clvShortMax) > 0 || clv.compareTo(clvShortMin) < 0) return false;
 
-        return f.getRelativeVolume20() != null
+        return ObjectUtils.isNotEmpty(f.getRelativeVolume20())
                 && f.getRelativeVolume20().compareTo(t.rvolMin) >= 0;
     }
 
@@ -329,12 +330,12 @@ public class TrendPullbackEngine implements StrategyEngine {
                                             MarketData md, FeatureStore f,
                                             PositionSnapshot snap, Tuning t) {
         String side = snap.getSide();
-        if (side == null) return hold(spec, ctx, "TPR manage: unknown side");
+        if (ObjectUtils.isEmpty(side)) return hold(spec, ctx, "TPR manage: unknown side");
         boolean isLong = SIDE_LONG.equalsIgnoreCase(side);
 
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
         BigDecimal curStop = strategyHelper.safe(snap.getCurrentStopLossPrice());
-        BigDecimal initStop = snap.getInitialStopLossPrice() != null
+        BigDecimal initStop = ObjectUtils.isNotEmpty(snap.getInitialStopLossPrice())
                 ? snap.getInitialStopLossPrice() : curStop;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         BigDecimal initRisk = isLong ? entry.subtract(initStop) : initStop.subtract(entry);
@@ -381,7 +382,7 @@ public class TrendPullbackEngine implements StrategyEngine {
         if (atr == null) return hold(spec, ctx, "TPR runner: no ATR");
 
         BigDecimal candidate = computeRunnerCandidate(s, atr, t);
-        if (candidate == null) return hold(spec, ctx, "TPR runner not ready");
+        if (ObjectUtils.isEmpty(candidate)) return hold(spec, ctx, "TPR runner not ready");
 
         boolean improved = s.isLong()
                 ? candidate.compareTo(s.curStop()) > 0
@@ -448,9 +449,9 @@ public class TrendPullbackEngine implements StrategyEngine {
     // ── Scoring ──────────────────────────────────────────────────────────────
 
     private BigDecimal longSignalScore(FeatureStore f, Tuning t) {
-        BigDecimal rsi = f.getRsi() != null ? normalise(f.getRsi(), t.longRsiMin, t.longRsiMax) : ZERO;
-        BigDecimal clv = f.getCloseLocationValue() != null ? f.getCloseLocationValue() : ZERO;
-        BigDecimal body = f.getBodyToRangeRatio() != null ? f.getBodyToRangeRatio() : ZERO;
+        BigDecimal rsi = ObjectUtils.isNotEmpty(f.getRsi()) ? normalise(f.getRsi(), t.longRsiMin, t.longRsiMax) : ZERO;
+        BigDecimal clv = ObjectUtils.isNotEmpty(f.getCloseLocationValue()) ? f.getCloseLocationValue() : ZERO;
+        BigDecimal body = ObjectUtils.isNotEmpty(f.getBodyToRangeRatio()) ? f.getBodyToRangeRatio() : ZERO;
         BigDecimal vol = f.getRelativeVolume20() != null
                 ? f.getRelativeVolume20().divide(new BigDecimal("3"), 8, RoundingMode.HALF_UP).min(ONE) : ZERO;
         return weightedScore(rsi, clv, body, vol);
@@ -462,7 +463,7 @@ public class TrendPullbackEngine implements StrategyEngine {
                 : ZERO;
         BigDecimal clv = f.getCloseLocationValue() != null
                 ? ONE.subtract(f.getCloseLocationValue()) : ZERO;
-        BigDecimal body = f.getBodyToRangeRatio() != null ? f.getBodyToRangeRatio() : ZERO;
+        BigDecimal body = ObjectUtils.isNotEmpty(f.getBodyToRangeRatio()) ? f.getBodyToRangeRatio() : ZERO;
         BigDecimal vol = f.getRelativeVolume20() != null
                 ? f.getRelativeVolume20().divide(new BigDecimal("3"), 8, RoundingMode.HALF_UP).min(ONE) : ZERO;
         return weightedScore(rsi, clv, body, vol);
@@ -477,7 +478,7 @@ public class TrendPullbackEngine implements StrategyEngine {
     }
 
     private static BigDecimal normalise(BigDecimal value, BigDecimal lo, BigDecimal hi) {
-        if (value == null || lo == null || hi == null) return ZERO;
+        if (ObjectUtils.isEmpty(value) || ObjectUtils.isEmpty(lo) || ObjectUtils.isEmpty(hi)) return ZERO;
         BigDecimal range = hi.subtract(lo);
         if (range.compareTo(ZERO) <= 0) return ZERO;
         BigDecimal scaled = value.subtract(lo).divide(range, 8, RoundingMode.HALF_UP);
@@ -489,41 +490,41 @@ public class TrendPullbackEngine implements StrategyEngine {
     // ── Gating helpers ───────────────────────────────────────────────────────
 
     private boolean hasBullishEmaStack(MarketData md, FeatureStore f, Tuning t) {
-        if (f.getEma50() == null || f.getEma200() == null) return false;
+        if (ObjectUtils.isEmpty(f.getEma50()) || ObjectUtils.isEmpty(f.getEma200())) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(f.getEma50()) <= 0) return false;
         if (f.getEma50().compareTo(f.getEma200()) <= 0) return false;
-        return f.getEma50Slope() == null || f.getEma50Slope().compareTo(t.ema50SlopeMin) >= 0;
+        return ObjectUtils.isEmpty(f.getEma50Slope()) || f.getEma50Slope().compareTo(t.ema50SlopeMin) >= 0;
     }
 
     private boolean hasBearishEmaStack(MarketData md, FeatureStore f, Tuning t) {
-        if (f.getEma50() == null || f.getEma200() == null) return false;
+        if (ObjectUtils.isEmpty(f.getEma50()) || ObjectUtils.isEmpty(f.getEma200())) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(f.getEma50()) >= 0) return false;
         if (f.getEma50().compareTo(f.getEma200()) >= 0) return false;
-        return f.getEma50Slope() == null || f.getEma50Slope().negate().compareTo(t.ema50SlopeMin) >= 0;
+        return ObjectUtils.isEmpty(f.getEma50Slope()) || f.getEma50Slope().negate().compareTo(t.ema50SlopeMin) >= 0;
     }
 
     private boolean isAdxBandOk(FeatureStore f, Tuning t) {
-        if (f.getAdx() == null) return false;
+        if (ObjectUtils.isEmpty(f.getAdx())) return false;
         return f.getAdx().compareTo(t.adxEntryMin) >= 0
                 && f.getAdx().compareTo(t.adxEntryMax) <= 0;
     }
 
     private boolean isLongDiSpreadOk(FeatureStore f, Tuning t) {
-        if (f.getPlusDI() == null || f.getMinusDI() == null) return true;
+        if (ObjectUtils.isEmpty(f.getPlusDI()) || ObjectUtils.isEmpty(f.getMinusDI())) return true;
         return f.getPlusDI().subtract(f.getMinusDI()).compareTo(t.diSpreadMin) >= 0;
     }
 
     private boolean isShortDiSpreadOk(FeatureStore f, Tuning t) {
-        if (f.getPlusDI() == null || f.getMinusDI() == null) return true;
+        if (ObjectUtils.isEmpty(f.getPlusDI()) || ObjectUtils.isEmpty(f.getMinusDI())) return true;
         return f.getMinusDI().subtract(f.getPlusDI()).compareTo(t.diSpreadMin) >= 0;
     }
 
     private boolean isBullishBias(EnrichedStrategyContext ctx, Tuning t) {
         FeatureStore bias = ctx.getBiasFeatureStore();
         MarketData biasMd = ctx.getBiasMarketData();
-        if (bias == null || biasMd == null) return false;
+        if (ObjectUtils.isEmpty(bias) || ObjectUtils.isEmpty(biasMd)) return false;
         boolean structure = strategyHelper.hasValue(bias.getEma50())
                 && strategyHelper.hasValue(bias.getEma200())
                 && strategyHelper.hasValue(biasMd.getClosePrice())
@@ -535,7 +536,7 @@ public class TrendPullbackEngine implements StrategyEngine {
     private boolean isBearishBias(EnrichedStrategyContext ctx, Tuning t) {
         FeatureStore bias = ctx.getBiasFeatureStore();
         MarketData biasMd = ctx.getBiasMarketData();
-        if (bias == null || biasMd == null) return false;
+        if (ObjectUtils.isEmpty(bias) || ObjectUtils.isEmpty(biasMd)) return false;
         boolean structure = strategyHelper.hasValue(bias.getEma50())
                 && strategyHelper.hasValue(bias.getEma200())
                 && strategyHelper.hasValue(biasMd.getClosePrice())
@@ -545,7 +546,7 @@ public class TrendPullbackEngine implements StrategyEngine {
     }
 
     private boolean isWithinBiasAdx(BigDecimal adx, Tuning t) {
-        if (adx == null) return false;
+        if (ObjectUtils.isEmpty(adx)) return false;
         return adx.compareTo(t.biasAdxMin) >= 0 && adx.compareTo(t.biasAdxMax) <= 0;
     }
 
@@ -555,12 +556,12 @@ public class TrendPullbackEngine implements StrategyEngine {
         String name = spec.getStrategyName();
         if (!StringUtils.hasText(name)) name = spec.getStrategyCode();
         Integer ver = spec.getArchetypeVersion();
-        String version = ARCHETYPE_NAME + ".v" + (ver == null ? VERSION : ver);
+        String version = ARCHETYPE_NAME + ".v" + (ObjectUtils.isEmpty(ver) ? VERSION : ver);
         return StrategyDecision.builder()
                 .strategyCode(spec.getStrategyCode())
                 .strategyName(name)
                 .strategyVersion(version)
-                .strategyInterval(ctx != null ? ctx.getInterval() : null);
+                .strategyInterval(ObjectUtils.isNotEmpty(ctx) ? ctx.getInterval() : null);
     }
 
     private StrategyDecision hold(StrategySpec spec, EnrichedStrategyContext ctx, String reason) {

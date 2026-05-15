@@ -1,0 +1,31 @@
+{
+  "entry_type": "HYPOTHESIS",
+  "strategy_code": "TPB",
+  "interval_name": "4h",
+  "instrument": "BTCUSDT",
+  "title": "HYP: TPB BTCUSDT 4h - Native 4h pullback avoids cross-TF frequency starvation",
+  "content": "TrendPullbackEngine at native 4h. All prior TPB tests were on 1h with a 4h bias filter, causing frequency starvation (n=2-32 per draw). At native 4h, the EMA50>EMA200 bias check uses the same 4h bars being traded - no cross-TF lookup bottleneck. Expected n=15-50 trades over 28-month window (fewer than 1h but above threshold if selectivity is right). Mechanism: EMA50>EMA200 trend confirmation, pullback to EMA20 within pullbackTouchAtr*ATR, reclaim candle quality gate (composite score >= 0.55), TP1 break-even shift + runner. Key params: adxEntryMin (trend strength), stopAtrBuffer (stop placement), tp1R (first target). Prediction: EDGE_PRESENT in 2024 trending regime. Risk: n may still be too low for V11 threshold (n>=100); 4h TPB may need 3+ years of data. Will falsify if null-screen shows PF<0.80 across all draws OR n_trades<15 per draw.",
+  "structured_data": {
+    "kind": "HYPOTHESIS",
+    "archetype": "TPB",
+    "interval": "4h",
+    "instrument": "BTCUSDT",
+    "mechanism": "EMA50>EMA200 trend + EMA20 pullback + reclaim candle quality gate, TP1 break-even",
+    "axes": ["adxEntryMin", "stopAtrBuffer", "tp1R"],
+    "account_strategy_id": "8c14f6a1-6216-49e2-926a-a151a960919e",
+    "prior_evidence": {
+      "TPB_1h": "DISCARD - frequency starved (n=2-32 per draw; 4h bias filter bottleneck)",
+      "TPB_journal": "628218a6-c5aa-4f32-bb96-0793f6507547"
+    },
+    "expected_outcome": "EDGE_PRESENT - 4h native avoids cross-TF frequency bottleneck; trend-following in 2024 BTC; pullback quality gate filters noise",
+    "falsification_condition": "If null-screen shows PF<0.80 across all draws OR n_trades<15 per draw (insufficient for V11 n>=100 in full sweep)",
+    "expected_n_per_draw": "15-50",
+    "param_ranges": {
+      "adxEntryMin": [20, 35],
+      "stopAtrBuffer": [0.4, 1.0],
+      "tp1R": [1.5, 3.0]
+    }
+  },
+  "status": "ACTIVE",
+  "created_by": "quant-researcher"
+}

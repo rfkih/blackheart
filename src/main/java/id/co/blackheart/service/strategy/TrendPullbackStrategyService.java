@@ -18,6 +18,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.lang.NonNull;
@@ -105,7 +107,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
         int applied = 0;
         for (Map.Entry<String, Object> e : overrides.entrySet()) {
             BigDecimal v = toDecimal(e.getValue());
-            if (v == null) continue;
+            if (ObjectUtils.isEmpty(v)) continue;
             boolean took = applyOverride(p, e.getKey(), v);
             if (took) applied++;
         }
@@ -162,7 +164,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     }
 
     private static BigDecimal toDecimal(Object v) {
-        if (v == null) return null;
+        if (ObjectUtils.isEmpty(v)) return null;
         if (v instanceof BigDecimal bd) return bd;
         if (v instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
         try { return new BigDecimal(v.toString().trim()); } catch (NumberFormatException e) { return null; }
@@ -215,7 +217,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
 
     @Override
     public StrategyDecision execute(EnrichedStrategyContext context) {
-        if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData()) || ObjectUtils.isEmpty(context.getFeatureStore())) {
             return hold(context, "Invalid context or missing data");
         }
 
@@ -234,18 +236,18 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
         }
 
         // Already in a trade → run management branch (BE / trail).
-        if (context.hasTradablePosition() && snap != null) {
+        if (context.hasTradablePosition() && ObjectUtils.isNotEmpty(snap)) {
             return managePosition(context, md, f, snap, p);
         }
 
         if (context.isLongAllowed()) {
             StrategyDecision d = tryLongEntry(context, md, f, p);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
 
         if (context.isShortAllowed()) {
             StrategyDecision d = tryShortEntry(context, md, f, p);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
 
         return hold(context, "No qualified TPR setup");
@@ -260,14 +262,14 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
 
         BigDecimal atr = resolveAtr(f);
         BigDecimal ema20 = f.getEma20();
-        if (ema20 == null) return null;
+        if (ObjectUtils.isEmpty(ema20)) return null;
         BigDecimal low = strategyHelper.safe(md.getLowPrice());
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
 
         if (!passesLongCandleGates(f, low, close, ema20, atr, p)) return null;
 
         EntrySizing sizing = computeLongSizing(close, low, atr, p);
-        if (sizing == null) return null;
+        if (ObjectUtils.isEmpty(sizing)) return null;
 
         BigDecimal score = calculateLongSignalScore(f, p);
         if (score.compareTo(p.getMinSignalScore()) < 0) {
@@ -302,14 +304,14 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
                     md.getClosePrice(), f.getEma50(), f.getEma200(), f.getEma50Slope());
             return false;
         }
-        if (f.getAdx() == null
+        if (ObjectUtils.isEmpty(f.getAdx())
                 || f.getAdx().compareTo(p.getAdxEntryMin()) < 0
                 || f.getAdx().compareTo(p.getAdxEntryMax()) > 0) {
             log.debug("TPR LONG gate-adx FAIL adx={} min={} max={}",
                     f.getAdx(), p.getAdxEntryMin(), p.getAdxEntryMax());
             return false;
         }
-        if (f.getPlusDI() != null && f.getMinusDI() != null) {
+        if (ObjectUtils.isNotEmpty(f.getPlusDI()) && ObjectUtils.isNotEmpty(f.getMinusDI())) {
             BigDecimal diSpread = f.getPlusDI().subtract(f.getMinusDI());
             if (diSpread.compareTo(p.getDiSpreadMin()) < 0) {
                 log.debug("TPR LONG gate-di FAIL spread={}", diSpread);
@@ -331,7 +333,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
                     low, ema20, distanceToEma, pullbackTol);
             return false;
         }
-        if (f.getRsi() == null
+        if (ObjectUtils.isEmpty(f.getRsi())
                 || f.getRsi().compareTo(p.getLongRsiMin()) < 0
                 || f.getRsi().compareTo(p.getLongRsiMax()) > 0) {
             log.debug("TPR LONG gate-rsi FAIL rsi={} band={}/{}",
@@ -342,7 +344,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
             log.debug("TPR LONG gate-reclaim FAIL close={} <= ema20={}", close, ema20);
             return false;
         }
-        if (f.getBodyToRangeRatio() == null
+        if (ObjectUtils.isEmpty(f.getBodyToRangeRatio())
                 || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
             log.debug("TPR LONG gate-body FAIL body={}", f.getBodyToRangeRatio());
             return false;
@@ -350,14 +352,14 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
         // CLV upper bound rejects bars that closed ON the high (CLV >= 0.90)
         // — v0.1 data showed 7/7 such trades lost, classic late-in-move
         // exhaustion signature dressed up as a strong candle.
-        if (f.getCloseLocationValue() == null
+        if (ObjectUtils.isEmpty(f.getCloseLocationValue())
                 || f.getCloseLocationValue().compareTo(p.getClvMin()) < 0
                 || f.getCloseLocationValue().compareTo(p.getClvMax()) > 0) {
             log.debug("TPR LONG gate-clv FAIL clv={} band={}/{}",
                     f.getCloseLocationValue(), p.getClvMin(), p.getClvMax());
             return false;
         }
-        if (f.getRelativeVolume20() == null
+        if (ObjectUtils.isEmpty(f.getRelativeVolume20())
                 || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) {
             log.debug("TPR LONG gate-rvol FAIL rvol={}", f.getRelativeVolume20());
             return false;
@@ -446,14 +448,14 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
 
         BigDecimal atr = resolveAtr(f);
         BigDecimal ema20 = f.getEma20();
-        if (ema20 == null) return null;
+        if (ObjectUtils.isEmpty(ema20)) return null;
         BigDecimal high = strategyHelper.safe(md.getHighPrice());
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
 
         if (!passesShortCandleGates(f, high, close, ema20, atr, p)) return null;
 
         EntrySizing sizing = computeShortSizing(close, high, atr, p);
-        if (sizing == null) return null;
+        if (ObjectUtils.isEmpty(sizing)) return null;
 
         BigDecimal score = calculateShortSignalScore(f, p);
         if (score.compareTo(p.getMinSignalScore()) < 0) return null;
@@ -481,12 +483,12 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
             log.debug("TPR SHORT gate-stack FAIL");
             return false;
         }
-        if (f.getAdx() == null
+        if (ObjectUtils.isEmpty(f.getAdx())
                 || f.getAdx().compareTo(p.getAdxEntryMin()) < 0
                 || f.getAdx().compareTo(p.getAdxEntryMax()) > 0) {
             return false;
         }
-        if (f.getPlusDI() != null && f.getMinusDI() != null) {
+        if (ObjectUtils.isNotEmpty(f.getPlusDI()) && ObjectUtils.isNotEmpty(f.getMinusDI())) {
             BigDecimal diSpread = f.getMinusDI().subtract(f.getPlusDI());
             if (diSpread.compareTo(p.getDiSpreadMin()) < 0) return false;
         }
@@ -503,14 +505,14 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
         BigDecimal pullbackTol = atr.multiply(p.getPullbackTouchAtr());
         if (distanceToEma.compareTo(pullbackTol) > 0) return false;
 
-        if (f.getRsi() == null
+        if (ObjectUtils.isEmpty(f.getRsi())
                 || f.getRsi().compareTo(p.getShortRsiMin()) < 0
                 || f.getRsi().compareTo(p.getShortRsiMax()) > 0) {
             return false;
         }
         if (close.compareTo(ema20) >= 0) return false;
 
-        if (f.getBodyToRangeRatio() == null
+        if (ObjectUtils.isEmpty(f.getBodyToRangeRatio())
                 || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
             return false;
         }
@@ -599,13 +601,13 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
             PositionSnapshot snap, Params p
     ) {
         String side = snap.getSide();
-        if (side == null) return hold(ctx, "TPR manage: unknown side");
+        if (StringUtils.isEmpty(side)) return hold(ctx, "TPR manage: unknown side");
 
         boolean isLong = SIDE_LONG.equalsIgnoreCase(side);
         boolean isRunner = POSITION_ROLE_RUNNER.equalsIgnoreCase(snap.getPositionRole());
 
         ManageState ms = buildManageState(snap, md, isLong);
-        if (ms == null) return hold(ctx, "TPR manage: invalid init risk");
+        if (ObjectUtils.isEmpty(ms)) return hold(ctx, "TPR manage: invalid init risk");
         if (ms.move().compareTo(ZERO) <= 0) return hold(ctx, "TPR manage: not in profit");
 
         return isRunner
@@ -623,7 +625,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     private ManageState buildManageState(PositionSnapshot snap, MarketData md, boolean isLong) {
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
         BigDecimal curStop = strategyHelper.safe(snap.getCurrentStopLossPrice());
-        BigDecimal initStop = snap.getInitialStopLossPrice() != null
+        BigDecimal initStop = ObjectUtils.isNotEmpty(snap.getInitialStopLossPrice())
                 ? snap.getInitialStopLossPrice() : curStop;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         BigDecimal initRisk = isLong ? entry.subtract(initStop) : initStop.subtract(entry);
@@ -662,7 +664,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
                                              String side, boolean isLong, ManageState ms) {
         BigDecimal atr = resolveAtr(f);
         BigDecimal candidate = computeRunnerCandidate(isLong, ms, atr, p);
-        if (candidate == null) return hold(ctx, "TPR runner not ready");
+        if (ObjectUtils.isEmpty(candidate)) return hold(ctx, "TPR runner not ready");
 
         // Stop can only move in the favourable direction.
         boolean improved = isLong
@@ -717,12 +719,12 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
 
     private BigDecimal calculateLongSignalScore(FeatureStore f, Params p) {
         // Deliberately simple sum of normalised components; tune in v0.2.
-        BigDecimal rsiScore = f.getRsi() != null
+        BigDecimal rsiScore = ObjectUtils.isNotEmpty(f.getRsi())
                 ? normalise(f.getRsi(), p.getLongRsiMin(), p.getLongRsiMax())
                 : ZERO;
-        BigDecimal clvScore = f.getCloseLocationValue() != null ? f.getCloseLocationValue() : ZERO;
-        BigDecimal bodyScore = f.getBodyToRangeRatio() != null ? f.getBodyToRangeRatio() : ZERO;
-        BigDecimal volScore = f.getRelativeVolume20() != null
+        BigDecimal clvScore = ObjectUtils.isNotEmpty(f.getCloseLocationValue()) ? f.getCloseLocationValue() : ZERO;
+        BigDecimal bodyScore = ObjectUtils.isNotEmpty(f.getBodyToRangeRatio()) ? f.getBodyToRangeRatio() : ZERO;
+        BigDecimal volScore = ObjectUtils.isNotEmpty(f.getRelativeVolume20())
                 ? f.getRelativeVolume20().divide(new BigDecimal("3"), 8, RoundingMode.HALF_UP).min(ONE)
                 : ZERO;
 
@@ -735,14 +737,14 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     }
 
     private BigDecimal calculateShortSignalScore(FeatureStore f, Params p) {
-        BigDecimal rsiScore = f.getRsi() != null
+        BigDecimal rsiScore = ObjectUtils.isNotEmpty(f.getRsi())
                 ? normalise(p.getShortRsiMax().subtract(f.getRsi()),
                         ZERO, p.getShortRsiMax().subtract(p.getShortRsiMin()))
                 : ZERO;
         BigDecimal clvScore = f.getCloseLocationValue() != null
                 ? ONE.subtract(f.getCloseLocationValue()) : ZERO;
-        BigDecimal bodyScore = f.getBodyToRangeRatio() != null ? f.getBodyToRangeRatio() : ZERO;
-        BigDecimal volScore = f.getRelativeVolume20() != null
+        BigDecimal bodyScore = ObjectUtils.isNotEmpty(f.getBodyToRangeRatio()) ? f.getBodyToRangeRatio() : ZERO;
+        BigDecimal volScore = ObjectUtils.isNotEmpty(f.getRelativeVolume20())
                 ? f.getRelativeVolume20().divide(new BigDecimal("3"), 8, RoundingMode.HALF_UP).min(ONE)
                 : ZERO;
 
@@ -754,7 +756,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     }
 
     private BigDecimal normalise(BigDecimal value, BigDecimal lo, BigDecimal hi) {
-        if (value == null || lo == null || hi == null) return ZERO;
+        if (ObjectUtils.isEmpty(value) || ObjectUtils.isEmpty(lo) || ObjectUtils.isEmpty(hi)) return ZERO;
         BigDecimal range = hi.subtract(lo);
         if (range.compareTo(ZERO) <= 0) return ZERO;
         BigDecimal scaled = value.subtract(lo).divide(range, 8, RoundingMode.HALF_UP);
@@ -766,27 +768,27 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     // ── Gating helpers ────────────────────────────────────────────────────────
 
     private boolean hasBullishEmaStack(MarketData md, @NonNull FeatureStore f, Params p) {
-        if (f.getEma50() == null || f.getEma200() == null) return false;
+        if (ObjectUtils.isEmpty(f.getEma50()) || ObjectUtils.isEmpty(f.getEma200())) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(f.getEma50()) <= 0) return false;
         if (f.getEma50().compareTo(f.getEma200()) <= 0) return false;
-        return f.getEma50Slope() == null
+        return ObjectUtils.isEmpty(f.getEma50Slope())
                 || f.getEma50Slope().compareTo(p.getEma50SlopeMin()) >= 0;
     }
 
     private boolean hasBearishEmaStack(MarketData md, @NonNull FeatureStore f, Params p) {
-        if (f.getEma50() == null || f.getEma200() == null) return false;
+        if (ObjectUtils.isEmpty(f.getEma50()) || ObjectUtils.isEmpty(f.getEma200())) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(f.getEma50()) >= 0) return false;
         if (f.getEma50().compareTo(f.getEma200()) >= 0) return false;
-        return f.getEma50Slope() == null
+        return ObjectUtils.isEmpty(f.getEma50Slope())
                 || f.getEma50Slope().negate().compareTo(p.getEma50SlopeMin()) >= 0;
     }
 
     private boolean isBullishBias(EnrichedStrategyContext ctx, Params p) {
         FeatureStore bias = ctx.getBiasFeatureStore();
         MarketData biasMd = ctx.getBiasMarketData();
-        if (bias == null || biasMd == null) return false;
+        if (ObjectUtils.isEmpty(bias) || ObjectUtils.isEmpty(biasMd)) return false;
 
         boolean structure = strategyHelper.hasValue(bias.getEma50())
                 && strategyHelper.hasValue(bias.getEma200())
@@ -804,7 +806,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     private boolean isBearishBias(EnrichedStrategyContext ctx, Params p) {
         FeatureStore bias = ctx.getBiasFeatureStore();
         MarketData biasMd = ctx.getBiasMarketData();
-        if (bias == null || biasMd == null) return false;
+        if (ObjectUtils.isEmpty(bias) || ObjectUtils.isEmpty(biasMd)) return false;
 
         boolean structure = strategyHelper.hasValue(bias.getEma50())
                 && strategyHelper.hasValue(bias.getEma200())
@@ -817,13 +819,13 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     }
 
     private boolean isWithinAdxBand(BigDecimal adx, Params p) {
-        if (adx == null) return false;
+        if (ObjectUtils.isEmpty(adx)) return false;
         return adx.compareTo(p.getBiasAdxMin()) >= 0
                 && adx.compareTo(p.getBiasAdxMax()) <= 0;
     }
 
     private boolean isMarketVetoed(EnrichedStrategyContext ctx) {
-        return ctx.getMarketQualitySnapshot() != null
+        return ObjectUtils.isNotEmpty(ctx.getMarketQualitySnapshot())
                 && Boolean.FALSE.equals(ctx.getMarketQualitySnapshot().getTradable());
     }
 
@@ -889,7 +891,7 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(ctx != null ? ctx.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(ctx) ? ctx.getInterval() : null)
                 .signalType(SIGNAL_TYPE_RECLAIM)
                 .reason(reason)
                 .decisionTime(LocalDateTime.now())
@@ -903,11 +905,11 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(ctx != null ? ctx.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(ctx) ? ctx.getInterval() : null)
                 .vetoed(Boolean.TRUE)
                 .vetoReason(vetoReason)
                 .reason("TPR vetoed by risk layer")
-                .jumpRiskScore(ctx != null ? resolveJumpRisk(ctx) : ZERO)
+                .jumpRiskScore(ObjectUtils.isNotEmpty(ctx) ? resolveJumpRisk(ctx) : ZERO)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("VETO", STRATEGY_CODE, "RISK_LAYER"))
                 .diagnostics(Map.of())
@@ -917,22 +919,22 @@ public class TrendPullbackStrategyService implements StrategyExecutor {
     // ── Snapshot resolvers ────────────────────────────────────────────────────
 
     private BigDecimal resolveAtr(FeatureStore f) {
-        return (f != null && f.getAtr() != null && f.getAtr().compareTo(ZERO) > 0) ? f.getAtr() : ONE;
+        return (ObjectUtils.isNotEmpty(f) && ObjectUtils.isNotEmpty(f.getAtr()) && f.getAtr().compareTo(ZERO) > 0) ? f.getAtr() : ONE;
     }
 
     private BigDecimal resolveRegimeScore(EnrichedStrategyContext ctx) {
         RegimeSnapshot r = ctx.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getTrendScore())) ? r.getTrendScore() : ZERO;
     }
 
     private BigDecimal resolveJumpRisk(EnrichedStrategyContext ctx) {
         VolatilitySnapshot v = ctx.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(v) && ObjectUtils.isNotEmpty(v.getJumpRiskScore())) ? v.getJumpRiskScore() : ZERO;
     }
 
     private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext ctx) {
         RiskSnapshot r = ctx.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getRiskMultiplier())) ? r.getRiskMultiplier() : ONE;
     }
 
     private String resolveRegimeLabel(EnrichedStrategyContext ctx, FeatureStore f) {

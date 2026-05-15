@@ -10,24 +10,25 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.commons.lang3.ObjectUtils;
 
 /**
  * Derives a combined directional sentiment from a 1h and a 4h {@link FeatureStore} snapshot.
  *
  * <h3>Score weights</h3>
  * <pre>
- *   combined = (score4h × 0.60) + (score1h × 0.40)
+ *   combined = (score4h Ã— 0.60) + (score1h Ã— 0.40)
  * </pre>
  * The 4h frame carries more weight because it reflects macro directional bias;
  * the 1h frame captures short-term momentum and entry timing signals.
  *
  * <h3>Combined label thresholds</h3>
  * <pre>
- *   &gt;= 0.65  → STRONG_BUY
- *   &gt;= 0.30  → BUY
- *   (-0.30, 0.30) → NEUTRAL
- *   &lt;= -0.30 → SELL
- *   &lt;= -0.65 → STRONG_SELL
+ *   &gt;= 0.65  â†’ STRONG_BUY
+ *   &gt;= 0.30  â†’ BUY
+ *   (-0.30, 0.30) â†’ NEUTRAL
+ *   &lt;= -0.30 â†’ SELL
+ *   &lt;= -0.65 â†’ STRONG_SELL
  * </pre>
  */
 @Slf4j
@@ -134,7 +135,7 @@ public class SentimentAnalyzerService {
         return v.max(LOWER_BOUND).min(UPPER_BOUND);
     }
 
-    // ── Per-frame scoring ─────────────────────────────────────────────────────
+    // â”€â”€ Per-frame scoring â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /**
      * Scores a single FeatureStore frame. Returns a raw score in [-1.0, 1.0] before clamping.
@@ -249,7 +250,7 @@ public class SentimentAnalyzerService {
         if (!hasValue(fs.getRsi())) return ZERO;
         BigDecimal rsi = fs.getRsi();
         if (rsi.compareTo(new BigDecimal("70")) >= 0) {
-            signals.add("RSI " + fmt(rsi) + ": overbought — momentum high, caution");
+            signals.add("RSI " + fmt(rsi) + ": overbought â€” momentum high, caution");
             return D_005;
         }
         if (rsi.compareTo(new BigDecimal("55")) >= 0) {
@@ -257,7 +258,7 @@ public class SentimentAnalyzerService {
             return D_010;
         }
         if (rsi.compareTo(new BigDecimal("30")) <= 0) {
-            signals.add("RSI " + fmt(rsi) + ": oversold — momentum low, caution");
+            signals.add("RSI " + fmt(rsi) + ": oversold â€” momentum low, caution");
             return D_005.negate();
         }
         if (rsi.compareTo(new BigDecimal("45")) <= 0) {
@@ -310,7 +311,7 @@ public class SentimentAnalyzerService {
         return ZERO;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private String toLabel(BigDecimal score) {
         if (score.compareTo(new BigDecimal("0.65")) >= 0)  return STRONG_BUY;

@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -115,11 +116,11 @@ public class ErrorLogController {
 
         Specification<ErrorLog> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
-            if (sevFilter != null)    predicates.add(cb.equal(root.get("severity"), sevFilter));
-            if (statusFilter != null) predicates.add(cb.equal(root.get(FIELD_STATUS), statusFilter));
-            if (jvmFilter != null)    predicates.add(cb.equal(root.get("jvm"), jvmFilter));
-            if (since != null)        predicates.add(cb.greaterThanOrEqualTo(root.get(FIELD_LAST_SEEN_AT), since));
-            if (searchLike != null)   predicates.add(cb.or(
+            if (ObjectUtils.isNotEmpty(sevFilter))    predicates.add(cb.equal(root.get("severity"), sevFilter));
+            if (ObjectUtils.isNotEmpty(statusFilter)) predicates.add(cb.equal(root.get(FIELD_STATUS), statusFilter));
+            if (ObjectUtils.isNotEmpty(jvmFilter))    predicates.add(cb.equal(root.get("jvm"), jvmFilter));
+            if (ObjectUtils.isNotEmpty(since))        predicates.add(cb.greaterThanOrEqualTo(root.get(FIELD_LAST_SEEN_AT), since));
+            if (ObjectUtils.isNotEmpty(searchLike))   predicates.add(cb.or(
                     cb.like(cb.lower(root.get("message")), searchLike),
                     cb.like(cb.lower(root.get("loggerName")), searchLike),
                     cb.like(cb.lower(root.get("exceptionClass")), searchLike)
@@ -185,7 +186,7 @@ public class ErrorLogController {
             @RequestBody StatusUpdateRequest body,
             HttpServletRequest httpRequest
     ) {
-        if (body == null || !StringUtils.hasText(body.status())) {
+        if (ObjectUtils.isEmpty(body) || !StringUtils.hasText(body.status())) {
             throw new IllegalArgumentException("status is required");
         }
         String next = body.status().trim().toUpperCase();
@@ -206,7 +207,7 @@ public class ErrorLogController {
             boolean wasTerminal = TERMINAL_STATUS.contains(existing.getStatus());
             if (wasTerminal) {
                 String fp = existing.getFingerprint();
-                if (fp != null) {
+                if (ObjectUtils.isNotEmpty(fp)) {
                     errorLogRepository.findOpenByFingerprint(fp)
                             .filter(r -> !r.getErrorId().equals(id))
                             .ifPresent(r -> {
@@ -229,7 +230,7 @@ public class ErrorLogController {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("errorId", id.toString());
         data.put(FIELD_STATUS, next);
-        data.put("resolvedAt", resolvedAt == null ? null : resolvedAt.toString());
+        data.put("resolvedAt", ObjectUtils.isEmpty(resolvedAt) ? null : resolvedAt.toString());
         data.put("resolvedBy", resolvedBy);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -254,10 +255,10 @@ public class ErrorLogController {
         // join here. Falls back to "admin" if the JWT can't be parsed.
         try {
             String header = request.getHeader("Authorization");
-            if (header != null && header.startsWith("Bearer ")) {
+            if (ObjectUtils.isNotEmpty(header) && header.startsWith("Bearer ")) {
                 String token = header.substring("Bearer ".length());
                 UUID userId = jwtService.extractUserId(token);
-                if (userId != null) return userId.toString();
+                if (ObjectUtils.isNotEmpty(userId)) return userId.toString();
             }
         } catch (RuntimeException e) {
             log.warn("Failed to extract user identity from token — proceeding as anonymous: {}", e.getMessage());
@@ -296,9 +297,9 @@ public class ErrorLogController {
         row.put("exceptionClass", e.getExceptionClass());
         row.put("fingerprint", e.getFingerprint());
         row.put("occurrenceCount", e.getOccurrenceCount());
-        row.put("occurredAt", e.getOccurredAt() == null ? null : e.getOccurredAt().toString());
-        row.put(FIELD_LAST_SEEN_AT, e.getLastSeenAt() == null ? null : e.getLastSeenAt().toString());
-        row.put("resolvedAt", e.getResolvedAt() == null ? null : e.getResolvedAt().toString());
+        row.put("occurredAt", ObjectUtils.isEmpty(e.getOccurredAt()) ? null : e.getOccurredAt().toString());
+        row.put(FIELD_LAST_SEEN_AT, ObjectUtils.isEmpty(e.getLastSeenAt()) ? null : e.getLastSeenAt().toString());
+        row.put("resolvedAt", ObjectUtils.isEmpty(e.getResolvedAt()) ? null : e.getResolvedAt().toString());
         row.put("resolvedBy", e.getResolvedBy());
         return row;
     }
@@ -307,14 +308,14 @@ public class ErrorLogController {
         Map<String, Object> row = toListRow(e);
         row.put("stackTrace", e.getStackTrace());
         row.put("mdc", redactMdc(e.getMdc()));
-        row.put("notifiedAt", e.getNotifiedAt() == null ? null : e.getNotifiedAt().toString());
+        row.put("notifiedAt", ObjectUtils.isEmpty(e.getNotifiedAt()) ? null : e.getNotifiedAt().toString());
         row.put("notificationChannels", e.getNotificationChannels());
         row.put("developerFindingId", e.getDeveloperFindingId());
         return row;
     }
 
     private static JsonNode redactMdc(JsonNode mdc) {
-        if (mdc == null || !mdc.isObject()) return mdc;
+        if (ObjectUtils.isEmpty(mdc) || !mdc.isObject()) return mdc;
         ObjectNode copy = ((ObjectNode) mdc).deepCopy();
         java.util.List<String> targets = new java.util.ArrayList<>();
         copy.fieldNames().forEachRemaining(name -> {

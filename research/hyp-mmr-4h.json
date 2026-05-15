@@ -1,0 +1,31 @@
+{
+  "entry_type": "HYPOTHESIS",
+  "strategy_code": "MMR",
+  "interval_name": "4h",
+  "instrument": "BTCUSDT",
+  "title": "HYP: MMR BTCUSDT 4h - 4h ATR-extreme EMA200 mean reversion may have edge where 1h failed",
+  "content": "MomentumMeanReversionEngine at 4h. MMR 1h was NO_EDGE (PF=0.46-0.59, null-screen d1a58e1a). Hypothesis: 4h bars capture more meaningful EMA200 deviation events (larger absolute moves per signal, cleaner EMA200 anchor at lower frequency). At 4h with extremeAtrMult=1.5-3.0, expected n=20-80 per draw over 28 months. BTC 2025-2026 choppy market increases mean-reversion frequency vs 2024 trending regime. Dual-directional (long/short). Mechanism: close > extremeAtrMult*ATR from EMA200 AND RSI<rsiOversoldMax (long) or RSI>rsiOverboughtMin (short). Target=EMA50. Stop=close+/-stopAtrBuffer*ATR. Prediction: EDGE_PRESENT likely in 2025-2026 choppy regime. Will falsify if null-screen shows PF<0.60 across all 8 draws (same pattern as 1h). Account strategy 4h id: 6e74c1ec-a124-4e56-83c5-73131baf39c8.",
+  "structured_data": {
+    "kind": "HYPOTHESIS",
+    "archetype": "MMR",
+    "interval": "4h",
+    "instrument": "BTCUSDT",
+    "mechanism": "EMA200 ATR-scaled deviation entry, EMA50 TP target, dual-directional long+short",
+    "axes": ["extremeAtrMult", "rsiOversoldMax", "stopAtrBuffer", "minRewardRiskRatio"],
+    "account_strategy_id": "6e74c1ec-a124-4e56-83c5-73131baf39c8",
+    "prior_evidence": {
+      "MMR_1h": "NO_EDGE (null-screen PF=0.46-0.59, zero draws above 1.0)",
+      "MMR_1h_journal": "d1a58e1a-050b-4ee5-9e66-eae342388a00"
+    },
+    "expected_outcome": "EDGE_PRESENT - 4h bars capture larger deviation episodes; cleaner EMA200 anchor; fewer but higher-quality entries",
+    "falsification_condition": "If null-screen PF<0.60 across all 8 draws (same as 1h), mechanism is inherently weak on BTCUSDT regardless of interval",
+    "param_ranges": {
+      "extremeAtrMult": [1.5, 3.0],
+      "rsiOversoldMax": [25, 40],
+      "stopAtrBuffer": [0.5, 1.5],
+      "minRewardRiskRatio": [1.5, 2.5]
+    }
+  },
+  "status": "ACTIVE",
+  "created_by": "quant-researcher"
+}

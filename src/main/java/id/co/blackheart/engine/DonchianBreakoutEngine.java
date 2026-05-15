@@ -10,6 +10,7 @@ import id.co.blackheart.service.strategy.StrategyHelper;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -102,7 +103,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
 
     @Override
     public StrategyDecision evaluate(StrategySpec spec, EnrichedStrategyContext context) {
-        if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData()) || ObjectUtils.isEmpty(context.getFeatureStore())) {
             return hold(spec, context, "Invalid context");
         }
         Tuning t = Tuning.from(spec);
@@ -114,22 +115,22 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(ZERO) <= 0) return hold(spec, context, "Invalid close price");
         if (EngineContextHelpers.isMarketVetoed(context)) return veto(spec, context, "Market vetoed");
-        if (context.hasTradablePosition() && snap != null) return managePosition(spec, context, md, snap, t);
-        if (prev == null) return hold(spec, context, "No previous bar");
+        if (context.hasTradablePosition() && ObjectUtils.isNotEmpty(snap)) return managePosition(spec, context, md, snap, t);
+        if (ObjectUtils.isEmpty(prev)) return hold(spec, context, "No previous bar");
 
         StrategyDecision entry = tryEntries(spec, context, md, f, prev, t);
-        return entry != null ? entry : hold(spec, context, "No qualified DCB setup");
+        return ObjectUtils.isNotEmpty(entry) ? entry : hold(spec, context, "No qualified DCB setup");
     }
 
     private StrategyDecision tryEntries(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
                                         FeatureStore f, FeatureStore prev, Tuning t) {
         if (ctx.isLongAllowed()) {
             StrategyDecision d = tryLongEntry(spec, ctx, md, f, prev, t);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
         if (ctx.isShortAllowed()) {
             StrategyDecision d = tryShortEntry(spec, ctx, md, f, prev, t);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
         return null;
     }
@@ -138,18 +139,18 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                                           FeatureStore f, FeatureStore prev, Tuning t) {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
 
-        if (prev.getDonchianUpper20() == null) return null;
+        if (ObjectUtils.isEmpty(prev.getDonchianUpper20())) return null;
         BigDecimal donchianUpper = prev.getDonchianUpper20();
         // prev.getDonchianUpper20() = max(high[t-1..t-20]) — does NOT include current bar.
         // close > donchianUpper implies close > prevBar.high >= prevClose (continuation implied).
         if (close.compareTo(donchianUpper) <= 0) return null;
 
-        if (f.getRelativeVolume20() == null
+        if (ObjectUtils.isEmpty(f.getRelativeVolume20())
                 || f.getRelativeVolume20().compareTo(t.rvolMin) < 0) return null;
-        if (f.getAdx() == null || f.getAdx().compareTo(t.adxEntryMin) < 0) return null;
+        if (ObjectUtils.isEmpty(f.getAdx()) || f.getAdx().compareTo(t.adxEntryMin) < 0) return null;
 
         BigDecimal atr = EngineContextHelpers.resolveAtr(f);
-        if (atr == null) return null;
+        if (ObjectUtils.isEmpty(atr)) return null;
         BigDecimal entry = close;
         BigDecimal stop = entry.subtract(atr.multiply(t.stopAtrMult));
         BigDecimal riskPerUnit = entry.subtract(stop);
@@ -189,18 +190,18 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                                            FeatureStore f, FeatureStore prev, Tuning t) {
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
 
-        if (prev.getDonchianLower20() == null) return null;
+        if (ObjectUtils.isEmpty(prev.getDonchianLower20())) return null;
         BigDecimal donchianLower = prev.getDonchianLower20();
         // prev.getDonchianLower20() = min(low[t-1..t-20]) — does NOT include current bar.
         // close < donchianLower implies close < prevBar.low <= prevClose (continuation implied).
         if (close.compareTo(donchianLower) >= 0) return null;
 
-        if (f.getRelativeVolume20() == null
+        if (ObjectUtils.isEmpty(f.getRelativeVolume20())
                 || f.getRelativeVolume20().compareTo(t.rvolMin) < 0) return null;
-        if (f.getAdx() == null || f.getAdx().compareTo(t.adxEntryMin) < 0) return null;
+        if (ObjectUtils.isEmpty(f.getAdx()) || f.getAdx().compareTo(t.adxEntryMin) < 0) return null;
 
         BigDecimal atr = EngineContextHelpers.resolveAtr(f);
-        if (atr == null) return null;
+        if (ObjectUtils.isEmpty(atr)) return null;
         BigDecimal entry = close;
         BigDecimal stop = entry.add(atr.multiply(t.stopAtrMult));
         BigDecimal riskPerUnit = stop.subtract(entry);
@@ -239,14 +240,14 @@ public class DonchianBreakoutEngine implements StrategyEngine {
     private StrategyDecision managePosition(StrategySpec spec, EnrichedStrategyContext ctx, MarketData md,
                                             PositionSnapshot snap, Tuning t) {
         String side = snap.getSide();
-        if (side == null) return hold(spec, ctx, "DCB manage: unknown side");
+        if (ObjectUtils.isEmpty(side)) return hold(spec, ctx, "DCB manage: unknown side");
         boolean isLong = SIDE_LONG.equalsIgnoreCase(side);
 
         StrategyDecision timed = tryTimedExit(spec, ctx, md, snap, t, isLong, side);
-        if (timed != null) return timed;
+        if (ObjectUtils.isNotEmpty(timed)) return timed;
 
         BigDecimal entry = strategyHelper.safe(snap.getEntryPrice());
-        BigDecimal initStop = snap.getInitialStopLossPrice() != null
+        BigDecimal initStop = ObjectUtils.isNotEmpty(snap.getInitialStopLossPrice())
                 ? snap.getInitialStopLossPrice() : strategyHelper.safe(snap.getCurrentStopLossPrice());
         BigDecimal curStop = strategyHelper.safe(snap.getCurrentStopLossPrice());
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
@@ -278,7 +279,7 @@ public class DonchianBreakoutEngine implements StrategyEngine {
                                           PositionSnapshot snap, Tuning t, boolean isLong, String side) {
         LocalDateTime entryTime = snap.getEntryTime();
         LocalDateTime now = md.getEndTime();
-        if (entryTime == null || now == null) return null;
+        if (ObjectUtils.isEmpty(entryTime) || ObjectUtils.isEmpty(now)) return null;
         long minutesHeld = Duration.between(entryTime, now).toMinutes();
         long maxMinutes = (long) t.maxBarsHeld * t.intervalMinutes;
         if (minutesHeld < maxMinutes) return null;
@@ -314,12 +315,12 @@ public class DonchianBreakoutEngine implements StrategyEngine {
         String name = spec.getStrategyName();
         if (!StringUtils.hasText(name)) name = spec.getStrategyCode();
         Integer ver = spec.getArchetypeVersion();
-        String version = ARCHETYPE_NAME + ".v" + (ver == null ? VERSION : ver);
+        String version = ARCHETYPE_NAME + ".v" + (ObjectUtils.isEmpty(ver) ? VERSION : ver);
         return StrategyDecision.builder()
                 .strategyCode(spec.getStrategyCode())
                 .strategyName(name)
                 .strategyVersion(version)
-                .strategyInterval(ctx != null ? ctx.getInterval() : null);
+                .strategyInterval(ObjectUtils.isNotEmpty(ctx) ? ctx.getInterval() : null);
     }
 
     private StrategyDecision hold(StrategySpec spec, EnrichedStrategyContext ctx, String reason) {

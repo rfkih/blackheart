@@ -13,6 +13,7 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -101,11 +102,11 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
 
     @Override
     public StrategyDecision execute(EnrichedStrategyContext context) {
-        if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData()) || ObjectUtils.isEmpty(context.getFeatureStore())) {
             return hold(context, "Invalid context or missing data");
         }
 
-        UUID accountStrategyId = context.getAccountStrategy() != null
+        UUID accountStrategyId = ObjectUtils.isNotEmpty(context.getAccountStrategy())
                 ? context.getAccountStrategy().getAccountStrategyId() : null;
         VboParams p = vboStrategyParamService.getParams(accountStrategyId);
 
@@ -122,18 +123,18 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
         }
 
         // Already in a trade → run management branch (BE / trail).
-        if (context.hasTradablePosition() && snap != null) {
+        if (context.hasTradablePosition() && ObjectUtils.isNotEmpty(snap)) {
             return managePosition(context, md, f, snap, p);
         }
 
         if (context.isLongAllowed()) {
             StrategyDecision d = tryLongEntry(context, md, f, prev, p);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
 
         if (context.isShortAllowed()) {
             StrategyDecision d = tryShortEntry(context, md, f, prev, p);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
 
         return hold(context, "No qualified VBO setup");
@@ -142,7 +143,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     // ── Entry gate helpers ────────────────────────────────────────────────────
 
     private boolean passesAdxBandGate(FeatureStore f, VboParams p) {
-        if (f.getAdx() == null
+        if (ObjectUtils.isEmpty(f.getAdx())
                 || f.getAdx().compareTo(p.getAdxEntryMin()) < 0
                 || f.getAdx().compareTo(p.getAdxEntryMax()) > 0) {
             log.debug("VBO gate-adx FAIL adx={} band={}/{}", f.getAdx(), p.getAdxEntryMin(), p.getAdxEntryMax());
@@ -152,12 +153,12 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     }
 
     private boolean passesBodyClvLongGate(FeatureStore f, VboParams p) {
-        if (f.getBodyToRangeRatio() == null
+        if (ObjectUtils.isEmpty(f.getBodyToRangeRatio())
                 || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
             log.debug("VBO LONG gate-body FAIL body={}", f.getBodyToRangeRatio());
             return false;
         }
-        if (f.getCloseLocationValue() == null
+        if (ObjectUtils.isEmpty(f.getCloseLocationValue())
                 || f.getCloseLocationValue().compareTo(p.getClvMin()) < 0
                 || f.getCloseLocationValue().compareTo(p.getClvMax()) > 0) {
             log.debug("VBO LONG gate-clv FAIL clv={} band={}/{}",
@@ -168,14 +169,14 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     }
 
     private boolean passesBodyClvShortGate(FeatureStore f, VboParams p) {
-        if (f.getBodyToRangeRatio() == null
+        if (ObjectUtils.isEmpty(f.getBodyToRangeRatio())
                 || f.getBodyToRangeRatio().compareTo(p.getBodyRatioMin()) < 0) {
             return false;
         }
         BigDecimal clv = f.getCloseLocationValue();
         BigDecimal clvShortMax = ONE.subtract(p.getClvMin());
         BigDecimal clvShortMin = ONE.subtract(p.getClvMax());
-        if (clv == null || clv.compareTo(clvShortMax) > 0 || clv.compareTo(clvShortMin) < 0) {
+        if (ObjectUtils.isEmpty(clv) || clv.compareTo(clvShortMax) > 0 || clv.compareTo(clvShortMin) < 0) {
             log.debug("VBO SHORT gate-clv FAIL clv={} band={}/{}", clv, clvShortMin, clvShortMax);
             return false;
         }
@@ -185,7 +186,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     private boolean passesLongGates(MarketData md, FeatureStore f, FeatureStore prev, VboParams p) {
         if (!checkLongCompression(prev, p)) return false;
         BigDecimal upperBb = f.getBbUpperBand();
-        if (upperBb == null) return false;
+        if (ObjectUtils.isEmpty(upperBb)) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(upperBb) <= 0) {
             log.debug("VBO LONG gate-bb FAIL close={} upperBb={}", close, upperBb);
@@ -203,14 +204,14 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     private boolean checkLongCompression(FeatureStore prev, VboParams p) {
         if (wasInCompression(prev, p)) return true;
         log.debug("VBO LONG gate-compression FAIL prevBbWidth={} prevAdx={}",
-                prev != null ? prev.getBbWidth() : null, prev != null ? prev.getAdx() : null);
+                ObjectUtils.isNotEmpty(prev) ? prev.getBbWidth() : null, ObjectUtils.isNotEmpty(prev) ? prev.getAdx() : null);
         return false;
     }
 
     private boolean checkLongDonchian(BigDecimal close, FeatureStore f, VboParams p) {
         if (!p.isRequireDonchianBreak()) return true;
         BigDecimal donch = f.getDonchianUpper20();
-        if (donch != null && close.compareTo(donch) > 0) return true;
+        if (ObjectUtils.isNotEmpty(donch) && close.compareTo(donch) > 0) return true;
         log.debug("VBO LONG gate-donchian FAIL close={} donch={}", close, donch);
         return false;
     }
@@ -218,18 +219,18 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     private boolean checkLongRangeExpansion(MarketData md, FeatureStore prev, VboParams p) {
         if (hasRangeExpansion(md, prev, p)) return true;
         log.debug("VBO LONG gate-range-expansion FAIL range={} prevAtr={}",
-                rangeOf(md), prev != null ? prev.getAtr() : null);
+                rangeOf(md), ObjectUtils.isNotEmpty(prev) ? prev.getAtr() : null);
         return false;
     }
 
     private boolean checkLongRvol(FeatureStore f, VboParams p) {
-        if (f.getRelativeVolume20() != null && f.getRelativeVolume20().compareTo(p.getRvolMin()) >= 0) return true;
+        if (ObjectUtils.isNotEmpty(f.getRelativeVolume20()) && f.getRelativeVolume20().compareTo(p.getRvolMin()) >= 0) return true;
         log.debug("VBO LONG gate-rvol FAIL rvol={}", f.getRelativeVolume20());
         return false;
     }
 
     private boolean checkLongRsi(FeatureStore f, VboParams p) {
-        if (f.getRsi() == null || f.getRsi().compareTo(p.getLongRsiMax()) <= 0) return true;
+        if (ObjectUtils.isEmpty(f.getRsi()) || f.getRsi().compareTo(p.getLongRsiMax()) <= 0) return true;
         log.debug("VBO LONG gate-rsi FAIL rsi={} max={}", f.getRsi(), p.getLongRsiMax());
         return false;
     }
@@ -243,18 +244,18 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     private boolean passesShortGates(MarketData md, FeatureStore f, FeatureStore prev, VboParams p) {
         if (!wasInCompression(prev, p)) return false;
         BigDecimal lowerBb = f.getBbLowerBand();
-        if (lowerBb == null) return false;
+        if (ObjectUtils.isEmpty(lowerBb)) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(lowerBb) >= 0) return false;
         if (p.isRequireDonchianBreak()
-                && (f.getDonchianLower20() == null || close.compareTo(f.getDonchianLower20()) >= 0)) {
+                && (ObjectUtils.isEmpty(f.getDonchianLower20()) || close.compareTo(f.getDonchianLower20()) >= 0)) {
             return false;
         }
         if (!hasRangeExpansion(md, prev, p)) return false;
         if (!passesAdxBandGate(f, p)) return false;
-        if (f.getRelativeVolume20() == null || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) return false;
+        if (ObjectUtils.isEmpty(f.getRelativeVolume20()) || f.getRelativeVolume20().compareTo(p.getRvolMin()) < 0) return false;
         if (!passesBodyClvShortGate(f, p)) return false;
-        if (f.getRsi() != null && f.getRsi().compareTo(p.getShortRsiMin()) < 0) {
+        if (ObjectUtils.isNotEmpty(f.getRsi()) && f.getRsi().compareTo(p.getShortRsiMin()) < 0) {
             log.debug("VBO SHORT gate-rsi FAIL rsi={} min={}", f.getRsi(), p.getShortRsiMin());
             return false;
         }
@@ -337,7 +338,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                         "module", "VolatilityBreakoutStrategyService",
                         DIAG_ENTRY, entry, "stop", stop, "tp1", tp1,
                         "upperBb", upperBb,
-                        "prevBbWidth", prev != null && prev.getBbWidth() != null ? prev.getBbWidth() : ZERO,
+                        "prevBbWidth", ObjectUtils.isNotEmpty(prev) && ObjectUtils.isNotEmpty(prev.getBbWidth()) ? prev.getBbWidth() : ZERO,
                         "atr", atr,
                         "rvol", strategyHelper.safe(f.getRelativeVolume20())))
                 .build();
@@ -409,7 +410,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                         "module", "VolatilityBreakoutStrategyService",
                         DIAG_ENTRY, entry, "stop", stop, "tp1", tp1,
                         "lowerBb", lowerBb,
-                        "prevBbWidth", prev != null && prev.getBbWidth() != null ? prev.getBbWidth() : ZERO,
+                        "prevBbWidth", ObjectUtils.isNotEmpty(prev) && ObjectUtils.isNotEmpty(prev.getBbWidth()) ? prev.getBbWidth() : ZERO,
                         "atr", atr,
                         "rvol", strategyHelper.safe(f.getRelativeVolume20())))
                 .build();
@@ -475,7 +476,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     ) {
         BigDecimal atr = resolveAtr(f);
         BigDecimal candidate = computeRunnerCandidate(st, atr, p);
-        if (candidate == null) return hold(ctx, "VBO runner not ready");
+        if (ObjectUtils.isEmpty(candidate)) return hold(ctx, "VBO runner not ready");
 
         boolean improved = st.isLong()
                 ? candidate.compareTo(st.curStop()) > 0
@@ -527,21 +528,21 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
      *   3. optionally Bollinger inside Keltner squeeze (KC width > BB width).
      */
     private boolean wasInCompression(FeatureStore prev, VboParams p) {
-        if (prev == null) return false;
+        if (ObjectUtils.isEmpty(prev)) return false;
         BigDecimal bbWidth = prev.getBbWidth();
         BigDecimal price = prev.getPrice();
-        if (bbWidth == null || price == null || price.compareTo(ZERO) <= 0) return false;
+        if (ObjectUtils.isEmpty(bbWidth) || ObjectUtils.isEmpty(price) || price.compareTo(ZERO) <= 0) return false;
 
         BigDecimal bbWidthPct = bbWidth.divide(price, 8, RoundingMode.HALF_UP);
         if (bbWidthPct.compareTo(p.getCompressionBbWidthPctMax()) > 0) return false;
 
-        if (prev.getAdx() != null && prev.getAdx().compareTo(p.getCompressionAdxMax()) > 0) {
+        if (ObjectUtils.isNotEmpty(prev.getAdx()) && prev.getAdx().compareTo(p.getCompressionAdxMax()) > 0) {
             return false;
         }
 
         if (p.isRequireKcSqueeze()) {
             BigDecimal kcWidth = prev.getKcWidth();
-            if (kcWidth == null || kcWidth.compareTo(bbWidth) <= 0) return false;
+            if (ObjectUtils.isEmpty(kcWidth) || kcWidth.compareTo(bbWidth) <= 0) return false;
         }
 
         return true;
@@ -557,50 +558,50 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
      * and matches how breakout traders read a chart.
      */
     private boolean hasRangeExpansion(MarketData md, FeatureStore prev, VboParams p) {
-        if (md == null || prev == null) return false;
+        if (ObjectUtils.isEmpty(md) || ObjectUtils.isEmpty(prev)) return false;
         BigDecimal range = rangeOf(md);
         BigDecimal prevAtr = prev.getAtr();
-        if (range == null || prevAtr == null || prevAtr.compareTo(ZERO) <= 0) return false;
+        if (ObjectUtils.isEmpty(range) || ObjectUtils.isEmpty(prevAtr) || prevAtr.compareTo(ZERO) <= 0) return false;
         BigDecimal ratio = range.divide(prevAtr, 8, RoundingMode.HALF_UP);
         return ratio.compareTo(p.getAtrExpansionMin()) >= 0;
     }
 
     private BigDecimal rangeOf(MarketData md) {
-        if (md == null) return null;
+        if (ObjectUtils.isEmpty(md)) return null;
         BigDecimal high = md.getHighPrice();
         BigDecimal low = md.getLowPrice();
-        if (high == null || low == null) return null;
+        if (ObjectUtils.isEmpty(high) || ObjectUtils.isEmpty(low)) return null;
         return high.subtract(low);
     }
 
     private boolean hasBullishTrendAlignment(MarketData md, FeatureStore f, VboParams p) {
-        if (f.getEma50() == null) return false;
+        if (ObjectUtils.isEmpty(f.getEma50())) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(f.getEma50()) <= 0) return false;
         // Allow neutral or rising EMA50 — we don't require a positive slope on
         // a regime-transition strategy, just no strong opposing slope.
-        if (!(f.getEma50Slope() == null
+        if (!(ObjectUtils.isEmpty(f.getEma50Slope())
                 || f.getEma50Slope().compareTo(p.getEma50SlopeMin().negate()) >= 0)) return false;
-        return !p.isRequireSlope200Gate() || f.getSlope200() == null
+        return !p.isRequireSlope200Gate() || ObjectUtils.isEmpty(f.getSlope200())
                 || f.getSlope200().compareTo(p.getSlope200Min()) >= 0;
     }
 
     private boolean hasBearishTrendAlignment(MarketData md, FeatureStore f, VboParams p) {
-        if (f.getEma50() == null) return false;
+        if (ObjectUtils.isEmpty(f.getEma50())) return false;
         BigDecimal close = strategyHelper.safe(md.getClosePrice());
         if (close.compareTo(f.getEma50()) >= 0) return false;
-        if (!(f.getEma50Slope() == null
+        if (!(ObjectUtils.isEmpty(f.getEma50Slope())
                 || f.getEma50Slope().compareTo(p.getEma50SlopeMin()) <= 0)) return false;
-        return !p.isRequireSlope200Gate() || f.getSlope200() == null
+        return !p.isRequireSlope200Gate() || ObjectUtils.isEmpty(f.getSlope200())
                 || f.getSlope200().compareTo(p.getSlope200Min().negate()) <= 0;
     }
 
     // ── Scoring ───────────────────────────────────────────────────────────────
 
     private BigDecimal calculateLongSignalScore(MarketData md, FeatureStore f, FeatureStore prev) {
-        BigDecimal clvScore = f.getCloseLocationValue() != null ? f.getCloseLocationValue() : ZERO;
-        BigDecimal bodyScore = f.getBodyToRangeRatio() != null ? f.getBodyToRangeRatio() : ZERO;
-        BigDecimal volScore = f.getRelativeVolume20() != null
+        BigDecimal clvScore = ObjectUtils.isNotEmpty(f.getCloseLocationValue()) ? f.getCloseLocationValue() : ZERO;
+        BigDecimal bodyScore = ObjectUtils.isNotEmpty(f.getBodyToRangeRatio()) ? f.getBodyToRangeRatio() : ZERO;
+        BigDecimal volScore = ObjectUtils.isNotEmpty(f.getRelativeVolume20())
                 ? f.getRelativeVolume20().divide(new BigDecimal("3"), 8, RoundingMode.HALF_UP).min(ONE)
                 : ZERO;
         BigDecimal expansionScore = rangeExpansionScore(md, prev);
@@ -616,8 +617,8 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     private BigDecimal calculateShortSignalScore(MarketData md, FeatureStore f, FeatureStore prev) {
         BigDecimal clvScore = f.getCloseLocationValue() != null
                 ? ONE.subtract(f.getCloseLocationValue()) : ZERO;
-        BigDecimal bodyScore = f.getBodyToRangeRatio() != null ? f.getBodyToRangeRatio() : ZERO;
-        BigDecimal volScore = f.getRelativeVolume20() != null
+        BigDecimal bodyScore = ObjectUtils.isNotEmpty(f.getBodyToRangeRatio()) ? f.getBodyToRangeRatio() : ZERO;
+        BigDecimal volScore = ObjectUtils.isNotEmpty(f.getRelativeVolume20())
                 ? f.getRelativeVolume20().divide(new BigDecimal("3"), 8, RoundingMode.HALF_UP).min(ONE)
                 : ZERO;
         BigDecimal expansionScore = rangeExpansionScore(md, prev);
@@ -633,12 +634,12 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
      *  1.0× = 0, 3.0× = 1.0. Beyond 3× pins to 1. Aligned with the
      *  hasRangeExpansion gate so the score and the gate read the same signal. */
     private BigDecimal rangeExpansionScore(MarketData md, FeatureStore prev) {
-        if (md == null || prev == null || prev.getAtr() == null
+        if (ObjectUtils.isEmpty(md) || ObjectUtils.isEmpty(prev) || ObjectUtils.isEmpty(prev.getAtr())
                 || prev.getAtr().compareTo(ZERO) <= 0) {
             return ZERO;
         }
         BigDecimal range = rangeOf(md);
-        if (range == null) return ZERO;
+        if (ObjectUtils.isEmpty(range)) return ZERO;
         BigDecimal ratio = range.divide(prev.getAtr(), 8, RoundingMode.HALF_UP);
         BigDecimal scaled = ratio.subtract(ONE).divide(new BigDecimal("2"), 8, RoundingMode.HALF_UP);
         if (scaled.compareTo(ZERO) < 0) return ZERO;
@@ -703,7 +704,7 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(ctx != null ? ctx.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(ctx) ? ctx.getInterval() : null)
                 .signalType(SIGNAL_TYPE_BREAKOUT)
                 .reason(reason)
                 .decisionTime(LocalDateTime.now())
@@ -717,11 +718,11 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(ctx != null ? ctx.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(ctx) ? ctx.getInterval() : null)
                 .vetoed(Boolean.TRUE)
                 .vetoReason(vetoReason)
                 .reason("VBO vetoed by risk layer")
-                .jumpRiskScore(ctx != null ? resolveJumpRisk(ctx) : ZERO)
+                .jumpRiskScore(ObjectUtils.isNotEmpty(ctx) ? resolveJumpRisk(ctx) : ZERO)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("VETO", STRATEGY_CODE, "RISK_LAYER"))
                 .diagnostics(Map.of())
@@ -731,34 +732,34 @@ public class VolatilityBreakoutStrategyService implements StrategyExecutor {
     // ── Snapshot resolvers ────────────────────────────────────────────────────
 
     private boolean isMarketVetoed(EnrichedStrategyContext ctx) {
-        return ctx.getMarketQualitySnapshot() != null
+        return ObjectUtils.isNotEmpty(ctx.getMarketQualitySnapshot())
                 && Boolean.FALSE.equals(ctx.getMarketQualitySnapshot().getTradable());
     }
 
     private BigDecimal resolveAtr(FeatureStore f) {
-        return (f != null && f.getAtr() != null && f.getAtr().compareTo(ZERO) > 0) ? f.getAtr() : ONE;
+        return (ObjectUtils.isNotEmpty(f) && ObjectUtils.isNotEmpty(f.getAtr()) && f.getAtr().compareTo(ZERO) > 0) ? f.getAtr() : ONE;
     }
 
     private BigDecimal resolveRegimeScore(EnrichedStrategyContext ctx) {
         RegimeSnapshot r = ctx.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getTrendScore())) ? r.getTrendScore() : ZERO;
     }
 
     private BigDecimal resolveJumpRisk(EnrichedStrategyContext ctx) {
         VolatilitySnapshot v = ctx.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(v) && ObjectUtils.isNotEmpty(v.getJumpRiskScore())) ? v.getJumpRiskScore() : ZERO;
     }
 
     private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext ctx) {
         RiskSnapshot r = ctx.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getRiskMultiplier())) ? r.getRiskMultiplier() : ONE;
     }
 
     private String resolveRegimeLabel(EnrichedStrategyContext ctx, FeatureStore f) {
-        if (ctx.getRegimeSnapshot() != null && ctx.getRegimeSnapshot().getRegimeLabel() != null) {
+        if (ObjectUtils.isNotEmpty(ctx.getRegimeSnapshot()) && ObjectUtils.isNotEmpty(ctx.getRegimeSnapshot().getRegimeLabel())) {
             return ctx.getRegimeSnapshot().getRegimeLabel();
         }
-        return f != null ? f.getTrendRegime() : null;
+        return ObjectUtils.isNotEmpty(f) ? f.getTrendRegime() : null;
     }
 
 }

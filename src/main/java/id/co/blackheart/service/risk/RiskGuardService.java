@@ -12,6 +12,7 @@ import id.co.blackheart.service.alert.AlertService;
 import id.co.blackheart.service.alert.AlertSeverity;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -181,7 +182,7 @@ public class RiskGuardService {
                 && Boolean.TRUE.equals(ctx.strategy().getIsKillSwitchTripped())) {
             return GateVerdict.deny(
                     "Kill-switch already tripped: "
-                            + (ctx.strategy().getKillSwitchReason() != null
+                            + (ObjectUtils.isNotEmpty(ctx.strategy().getKillSwitchReason())
                                     ? ctx.strategy().getKillSwitchReason()
                                     : "manual"));
         }
@@ -189,7 +190,7 @@ public class RiskGuardService {
         // 2. Regime gate — needs the current bar's FeatureStore. If we don't
         //    have one, the gate is skipped (rather than deny) so a missing
         //    feature row doesn't accidentally block trading.
-        if (gateActive(ctx, GATE_REGIME) && ctx.featureStore() != null) {
+        if (gateActive(ctx, GATE_REGIME) && ObjectUtils.isNotEmpty(ctx.featureStore())) {
             GateVerdict v = regimeGuardService.check(ctx.strategy(), ctx.featureStore());
             if (!v.allowed()) return v;
         }
@@ -213,7 +214,7 @@ public class RiskGuardService {
      * allow when the gate is disabled or no counter is available.
      */
     private GateVerdict evaluateConcurrentCap(EvaluationContext ctx) {
-        if (!gateActive(ctx, GATE_CONCURRENT_CAP) || ctx.openCountFor() == null) {
+        if (!gateActive(ctx, GATE_CONCURRENT_CAP) || ObjectUtils.isEmpty(ctx.openCountFor())) {
             return GateVerdict.allow();
         }
         long concurrent = ctx.openCountFor().applyAsLong(
@@ -233,9 +234,9 @@ public class RiskGuardService {
      * toggle. Gate names are the {@code GATE_*} constants on this class.
      */
     private static boolean gateActive(EvaluationContext ctx, String gateName) {
-        if (ctx.gateOverrides() != null) {
+        if (ObjectUtils.isNotEmpty(ctx.gateOverrides())) {
             Boolean override = ctx.gateOverrides().get(gateName);
-            if (override != null) return override;
+            if (ObjectUtils.isNotEmpty(override)) return override;
         }
         AccountStrategy s = ctx.strategy();
         return switch (gateName) {
@@ -270,7 +271,7 @@ public class RiskGuardService {
     @Transactional
     public GuardVerdict canOpen(UUID accountStrategyId, String side, FeatureStore featureStore) {
         AccountStrategy strategy = accountStrategyRepository.findById(accountStrategyId).orElse(null);
-        if (strategy == null) {
+        if (ObjectUtils.isEmpty(strategy)) {
             return GuardVerdict.deny("Account strategy not found: " + accountStrategyId,
                     BigDecimal.ZERO, 0);
         }
@@ -309,7 +310,7 @@ public class RiskGuardService {
         if (Boolean.TRUE.equals(strategy.getKillSwitchGateEnabled())) {
             ddPct = computeRolling30DayDdPct(accountStrategyId);
             BigDecimal threshold = strategy.getDdKillThresholdPct();
-            if (threshold != null && ddPct.compareTo(threshold) >= 0) {
+            if (ObjectUtils.isNotEmpty(threshold) && ddPct.compareTo(threshold) >= 0) {
                 String reason = String.format("30-day DD %s%% reached threshold %s%%",
                         ddPct.setScale(2, RoundingMode.HALF_UP), threshold);
                 tripKillSwitch(strategy, reason);
@@ -318,13 +319,13 @@ public class RiskGuardService {
         }
 
         Account account = accountRepository.findByAccountId(strategy.getAccountId()).orElse(null);
-        if (account == null) {
+        if (ObjectUtils.isEmpty(account)) {
             // Defensive fallback for the impossible case where a strategy
             // has no account row. Allow rather than block on missing data.
             return GuardVerdict.allow(ddPct, 0);
         }
 
-        FeatureStore effectiveFs = featureStore != null ? featureStore
+        FeatureStore effectiveFs = ObjectUtils.isNotEmpty(featureStore) ? featureStore
                 : featureStoreRepository.findLatestCompletedBySymbolAndInterval(
                         strategy.getSymbol(), strategy.getIntervalName(), LocalDateTime.now())
                         .orElse(null);
@@ -383,8 +384,8 @@ public class RiskGuardService {
         BigDecimal cumulative = BigDecimal.ZERO;
         BigDecimal peak = BigDecimal.ZERO;
         for (Trades t : trades) {
-            BigDecimal pnl = t.getRealizedPnlAmount() != null
-                    ? t.getRealizedPnlAmount() : BigDecimal.ZERO;
+            BigDecimal pnl = ObjectUtils.isEmpty(t.getRealizedPnlAmount())
+                    ? BigDecimal.ZERO : t.getRealizedPnlAmount();
             cumulative = cumulative.add(pnl);
             if (cumulative.compareTo(peak) > 0) peak = cumulative;
         }
@@ -435,7 +436,7 @@ public class RiskGuardService {
                 AlertSeverity.CRITICAL,
                 "KILL_SWITCH_TRIPPED",
                 String.format("DD kill-switch tripped on %s (%s) — %s",
-                        code != null ? code : "?", id, reason),
+                        ObjectUtils.isNotEmpty(code) ? code : "?", id, reason),
                 "kill_switch_dd_" + id);
     }
 }

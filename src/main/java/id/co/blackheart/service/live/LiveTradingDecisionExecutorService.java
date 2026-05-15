@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
 import id.co.blackheart.util.SymbolUtils;
+import org.apache.commons.lang3.ObjectUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -62,7 +63,7 @@ public class LiveTradingDecisionExecutorService {
             EnrichedStrategyContext context,
             StrategyDecision decision
     ) throws JsonProcessingException {
-        if (decision == null || decision.getDecisionType() == null || context == null) {
+        if (ObjectUtils.isEmpty(decision) || ObjectUtils.isEmpty(decision.getDecisionType()) || ObjectUtils.isEmpty(context)) {
             return;
         }
 
@@ -78,7 +79,7 @@ public class LiveTradingDecisionExecutorService {
      *  boundary (e.g. the LSR/VCB SHORT sizing bug) without blocking the
      *  live loop while we build confidence in the validator. */
     private void logInvariantViolations(StrategyDecision decision, EnrichedStrategyContext context) {
-        BigDecimal entryRef = context.getMarketData() != null
+        BigDecimal entryRef = ObjectUtils.isNotEmpty(context.getMarketData())
                 ? context.getMarketData().getClosePrice()
                 : null;
         List<String> violations = StrategyDecisionInvariants.validate(decision, entryRef);
@@ -99,7 +100,7 @@ public class LiveTradingDecisionExecutorService {
         if (!isOpenAction(decision)) return true;
 
         UUID accountStrategyId = resolveAccountStrategyId(decision, context);
-        if (accountStrategyId == null) return true;
+        if (ObjectUtils.isEmpty(accountStrategyId)) return true;
 
         String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
                 ? SIDE_LONG : SIDE_SHORT;
@@ -141,7 +142,7 @@ public class LiveTradingDecisionExecutorService {
      * @return true when the decision was diverted (caller short-circuits).
      */
     private boolean handlePaperTradeShortCircuit(StrategyDecision decision, EnrichedStrategyContext context) {
-        if (!isOpenAction(decision) || context.getAccountStrategy() == null) return false;
+        if (!isOpenAction(decision) || ObjectUtils.isEmpty(context.getAccountStrategy())) return false;
 
         boolean accountSimulated = Boolean.TRUE.equals(context.getAccountStrategy().getSimulated());
         var defOpt = strategyDefinitionRepository.findByStrategyCode(decision.getStrategyCode());
@@ -203,8 +204,8 @@ public class LiveTradingDecisionExecutorService {
     }
 
     private static UUID resolveAccountStrategyId(StrategyDecision decision, EnrichedStrategyContext context) {
-        if (decision.getAccountStrategyId() != null) return decision.getAccountStrategyId();
-        return context.getAccountStrategy() != null
+        if (ObjectUtils.isNotEmpty(decision.getAccountStrategyId())) return decision.getAccountStrategyId();
+        return ObjectUtils.isNotEmpty(context.getAccountStrategy())
                 ? context.getAccountStrategy().getAccountStrategyId()
                 : null;
     }
@@ -215,7 +216,7 @@ public class LiveTradingDecisionExecutorService {
             String asset,
             ListenerDecision listenerDecision
     ) throws JsonProcessingException {
-        if (activeTradePosition == null || listenerDecision == null || !listenerDecision.isTriggered()) {
+        if (ObjectUtils.isEmpty(activeTradePosition) || ObjectUtils.isEmpty(listenerDecision) || !listenerDecision.isTriggered()) {
             return;
         }
 
@@ -236,7 +237,7 @@ public class LiveTradingDecisionExecutorService {
 
     public void executeManualClosePosition(Account account, UUID tradePositionId) throws JsonProcessingException {
         TradePosition tradePosition = tradePositionRepository.findByTradePositionId(tradePositionId).orElse(null);
-        if (tradePosition == null || !STATUS_OPEN.equalsIgnoreCase(tradePosition.getStatus())) {
+        if (ObjectUtils.isEmpty(tradePosition) || !STATUS_OPEN.equalsIgnoreCase(tradePosition.getStatus())) {
             return;
         }
 
@@ -262,7 +263,7 @@ public class LiveTradingDecisionExecutorService {
             ListenerDecision listenerDecision
     ) throws JsonProcessingException {
         if (CollectionUtils.isEmpty(activeTradePositions)
-                || listenerDecision == null || !listenerDecision.isTriggered()) {
+                || ObjectUtils.isEmpty(listenerDecision) || !listenerDecision.isTriggered()) {
             return;
         }
 
@@ -313,9 +314,9 @@ public class LiveTradingDecisionExecutorService {
         String quoteAsset = SymbolUtils.quoteAsset(context.getAsset());
 
         Portfolio quotePortfolio = portfolioService.updateAndGetAssetBalance(quoteAsset, account);
-        BigDecimal balance = quotePortfolio == null ? BigDecimal.ZERO : safe(quotePortfolio.getBalance());
+        BigDecimal balance = ObjectUtils.isEmpty(quotePortfolio) ? BigDecimal.ZERO : safe(quotePortfolio.getBalance());
 
-        BigDecimal tradeAmount = decision.getNotionalSize() != null
+        BigDecimal tradeAmount = ObjectUtils.isNotEmpty(decision.getNotionalSize())
                 ? decision.getNotionalSize()
                 : calculateLongTradeAmount(balance, context.getAccountStrategy());
 
@@ -356,9 +357,9 @@ public class LiveTradingDecisionExecutorService {
         String baseAsset = SymbolUtils.baseAsset(context.getAsset());
 
         Portfolio basePortfolio = portfolioService.updateAndGetAssetBalance(baseAsset, account);
-        BigDecimal balance = basePortfolio == null ? BigDecimal.ZERO : safe(basePortfolio.getBalance());
+        BigDecimal balance = ObjectUtils.isEmpty(basePortfolio) ? BigDecimal.ZERO : safe(basePortfolio.getBalance());
 
-        BigDecimal tradeAmount = decision.getPositionSize() != null
+        BigDecimal tradeAmount = ObjectUtils.isNotEmpty(decision.getPositionSize())
                 ? decision.getPositionSize()
                 : calculateShortTradeAmount(balance, context.getAccountStrategy());
 
@@ -412,9 +413,9 @@ public class LiveTradingDecisionExecutorService {
             String side,
             String reason
     ) {
-        if (context == null || context.getAccount() == null) return;
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getAccount())) return;
         String strategyName = resolveStrategyNameForLog(decision, context);
-        String entryReason = decision != null ? decision.getReason() : null;
+        String entryReason = ObjectUtils.isNotEmpty(decision) ? decision.getReason() : null;
         tradeExecutionLogService.logOpenFailure(
                 context.getAccount(),
                 context.getAsset(),
@@ -427,17 +428,17 @@ public class LiveTradingDecisionExecutorService {
     }
 
     private String resolveStrategyNameForLog(StrategyDecision decision, EnrichedStrategyContext context) {
-        if (decision != null && decision.getStrategyCode() != null) {
+        if (ObjectUtils.isNotEmpty(decision) && ObjectUtils.isNotEmpty(decision.getStrategyCode())) {
             return decision.getStrategyCode();
         }
-        if (context.getAccountStrategy() != null) {
+        if (ObjectUtils.isNotEmpty(context.getAccountStrategy())) {
             return context.getAccountStrategy().getStrategyCode();
         }
         return null;
     }
 
     private void executeUpdatePositionManagement(Trades activeTrade, StrategyDecision decision) {
-        if (activeTrade == null || decision == null) {
+        if (ObjectUtils.isEmpty(activeTrade) || ObjectUtils.isEmpty(decision)) {
             return;
         }
 
@@ -445,7 +446,7 @@ public class LiveTradingDecisionExecutorService {
     }
 
     private void executeCloseTrade(Trades activeTrade, Account account, String exitReason) throws JsonProcessingException {
-        if (activeTrade == null || account == null) {
+        if (ObjectUtils.isEmpty(activeTrade) || ObjectUtils.isEmpty(account)) {
             return;
         }
 
@@ -457,7 +458,7 @@ public class LiveTradingDecisionExecutorService {
         }
 
         TradePosition firstPosition = openPositions.getFirst();
-        String resolvedExitReason = exitReason != null ? exitReason : EXIT_REASON_STRATEGY_EXIT;
+        String resolvedExitReason = ObjectUtils.isNotEmpty(exitReason) ? exitReason : EXIT_REASON_STRATEGY_EXIT;
 
         if (SIDE_LONG.equalsIgnoreCase(firstPosition.getSide())) {
             tradeService.binanceCloseLongPositionsMarketOrder(
@@ -475,7 +476,7 @@ public class LiveTradingDecisionExecutorService {
     }
 
     private BigDecimal safe(BigDecimal value) {
-        return value == null ? BigDecimal.ZERO : value;
+        return ObjectUtils.isEmpty(value) ? BigDecimal.ZERO : value;
     }
 
     /**
@@ -485,14 +486,14 @@ public class LiveTradingDecisionExecutorService {
      * strategies that already set intended* are left alone.
      */
     private void captureIntent(String side, StrategyDecision decision, EnrichedStrategyContext context) {
-        if (decision.getIntendedSize() == null) {
+        if (ObjectUtils.isEmpty(decision.getIntendedSize())) {
             BigDecimal currentSize = SIDE_LONG.equalsIgnoreCase(side)
                     ? decision.getNotionalSize()
                     : decision.getPositionSize();
             decision.setIntendedSize(currentSize);
         }
-        if (decision.getIntendedEntryPrice() == null
-                && context.getMarketData() != null) {
+        if (ObjectUtils.isEmpty(decision.getIntendedEntryPrice())
+                && ObjectUtils.isNotEmpty(context.getMarketData())) {
             decision.setIntendedEntryPrice(context.getMarketData().getClosePrice());
         }
     }
@@ -514,9 +515,9 @@ public class LiveTradingDecisionExecutorService {
         BigDecimal baseSize = SIDE_LONG.equalsIgnoreCase(side)
                 ? decision.getNotionalSize()
                 : decision.getPositionSize();
-        if (baseSize == null || baseSize.signum() <= 0) return;
+        if (ObjectUtils.isEmpty(baseSize) || baseSize.signum() <= 0) return;
 
-        BigDecimal multiplier = accountStrategy != null
+        BigDecimal multiplier = ObjectUtils.isNotEmpty(accountStrategy)
                 ? kellySizingService.computeKellyMultiplier(accountStrategy)
                 : kellySizingService.computeKellyMultiplier(accountStrategyId);
         if (multiplier.compareTo(BigDecimal.ONE) == 0) return;
@@ -543,11 +544,11 @@ public class LiveTradingDecisionExecutorService {
         BigDecimal baseSize = SIDE_LONG.equalsIgnoreCase(side)
                 ? decision.getNotionalSize()
                 : decision.getPositionSize();
-        if (baseSize == null || baseSize.signum() <= 0) return;
+        if (ObjectUtils.isEmpty(baseSize) || baseSize.signum() <= 0) return;
 
         BookVolTargetingService.SizingScale result =
                 bookVolTargetingService.scale(accountStrategyId, side, baseSize);
-        if (result.scaledSize() == null
+        if (ObjectUtils.isEmpty(result.scaledSize())
                 || result.scaledSize().compareTo(baseSize) == 0) {
             return;
         }
@@ -572,7 +573,7 @@ public class LiveTradingDecisionExecutorService {
      */
     private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance,
                                                 id.co.blackheart.model.AccountStrategy accountStrategy) {
-        if (usdtBalance == null) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(usdtBalance)) return BigDecimal.ZERO;
         BigDecimal alloc = allocFraction(accountStrategy);
         if (alloc.signum() <= 0) return BigDecimal.ZERO;
 
@@ -582,7 +583,7 @@ public class LiveTradingDecisionExecutorService {
 
     private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance,
                                                  id.co.blackheart.model.AccountStrategy accountStrategy) {
-        if (btcBalance == null) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(btcBalance)) return BigDecimal.ZERO;
         BigDecimal alloc = allocFraction(accountStrategy);
         if (alloc.signum() <= 0) return BigDecimal.ZERO;
 
@@ -598,9 +599,9 @@ public class LiveTradingDecisionExecutorService {
      * legacy / partial rows.
      */
     private static BigDecimal allocFraction(id.co.blackheart.model.AccountStrategy as) {
-        if (as == null) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(as)) return BigDecimal.ZERO;
         BigDecimal alloc = as.getCapitalAllocationPct();
-        if (alloc == null || alloc.signum() <= 0) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(alloc) || alloc.signum() <= 0) return BigDecimal.ZERO;
         BigDecimal capped = alloc.min(new BigDecimal("100"));
         return capped.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
     }

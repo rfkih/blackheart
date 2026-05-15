@@ -42,6 +42,9 @@ public abstract class MlBackfillStubHandler implements HistoricalJobHandler {
 
     private static final int STUB_PROGRESS_CHUNKS = 10;
     private static final Duration STUB_CHUNK_DURATION = Duration.ofMillis(1500);
+    private static final String PARAM_START = "start";
+    private static final String PARAM_END = "end";
+    private static final String JSON_ROWS_INSERTED = "rows_inserted";
 
     /**
      * Setter-injected so subclasses don't need explicit constructors.
@@ -63,8 +66,8 @@ public abstract class MlBackfillStubHandler implements HistoricalJobHandler {
 
     @Override
     public final void execute(HistoricalBackfillJob job, JobContext ctx) {
-        LocalDateTime start = JobParamUtils.parseLocalDateTime(job.getParams(), "start");
-        LocalDateTime end = JobParamUtils.parseLocalDateTime(job.getParams(), "end");
+        LocalDateTime start = JobParamUtils.parseLocalDateTime(job.getParams(), PARAM_START);
+        LocalDateTime end = JobParamUtils.parseLocalDateTime(job.getParams(), PARAM_END);
 
         log.info("ML backfill starting | jobId={} source={} symbol={} start={} end={}",
                 job.getJobId(), sourceName(), job.getSymbol(), start, end);
@@ -72,7 +75,7 @@ public abstract class MlBackfillStubHandler implements HistoricalJobHandler {
         if (start == null || end == null) {
             throw new IllegalArgumentException(
                     "BACKFILL_ML_" + sourceName().toUpperCase()
-                            + " requires both 'start' and 'end' in params");
+                            + " requires both '" + PARAM_START + "' and '" + PARAM_END + "' in params");
         }
 
         // Decide stub-vs-python at job-start. Python failures (other than
@@ -114,7 +117,7 @@ public abstract class MlBackfillStubHandler implements HistoricalJobHandler {
         ctx.setResult(response);
         ctx.setProgress(1, 1);
 
-        long inserted = response.has("rows_inserted") ? response.get("rows_inserted").asLong() : 0;
+        long inserted = response.has(JSON_ROWS_INSERTED) ? response.get(JSON_ROWS_INSERTED).asLong() : 0;
         log.info("ML backfill (python) complete | jobId={} source={} rows_inserted={}",
                 job.getJobId(), sourceName(), inserted);
     }
@@ -148,7 +151,7 @@ public abstract class MlBackfillStubHandler implements HistoricalJobHandler {
         ObjectNode promoted = JsonNodeFactory.instance.objectNode();
         params.fields().forEachRemaining(entry -> {
             String key = entry.getKey();
-            if (!"start".equals(key) && !"end".equals(key)
+            if (!PARAM_START.equals(key) && !PARAM_END.equals(key)
                     && !"symbol".equals(key) && !"config".equals(key)) {
                 promoted.set(key, entry.getValue());
             }
@@ -193,9 +196,9 @@ public abstract class MlBackfillStubHandler implements HistoricalJobHandler {
         resultJson.put("stub", true);
         resultJson.put("source", sourceName());
         resultJson.put("symbol", job.getSymbol());
-        resultJson.put("start", start != null ? start.toString() : null);
-        resultJson.put("end", end != null ? end.toString() : null);
-        resultJson.put("rows_inserted", 0);
+        resultJson.put(PARAM_START, start != null ? start.toString() : null);
+        resultJson.put(PARAM_END, end != null ? end.toString() : null);
+        resultJson.put(JSON_ROWS_INSERTED, 0);
         resultJson.put("note", "Python ingest service not yet implemented for this source "
                 + "(Phase 1 M2 staged rollout). This is a stub run that exercises the "
                 + "full Java + frontend pipeline.");

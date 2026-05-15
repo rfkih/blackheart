@@ -10,6 +10,7 @@ import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
@@ -55,8 +56,8 @@ public class BacktestTradeExecutorService {
             EnrichedStrategyContext context,
             StrategyDecision decision
     ) {
-        if (decision == null
-                || decision.getDecisionType() == null
+        if (ObjectUtils.isEmpty(decision)
+                || ObjectUtils.isEmpty(decision.getDecisionType())
                 || DecisionType.HOLD.equals(decision.getDecisionType())) {
             return;
         }
@@ -73,7 +74,7 @@ public class BacktestTradeExecutorService {
             case OPEN_SHORT -> storePendingEntry(state, context, decision, SIDE_SHORT, strategyCode);
             case UPDATE_POSITION_MANAGEMENT -> updateOpenPositions(state, decision, strategyCode);
             case CLOSE_LONG, CLOSE_SHORT -> {
-                if (context == null || context.getMarketData() == null) {
+                if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData())) {
                     return;
                 }
 
@@ -82,7 +83,7 @@ public class BacktestTradeExecutorService {
                         state,
                         strategyCode,
                         context.getMarketData().getClosePrice(),
-                        decision.getExitReason() != null ? decision.getExitReason() : decision.getDecisionType().name(),
+                        ObjectUtils.isNotEmpty(decision.getExitReason()) ? decision.getExitReason() : decision.getDecisionType().name(),
                         context.getMarketData().getEndTime()
                 );
             }
@@ -95,11 +96,11 @@ public class BacktestTradeExecutorService {
     }
 
     private String resolveDecisionStrategyCode(EnrichedStrategyContext context, StrategyDecision decision) {
-        if (decision != null && StringUtils.hasText(decision.getStrategyCode())) {
+        if (ObjectUtils.isNotEmpty(decision) && StringUtils.hasText(decision.getStrategyCode())) {
             return decision.getStrategyCode();
         }
-        if (context != null && context.getAccountStrategy() != null
-                && context.getAccountStrategy().getStrategyCode() != null) {
+        if (ObjectUtils.isNotEmpty(context) && ObjectUtils.isNotEmpty(context.getAccountStrategy())
+                && ObjectUtils.isNotEmpty(context.getAccountStrategy().getStrategyCode())) {
             return context.getAccountStrategy().getStrategyCode();
         }
         // Should never happen in current code — orchestrator always sets
@@ -109,7 +110,7 @@ public class BacktestTradeExecutorService {
         // strategy's trade. Surface the miswiring rather than swallow it.
         log.warn("Decision has no strategyCode and context.accountStrategy is null/missing-code "
                 + "| decisionType={} — multi-trade routing will fall back to legacy mirror",
-                decision == null ? "<null>" : decision.getDecisionType());
+                ObjectUtils.isEmpty(decision) ? "<null>" : decision.getDecisionType());
         return null;
     }
 
@@ -131,13 +132,13 @@ public class BacktestTradeExecutorService {
         // Capture the strategy's resolved interval so the trade row gets
         // stamped with its actual timeframe. context.getInterval() is set by
         // buildAndEnrichContext to ic.interval(), the per-strategy value.
-        String resolvedInterval = context != null ? context.getInterval() : null;
+        String resolvedInterval = ObjectUtils.isNotEmpty(context) ? context.getInterval() : null;
         state.setPendingEntryFor(strategyCode,
                 new BacktestState.PendingEntry(decision, side,
                         context.getFeatureStore(), context.getBiasFeatureStore(),
                         resolvedInterval));
         log.debug("Backtest pending entry stored | side={} strategy={} interval={}",
-                side, decision != null ? decision.getStrategyCode() : strategyCode,
+                side, ObjectUtils.isNotEmpty(decision) ? decision.getStrategyCode() : strategyCode,
                 resolvedInterval);
     }
 
@@ -172,7 +173,7 @@ public class BacktestTradeExecutorService {
             String strategyCode
     ) {
         BacktestState.PendingEntry pending = state.getPendingEntryFor(strategyCode);
-        if (pending == null) return;
+        if (ObjectUtils.isEmpty(pending)) return;
 
         state.clearPendingEntryFor(strategyCode);
 
@@ -199,7 +200,7 @@ public class BacktestTradeExecutorService {
 
     private boolean gappedThroughStopLoss(BacktestState.PendingEntry pending, BigDecimal openPrice) {
         BigDecimal slPrice = pending.decision().getStopLossPrice();
-        if (slPrice == null || slPrice.compareTo(BigDecimal.ZERO) <= 0) return false;
+        if (ObjectUtils.isEmpty(slPrice) || slPrice.compareTo(BigDecimal.ZERO) <= 0) return false;
         return "LONG".equalsIgnoreCase(pending.side())
                 ? openPrice.compareTo(slPrice) <= 0
                 : openPrice.compareTo(slPrice) >= 0;
@@ -278,7 +279,7 @@ public class BacktestTradeExecutorService {
         // orchestrator's concurrent-strategy cap can enforce. Also updates
         // the legacy single-trade slot for the call sites that read
         // state.activeTrade directly.
-        String ownerCode = trade.getStrategyName() != null ? trade.getStrategyName() : "UNKNOWN";
+        String ownerCode = ObjectUtils.isNotEmpty(trade.getStrategyName()) ? trade.getStrategyName() : "UNKNOWN";
         state.addActiveTrade(ownerCode, trade, new ArrayList<>(positions));
 
         log.info("Backtest {} opened | timeOpen={} qty={} quote={} fee={} positions={}",
@@ -307,7 +308,7 @@ public class BacktestTradeExecutorService {
             BigDecimal requestedQuoteAmount, String tradeType
     ) {
         BigDecimal perUnit = BigDecimal.ZERO;
-        if (slPrice != null && slPrice.compareTo(BigDecimal.ZERO) > 0) {
+        if (ObjectUtils.isNotEmpty(slPrice) && slPrice.compareTo(BigDecimal.ZERO) > 0) {
             perUnit = "LONG".equalsIgnoreCase(tradeType)
                     ? entryPrice.subtract(slPrice)
                     : slPrice.subtract(entryPrice);
@@ -411,7 +412,7 @@ public class BacktestTradeExecutorService {
     }
 
     private void applyEntryFeatures(BacktestTrade.BacktestTradeBuilder b, FeatureStore fs) {
-        if (fs == null) return;
+        if (ObjectUtils.isEmpty(fs)) return;
         b.entryTrendRegime(fs.getTrendRegime())
                 .entryAdx(fs.getAdx())
                 .entryAtr(fs.getAtr())
@@ -521,7 +522,7 @@ public class BacktestTradeExecutorService {
             String exitReason,
             LocalDateTime exitTime
     ) {
-        if (position == null || !STATUS_OPEN.equalsIgnoreCase(position.getStatus())) {
+        if (ObjectUtils.isEmpty(position) || !STATUS_OPEN.equalsIgnoreCase(position.getStatus())) {
             return;
         }
 
@@ -552,7 +553,7 @@ public class BacktestTradeExecutorService {
         // cold-start symbols silently return zero from the per-event path.
         BigDecimal flatRate = backtestRun.getFundingRateBpsPer8h();
         BigDecimal fundingCost;
-        if (flatRate != null && flatRate.signum() != 0) {
+        if (ObjectUtils.isNotEmpty(flatRate) && flatRate.signum() != 0) {
             fundingCost = backtestFundingCostService.compute(
                     safe(position.getEntryQuoteQty()),
                     position.getSide(),
@@ -591,7 +592,7 @@ public class BacktestTradeExecutorService {
         // Mirror entry_fee_currency on close — backtest fees are always in
         // the quote currency of the pair (USDT for BTCUSDT). Without this
         // every closed position has a null exit_fee_currency.
-        position.setExitFeeCurrency(position.getEntryFeeCurrency() != null
+        position.setExitFeeCurrency(ObjectUtils.isNotEmpty(position.getEntryFeeCurrency())
                 ? position.getEntryFeeCurrency() : "USDT");
         position.setExitReason(exitReason);
         position.setExitTime(exitTime);
@@ -669,14 +670,14 @@ public class BacktestTradeExecutorService {
         if (!STATUS_OPEN.equalsIgnoreCase(position.getStatus())) return;
         if (!matchesTargetRole(position, targetRole)) return;
 
-        if (decision.getStopLossPrice() != null) {
+        if (ObjectUtils.isNotEmpty(decision.getStopLossPrice())) {
             position.setCurrentStopLossPrice(decision.getStopLossPrice());
         }
-        if (decision.getTrailingStopPrice() != null) {
+        if (ObjectUtils.isNotEmpty(decision.getTrailingStopPrice())) {
             position.setTrailingStopPrice(decision.getTrailingStopPrice());
         }
 
-        String role = position.getPositionRole() == null
+        String role = ObjectUtils.isEmpty(position.getPositionRole())
                 ? ""
                 : position.getPositionRole().trim().toUpperCase();
         applyTakeProfitForRole(position, decision, role);
@@ -684,7 +685,7 @@ public class BacktestTradeExecutorService {
 
     private boolean matchesTargetRole(BacktestTradePosition position, String targetRole) {
         if (TARGET_ALL.equals(targetRole)) return true;
-        return position.getPositionRole() != null
+        return ObjectUtils.isNotEmpty(position.getPositionRole())
                 && targetRole.equalsIgnoreCase(position.getPositionRole());
     }
 
@@ -692,11 +693,11 @@ public class BacktestTradeExecutorService {
             BacktestTradePosition position, StrategyDecision decision, String role
     ) {
         if (EXIT_STRUCTURE_SINGLE.equals(role) || "TP1".equals(role)) {
-            if (decision.getTakeProfitPrice1() != null) {
+            if (ObjectUtils.isNotEmpty(decision.getTakeProfitPrice1())) {
                 position.setTakeProfitPrice(decision.getTakeProfitPrice1());
             }
         } else if ("TP2".equals(role)) {
-            if (decision.getTakeProfitPrice2() != null) {
+            if (ObjectUtils.isNotEmpty(decision.getTakeProfitPrice2())) {
                 position.setTakeProfitPrice(decision.getTakeProfitPrice2());
             }
         } else if (POSITION_ROLE_RUNNER.equals(role)) {
@@ -705,11 +706,11 @@ public class BacktestTradeExecutorService {
     }
 
     private void applyRunnerTakeProfit(BacktestTradePosition position, StrategyDecision decision) {
-        if (decision.getTakeProfitPrice3() != null) {
+        if (ObjectUtils.isNotEmpty(decision.getTakeProfitPrice3())) {
             position.setTakeProfitPrice(decision.getTakeProfitPrice3());
-        } else if (decision.getTakeProfitPrice1() == null
-                && decision.getTakeProfitPrice2() == null
-                && decision.getTakeProfitPrice3() == null) {
+        } else if (ObjectUtils.isEmpty(decision.getTakeProfitPrice1())
+                && ObjectUtils.isEmpty(decision.getTakeProfitPrice2())
+                && ObjectUtils.isEmpty(decision.getTakeProfitPrice3())) {
             position.setTakeProfitPrice(null);
         }
     }
@@ -721,21 +722,21 @@ public class BacktestTradeExecutorService {
      * (single-strategy / pre-B1 path). Empty list, never null.
      */
     private List<BacktestTradePosition> scopedActivePositions(BacktestState state, String strategyCode) {
-        if (state == null) return java.util.Collections.emptyList();
+        if (ObjectUtils.isEmpty(state)) return java.util.Collections.emptyList();
         java.util.Map<String, List<BacktestTradePosition>> byStrategy =
                 state.getActiveTradePositionsByStrategy();
-        if (!CollectionUtils.isEmpty(byStrategy) && strategyCode != null) {
+        if (!CollectionUtils.isEmpty(byStrategy) && ObjectUtils.isNotEmpty(strategyCode)) {
             List<BacktestTradePosition> p = state.getActivePositionsFor(strategyCode);
-            return p == null ? java.util.Collections.emptyList() : p;
+            return ObjectUtils.isEmpty(p) ? java.util.Collections.emptyList() : p;
         }
         List<BacktestTradePosition> legacy = state.getActiveTradePositions();
-        return legacy == null ? java.util.Collections.emptyList() : legacy;
+        return ObjectUtils.isEmpty(legacy) ? java.util.Collections.emptyList() : legacy;
     }
 
     private BacktestTrade scopedActiveTrade(BacktestState state, String strategyCode) {
-        if (state == null) return null;
+        if (ObjectUtils.isEmpty(state)) return null;
         java.util.Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
-        if (!CollectionUtils.isEmpty(byStrategy) && strategyCode != null) {
+        if (!CollectionUtils.isEmpty(byStrategy) && ObjectUtils.isNotEmpty(strategyCode)) {
             return state.getActiveTradeFor(strategyCode);
         }
         return state.getActiveTrade();
@@ -750,21 +751,21 @@ public class BacktestTradeExecutorService {
      * a matching entry.
      */
     private String findStrategyCodeForPosition(BacktestState state, BacktestTradePosition position) {
-        if (state == null || position == null || position.getBacktestTradeId() == null) {
+        if (ObjectUtils.isEmpty(state) || ObjectUtils.isEmpty(position) || ObjectUtils.isEmpty(position.getBacktestTradeId())) {
             return null;
         }
         java.util.Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
-        if (byStrategy != null) {
+        if (ObjectUtils.isNotEmpty(byStrategy)) {
             for (java.util.Map.Entry<String, BacktestTrade> e : byStrategy.entrySet()) {
                 BacktestTrade t = e.getValue();
-                if (t != null && position.getBacktestTradeId().equals(t.getBacktestTradeId())) {
+                if (ObjectUtils.isNotEmpty(t) && position.getBacktestTradeId().equals(t.getBacktestTradeId())) {
                     return e.getKey();
                 }
             }
         }
         // Fallback: the trade's strategyName, if its parent is the legacy mirror.
         BacktestTrade legacy = state.getActiveTrade();
-        if (legacy != null && position.getBacktestTradeId().equals(legacy.getBacktestTradeId())) {
+        if (ObjectUtils.isNotEmpty(legacy) && position.getBacktestTradeId().equals(legacy.getBacktestTradeId())) {
             return legacy.getStrategyName();
         }
         // Position's parent isn't in the active map AND isn't the legacy
@@ -805,7 +806,7 @@ public class BacktestTradeExecutorService {
         boolean anyStop = false;
         for (BacktestTradePosition p : positions) {
             String r = p.getExitReason();
-            if (r == null) continue;
+            if (ObjectUtils.isEmpty(r)) continue;
             String upper = r.toUpperCase();
             if (upper.contains("TAKE_PROFIT") || upper.contains("TP_HIT")) anyTp = true;
             else if (upper.contains("TRAILING_STOP")) anyTrail = true;
@@ -818,7 +819,7 @@ public class BacktestTradeExecutorService {
         // Nothing matched the standard set — fall through to the legacy
         // last-leg behaviour (e.g. BACKTEST_END, MANUAL_CLOSE).
         return positions.stream()
-                .filter(p -> p.getExitTime() != null)
+                .filter(p -> ObjectUtils.isNotEmpty(p.getExitTime()))
                 .max(Comparator.comparing(BacktestTradePosition::getExitTime))
                 .map(BacktestTradePosition::getExitReason)
                 .orElse(null);
@@ -831,7 +832,7 @@ public class BacktestTradeExecutorService {
         // last leg closes.
         BacktestTrade trade = scopedActiveTrade(state, strategyCode);
         List<BacktestTradePosition> allPositions = scopedActivePositions(state, strategyCode);
-        if (trade == null || CollectionUtils.isEmpty(allPositions)) {
+        if (ObjectUtils.isEmpty(trade) || CollectionUtils.isEmpty(allPositions)) {
             return;
         }
 
@@ -863,12 +864,12 @@ public class BacktestTradeExecutorService {
                 .count();
         BigDecimal highestPrice = allPositions.stream()
                 .map(BacktestTradePosition::getHighestPriceSinceEntry)
-                .filter(p -> p != null && p.compareTo(BigDecimal.ZERO) > 0)
+                .filter(p -> ObjectUtils.isNotEmpty(p) && p.compareTo(BigDecimal.ZERO) > 0)
                 .max(BigDecimal::compareTo)
                 .orElse(safe(trade.getAvgEntryPrice()));
         BigDecimal lowestPrice = allPositions.stream()
                 .map(BacktestTradePosition::getLowestPriceSinceEntry)
-                .filter(p -> p != null && p.compareTo(BigDecimal.ZERO) > 0)
+                .filter(p -> ObjectUtils.isNotEmpty(p) && p.compareTo(BigDecimal.ZERO) > 0)
                 .min(BigDecimal::compareTo)
                 .orElse(safe(trade.getAvgEntryPrice()));
         BigDecimal grossPnlAmount = realizedPnlAmount.add(totalFeeAmount);
@@ -924,7 +925,7 @@ public class BacktestTradeExecutorService {
         // Clear the multi-trade slot (also refreshes legacy single-trade
         // fields). When other strategies still have open trades, the legacy
         // mirror points at one of them.
-        String ownerCode = trade.getStrategyName() != null ? trade.getStrategyName() : "UNKNOWN";
+        String ownerCode = ObjectUtils.isNotEmpty(trade.getStrategyName()) ? trade.getStrategyName() : "UNKNOWN";
         state.removeActiveTrade(ownerCode);
     }
 

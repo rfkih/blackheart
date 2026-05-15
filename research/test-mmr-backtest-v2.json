@@ -1,0 +1,26 @@
+{
+  "accountStrategyId": "6ee0020f-0b66-409f-b1f0-306d9db42090",
+  "strategyCode": "MMR",
+  "asset": "BTCUSDT",
+  "interval": "4h",
+  "startTime": "2024-01-01T00:00:00",
+  "endTime": "2026-05-09T00:00:00",
+  "initialCapital": 100,
+  "riskPerTradePct": 2.0,
+  "feeRate": 0.00075,
+  "minNotional": 5,
+  "minQty": 0.000001,
+  "qtyStep": 0.000001,
+  "maxOpenPositions": 1,
+  "allowLong": true,
+  "allowShort": true,
+  "strategyParamOverrides": {
+    "MMR": {
+      "extremeAtrMult": "2.0",
+      "rsiOversoldMax": "30",
+      "stopAtrBuffer": "1.0",
+      "minRewardRiskRatio": "1.5"
+    }
+  },
+  "triggeredBy": "RESEARCHER"
+}

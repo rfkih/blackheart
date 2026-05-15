@@ -1,0 +1,45 @@
+{
+  "entry_type": "STRATEGY_OUTCOME",
+  "strategy_code": "DCB",
+  "title": "ESCALATION: Research JVM unresponsive - DCB 5m null-screen stuck, operator restart needed",
+  "content": "Research JVM (port 8081) is unresponsive to HTTP requests. Cause: 4 concurrent DCB 5m backtest requests were submitted by multiple null-screen invocations (v3: nullscreen-dcb-5m-20260511-v3, v4: nullscreen-dcb-5m-20260511-v4, plus a prior session's background task). The JVM started all 4 backtests (backtest_run_ids: 1407b2b5, 24fdb08b, 95da0755, dd8c6546, all status=RUNNING) then became unresponsive. The heavy computation of DCB on 5m BTCUSDT data (17 months x ~146,000 candles) appears to have overloaded the single-threaded JVM. Operator action required: (1) Restart the Research JVM. (2) Optionally reset the 4 stuck RUNNING backtest_run rows to FAILED. (3) Then re-run DCB 5m null-screen with a single submission (idempotency key: nullscreen-dcb-5m-restart-v1).",
+  "structured_data": {
+    "kind": "ESCALATION",
+    "cause": "concurrent_null_screen_submissions_overloaded_jvm",
+    "stuck_run_ids": ["1407b2b5", "24fdb08b", "95da0755", "dd8c6546"],
+    "action_needed": "restart_research_jvm",
+    "context": {
+      "dcb_5m_hypothesis_id": "a9ab4738",
+      "last_completed_null_screen": "INSUFFICIENT_DATA (bc26258d - first attempt before account_strategy fix)",
+      "account_strategy_status": "DCB 5m 1727dfa0 on admin account 76fac4b6 - INTACT",
+      "next_action_after_restart": "POST /null-screen with nullscreen-dcb-5m-restart-v1 idempotency key"
+    },
+    "session_summary": {
+      "session": 10,
+      "date": "2026-05-11",
+      "completed_this_session": [
+        "MMR 4h null-screen: NO_EDGE (PF=0.507-0.709, journal df6bfc9b)",
+        "TPB 4h null-screen: NO_EDGE frequency-starved (n=0-3, journal 70e0f7b3)",
+        "DCB 5m null-screen: INSUFFICIENT_DATA first attempt (account_strategy fix applied)",
+        "DCB 5m null-screen v3/v4: IN_PROGRESS - stuck in JVM outage"
+      ],
+      "archetype_status_update": {
+        "DCB_5m": "IN_PROGRESS (JVM outage - needs restart and retry)",
+        "DCB_15m": "NO_EDGE",
+        "DCB_1h": "NO_EDGE",
+        "DCB_4h": "NOT_ROBUST_WF",
+        "MRO_15m": "NO_EDGE",
+        "MRO_1h": "NO_EDGE",
+        "MRO_4h": "NO_EDGE",
+        "MMR_1h": "NO_EDGE",
+        "MMR_4h": "NO_EDGE",
+        "TPB_1h": "DISCARDED frequency-starved",
+        "TPB_4h": "DISCARDED frequency-starved",
+        "TPR": "DISCARDED frequency-starved",
+        "FCARRY": "BLOCKED Java param bug"
+      }
+    }
+  },
+  "status": "ACTIVE",
+  "created_by": "quant-researcher"
+}

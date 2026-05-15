@@ -13,8 +13,9 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import id.co.blackheart.repository.MarketDataRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.util.StringUtils;
+import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -38,11 +39,11 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
 
     @Override
     public EnrichedStrategyContext enrich(BaseStrategyContext baseContext, StrategyRequirements requirements) {
-        if (baseContext == null) {
+        if (ObjectUtils.isEmpty(baseContext)) {
             throw new IllegalArgumentException("BaseStrategyContext must not be null");
         }
 
-        if (requirements == null) {
+        if (ObjectUtils.isEmpty(requirements)) {
             requirements = StrategyRequirements.builder().build();
         }
 
@@ -50,7 +51,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         FeatureStore biasFeatureStore = null;
         FeatureStore previousFeatureStore = null;
 
-        boolean isBacktest = baseContext.getExecutionMetadata() != null
+        boolean isBacktest = ObjectUtils.isNotEmpty(baseContext.getExecutionMetadata())
                 && "backtest".equals(baseContext.getExecutionMetadata().get(SOURCE_KEY));
 
         if (!isBacktest
@@ -61,7 +62,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
             biasMarketData = marketDataRepository
                     .findLatestCompletedBySymbolAndInterval(baseContext.getAsset(), requirements.getBiasInterval(), now)
                     .orElse(null);
-            if (biasMarketData != null) {
+            if (ObjectUtils.isNotEmpty(biasMarketData)) {
                 biasFeatureStore = featureStoreRepository
                         .findLatestCompletedBySymbolAndInterval(baseContext.getAsset(), requirements.getBiasInterval(), now)
                         .orElse(null);
@@ -71,10 +72,10 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         // Bug fix: populate previousFeatureStore for live (backtest sets it manually after enrichment)
         if (!isBacktest
                 && requirements.isRequirePreviousFeatureStore()
-                && baseContext.getAsset() != null
-                && baseContext.getInterval() != null
-                && baseContext.getFeatureStore() != null
-                && baseContext.getFeatureStore().getStartTime() != null) {
+                && ObjectUtils.isNotEmpty(baseContext.getAsset())
+                && ObjectUtils.isNotEmpty(baseContext.getInterval())
+                && ObjectUtils.isNotEmpty(baseContext.getFeatureStore())
+                && ObjectUtils.isNotEmpty(baseContext.getFeatureStore().getStartTime())) {
             previousFeatureStore = featureStoreRepository
                     .findPreviousBySymbolIntervalAndStartTime(
                             baseContext.getAsset(),
@@ -146,7 +147,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         FeatureStore currentFeature = context.getFeatureStore();
         MarketData currentMarket = context.getMarketData();
 
-        if (currentFeature == null || currentMarket == null || currentMarket.getClosePrice() == null) {
+        if (ObjectUtils.isEmpty(currentFeature) || ObjectUtils.isEmpty(currentMarket) || ObjectUtils.isEmpty(currentMarket.getClosePrice())) {
             return unknownRegimeSnapshot();
         }
 
@@ -188,7 +189,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
     private record RegimeDetection(String regimeLabel, BigDecimal trendScore) {}
 
     private static RegimeDetection detectRegime(FeatureStore feature, BigDecimal close) {
-        if (feature.getEma50() == null || feature.getEma200() == null || feature.getEma50Slope() == null) {
+        if (ObjectUtils.isEmpty(feature.getEma50()) || ObjectUtils.isEmpty(feature.getEma200()) || ObjectUtils.isEmpty(feature.getEma50Slope())) {
             return new RegimeDetection(LABEL_RANGE, BigDecimal.ZERO);
         }
         boolean bullish = close.compareTo(feature.getEma50()) > 0
@@ -205,11 +206,11 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
     }
 
     private static boolean hasAdxTrend(FeatureStore feature) {
-        return feature.getAdx() != null && feature.getAdx().compareTo(ADX_TREND_THRESHOLD) >= 0;
+        return ObjectUtils.isNotEmpty(feature.getAdx()) && feature.getAdx().compareTo(ADX_TREND_THRESHOLD) >= 0;
     }
 
     private static boolean hasPositiveAtr(FeatureStore feature) {
-        return feature.getAtr() != null && feature.getAtr().compareTo(BigDecimal.ZERO) > 0;
+        return ObjectUtils.isNotEmpty(feature.getAtr()) && feature.getAtr().compareTo(BigDecimal.ZERO) > 0;
     }
 
     /**
@@ -222,11 +223,11 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
             BigDecimal trendScore,
             FeatureStore biasFeatureStore,
             MarketData biasMarketData) {
-        if (biasFeatureStore == null
-                || biasMarketData == null
-                || biasMarketData.getClosePrice() == null
-                || biasFeatureStore.getEma50() == null
-                || biasFeatureStore.getEma200() == null) {
+        if (ObjectUtils.isEmpty(biasFeatureStore)
+                || ObjectUtils.isEmpty(biasMarketData)
+                || ObjectUtils.isEmpty(biasMarketData.getClosePrice())
+                || ObjectUtils.isEmpty(biasFeatureStore.getEma50())
+                || ObjectUtils.isEmpty(biasFeatureStore.getEma200())) {
             return trendScore;
         }
         BigDecimal biasClose = biasMarketData.getClosePrice();
@@ -242,7 +243,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
     private VolatilitySnapshot buildVolatilitySnapshot(BaseStrategyContext context) {
         FeatureStore feature = context.getFeatureStore();
 
-        BigDecimal atr = feature != null && feature.getAtr() != null
+        BigDecimal atr = ObjectUtils.isNotEmpty(feature) && ObjectUtils.isNotEmpty(feature.getAtr())
                 ? feature.getAtr()
                 : BigDecimal.ZERO;
 
@@ -270,14 +271,14 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
     }
 
     private RiskSnapshot buildRiskSnapshot(BaseStrategyContext context, VolatilitySnapshot volatilitySnapshot) {
-        BigDecimal baseRiskPct = context.getRiskPerTradePct() == null
+        BigDecimal baseRiskPct = ObjectUtils.isEmpty(context.getRiskPerTradePct())
                 ? BigDecimal.ZERO
                 : context.getRiskPerTradePct();
 
         BigDecimal riskMultiplier = BigDecimal.ONE;
 
-        if (volatilitySnapshot != null
-                && volatilitySnapshot.getJumpRiskScore() != null
+        if (ObjectUtils.isNotEmpty(volatilitySnapshot)
+                && ObjectUtils.isNotEmpty(volatilitySnapshot.getJumpRiskScore())
                 && volatilitySnapshot.getJumpRiskScore().compareTo(new BigDecimal("0.70")) > 0) {
             riskMultiplier = new BigDecimal("0.50");
         }
@@ -299,7 +300,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
         FeatureStore feature = context.getFeatureStore();
 
         BigDecimal volumeScore = BigDecimal.ONE;
-        if (feature != null && feature.getRelativeVolume20() != null) {
+        if (ObjectUtils.isNotEmpty(feature) && ObjectUtils.isNotEmpty(feature.getRelativeVolume20())) {
             volumeScore = feature.getRelativeVolume20();
         }
 
@@ -319,7 +320,7 @@ public class DefaultStrategyContextEnrichmentService implements StrategyContextE
     }
 
     private StrategyRuntimeConfig buildRuntimeConfig(BaseStrategyContext context) {
-        String strategyCode = context.getAccountStrategy() != null
+        String strategyCode = ObjectUtils.isNotEmpty(context.getAccountStrategy())
                 ? context.getAccountStrategy().getStrategyCode()
                 : null;
 

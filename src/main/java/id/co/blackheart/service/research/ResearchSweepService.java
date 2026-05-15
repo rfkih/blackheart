@@ -13,6 +13,7 @@ import id.co.blackheart.service.statistics.SharpeStatistics;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
@@ -229,7 +230,7 @@ public class ResearchSweepService {
         // Compute the holdout slice's dates upfront so the UI can show them
         // before any backtest runs. The holdout is the tail of the window —
         // sweep optimization stops at holdoutFromDate.
-        if (spec.getHoldoutFractionPct() != null && spec.getHoldoutFractionPct().signum() > 0) {
+        if (ObjectUtils.isNotEmpty(spec.getHoldoutFractionPct()) && spec.getHoldoutFractionPct().signum() > 0) {
             long total = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
             long holdoutSeconds = (long) (total * spec.getHoldoutFractionPct().doubleValue() / 100.0);
             LocalDateTime holdoutStart = spec.getToDate().minusSeconds(holdoutSeconds);
@@ -268,19 +269,19 @@ public class ResearchSweepService {
     @org.springframework.transaction.annotation.Transactional
     public BacktestRun evaluateHoldout(UUID userId, UUID sweepId, Map<String, Object> paramSet) {
         SweepState state = sweeps.get(sweepId);
-        if (state == null
-                || (state.getUserId() != null && !state.getUserId().equals(userId))) {
+        if (ObjectUtils.isEmpty(state)
+                || (ObjectUtils.isNotEmpty(state.getUserId()) && !state.getUserId().equals(userId))) {
             throw new jakarta.persistence.EntityNotFoundException("Sweep not found: " + sweepId);
         }
         if (!STATUS_COMPLETED.equalsIgnoreCase(state.getStatus())) {
             throw new IllegalStateException(
                     "Sweep is " + state.getStatus() + " — wait for COMPLETED before evaluating holdout");
         }
-        if (state.getHoldoutFromDate() == null || state.getHoldoutToDate() == null) {
+        if (ObjectUtils.isEmpty(state.getHoldoutFromDate()) || ObjectUtils.isEmpty(state.getHoldoutToDate())) {
             throw new IllegalStateException(
                     "Sweep was submitted without a holdout reservation — re-submit with holdoutFractionPct set");
         }
-        if (state.getHoldoutBacktestRunId() != null) {
+        if (ObjectUtils.isNotEmpty(state.getHoldoutBacktestRunId())) {
             throw new IllegalStateException(
                     "This sweep's holdout has already been evaluated (run "
                             + state.getHoldoutBacktestRunId() + "). Holdout is one-shot by design.");
@@ -326,9 +327,9 @@ public class ResearchSweepService {
      */
     public SweepState cancelSweep(UUID sweepId) {
         SweepState state = sweeps.get(sweepId);
-        if (state == null) throw new jakarta.persistence.EntityNotFoundException("Sweep not found: " + sweepId);
+        if (ObjectUtils.isEmpty(state)) throw new jakarta.persistence.EntityNotFoundException("Sweep not found: " + sweepId);
         AtomicBoolean flag = cancelFlags.get(sweepId);
-        if (flag != null) flag.set(true);
+        if (ObjectUtils.isNotEmpty(flag)) flag.set(true);
         log.info("Sweep cancel requested | id={}", sweepId);
         return state;
     }
@@ -340,7 +341,7 @@ public class ResearchSweepService {
      */
     public void deleteSweep(UUID sweepId) {
         SweepState state = sweeps.get(sweepId);
-        if (state == null) return;
+        if (ObjectUtils.isEmpty(state)) return;
         if (STATUS_RUNNING.equalsIgnoreCase(state.getStatus())
                 || STATUS_PENDING.equalsIgnoreCase(state.getStatus())) {
             throw new IllegalStateException(
@@ -358,14 +359,14 @@ public class ResearchSweepService {
 
     public SweepState getSweep(UUID sweepId) {
         SweepState state = sweeps.get(sweepId);
-        if (state != null) enrichDsrThreshold(state);
+        if (ObjectUtils.isNotEmpty(state)) enrichDsrThreshold(state);
         return state;
     }
 
     public List<SweepState> listSweeps(UUID userId) {
         List<SweepState> out = new ArrayList<>();
         for (SweepState s : sweeps.values()) {
-            if (userId == null || s.getUserId() == null || userId.equals(s.getUserId())) {
+            if (ObjectUtils.isEmpty(userId) || ObjectUtils.isEmpty(s.getUserId()) || userId.equals(s.getUserId())) {
                 enrichDsrThreshold(s);
                 out.add(s);
             }
@@ -409,9 +410,9 @@ public class ResearchSweepService {
     }
 
     private static boolean matchesPagedFilter(SweepState s, UUID userId, Set<String> statusFilter) {
-        if (userId != null && s.getUserId() != null && !userId.equals(s.getUserId())) return false;
+        if (ObjectUtils.isNotEmpty(userId) && ObjectUtils.isNotEmpty(s.getUserId()) && !userId.equals(s.getUserId())) return false;
         if (CollectionUtils.isEmpty(statusFilter)) return true;
-        String st = s.getStatus() == null ? "" : s.getStatus().toUpperCase(Locale.ROOT);
+        String st = ObjectUtils.isEmpty(s.getStatus()) ? "" : s.getStatus().toUpperCase(Locale.ROOT);
         return statusFilter.contains(st);
     }
 
@@ -454,10 +455,10 @@ public class ResearchSweepService {
         persist(state);
         log.info("Sweep started | id={} combos={} rounds={}",
                 state.getSweepId(), state.getTotalCombos(),
-                state.getTotalRounds() == null ? 1 : state.getTotalRounds());
+                ObjectUtils.isEmpty(state.getTotalRounds()) ? 1 : state.getTotalRounds());
 
         try {
-            boolean researchMode = state.getTotalRounds() != null && state.getTotalRounds() > 1;
+            boolean researchMode = ObjectUtils.isNotEmpty(state.getTotalRounds()) && state.getTotalRounds() > 1;
 
             if (researchMode) {
                 runResearchMode(state);
@@ -492,7 +493,7 @@ public class ResearchSweepService {
 
     private boolean isCancelled(SweepState state) {
         AtomicBoolean flag = cancelFlags.get(state.getSweepId());
-        return flag != null && flag.get();
+        return ObjectUtils.isNotEmpty(flag) && flag.get();
     }
 
     /**
@@ -558,7 +559,7 @@ public class ResearchSweepService {
                 return false;
             }
             SweepResult cur = results.get(i);
-            if (cur.getRound() == null || cur.getRound() != round) break;
+            if (ObjectUtils.isEmpty(cur.getRound()) || cur.getRound() != round) break;
             executeOneSafe(state, cur);
             state.setFinishedCombos(state.getFinishedCombos() + 1);
             persist(state);
@@ -574,7 +575,7 @@ public class ResearchSweepService {
     private boolean planNextRound(SweepState state, int round, String rankMetric) {
         List<SweepResult> results = state.getResults();
         List<SweepResult> roundResults = results.stream()
-                .filter(x -> x.getRound() != null && x.getRound() == round)
+                .filter(x -> ObjectUtils.isNotEmpty(x.getRound()) && x.getRound() == round)
                 .filter(x -> STATUS_COMPLETED.equalsIgnoreCase(x.getStatus()))
                 .toList();
         if (roundResults.isEmpty()) {
@@ -594,7 +595,7 @@ public class ResearchSweepService {
         int producedCandidates = collectRefinedCombos(state, elites, alreadyPlanned, nextCombos);
 
         if (producedCandidates > nextCombos.size()) {
-            int truncated = (state.getRoundsTruncated() == null ? 0 : state.getRoundsTruncated())
+            int truncated = (ObjectUtils.isEmpty(state.getRoundsTruncated()) ? 0 : state.getRoundsTruncated())
                     + (producedCandidates - nextCombos.size());
             state.setRoundsTruncated(truncated);
             log.info("Sweep {} round {} produced {} refined candidates, {} kept after dedup+cap",
@@ -627,7 +628,7 @@ public class ResearchSweepService {
     private List<SweepResult> pickElites(
             SweepState state, List<SweepResult> roundResults, String rankMetric, int round) {
         List<SweepResult> elitePool = roundResults.stream()
-                .filter(x -> x.getTradeCount() != null && x.getTradeCount() >= MIN_TRADES_FOR_ELITE)
+                .filter(x -> ObjectUtils.isNotEmpty(x.getTradeCount()) && x.getTradeCount() >= MIN_TRADES_FOR_ELITE)
                 .toList();
         if (elitePool.isEmpty()) {
             log.info("Sweep {} round {} — no combos with >= {} trades, using full pool",
@@ -635,7 +636,7 @@ public class ResearchSweepService {
             elitePool = roundResults;
         }
         BigDecimal elitePct = state.getSpec().getElitePct();
-        if (elitePct == null || elitePct.signum() <= 0) elitePct = DEFAULT_ELITE_PCT;
+        if (ObjectUtils.isEmpty(elitePct) || elitePct.signum() <= 0) elitePct = DEFAULT_ELITE_PCT;
         int eliteCount = Math.max(1, (int) Math.ceil(elitePool.size() * elitePct.doubleValue()));
 
         List<SweepResult> elites = new ArrayList<>(elitePool);
@@ -674,7 +675,7 @@ public class ResearchSweepService {
      *  is harmless and keeps the helper null-free for Sonar S1168. */
     static Map<String, Object> canonicalise(Map<String, Object> combo) {
         Map<String, Object> out = new LinkedHashMap<>();
-        if (combo == null) return out;
+        if (ObjectUtils.isEmpty(combo)) return out;
         for (Map.Entry<String, Object> e : combo.entrySet()) {
             Object v = e.getValue();
             if (v instanceof BigDecimal bd) {
@@ -706,7 +707,7 @@ public class ResearchSweepService {
 
     private int indexOfFirstInRound(List<SweepResult> results, int round) {
         for (int i = 0; i < results.size(); i++) {
-            if (results.get(i).getRound() != null && results.get(i).getRound() == round) {
+            if (ObjectUtils.isNotEmpty(results.get(i).getRound()) && results.get(i).getRound() == round) {
                 return i;
             }
         }
@@ -738,7 +739,7 @@ public class ResearchSweepService {
         persist(state);
 
         BacktestRun completed = waitForRun(runId, state, result);
-        if (completed == null) {
+        if (ObjectUtils.isEmpty(completed)) {
             result.setStatus(STATUS_FAILED);
             result.setErrorMessage("Run did not complete in " + (PER_RUN_TIMEOUT_MS / 1000) + "s");
             result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
@@ -775,12 +776,12 @@ public class ResearchSweepService {
         // when holdout is disabled). The holdout slice is reserved — sweep
         // optimization is forbidden from running over it. evaluateHoldout()
         // is the only entry point that touches it.
-        java.time.LocalDateTime sweepEnd = state.getHoldoutFromDate() != null
+        java.time.LocalDateTime sweepEnd = ObjectUtils.isNotEmpty(state.getHoldoutFromDate())
                 ? state.getHoldoutFromDate()
                 : spec.getToDate();
 
         BigDecimal pct = spec.getOosFractionPct();
-        if (pct == null) pct = new BigDecimal("30");
+        if (ObjectUtils.isEmpty(pct)) pct = new BigDecimal("30");
         long totalWindowSeconds = Duration.between(spec.getFromDate(), spec.getToDate()).getSeconds();
         // OOS fraction is relative to the FULL window (including holdout)
         // so 30% means 30% of the user's submitted range — not 30% of
@@ -800,7 +801,7 @@ public class ResearchSweepService {
         persist(state);
 
         BacktestRun trainCompleted = waitForRun(trainRunId, state, result);
-        if (trainCompleted == null) {
+        if (ObjectUtils.isEmpty(trainCompleted)) {
             result.setStatus(STATUS_FAILED);
             result.setErrorMessage("Train leg did not complete in "
                     + (PER_RUN_TIMEOUT_MS / 1000) + "s");
@@ -812,7 +813,7 @@ public class ResearchSweepService {
             // Train failed — skip OOS, surface the train failure on the row.
             result.setStatus(STATUS_FAILED);
             result.setErrorMessage("Train leg failed: "
-                    + (trainCompleted.getNotes() != null ? trainCompleted.getNotes() : "unknown"));
+                    + (ObjectUtils.isNotEmpty(trainCompleted.getNotes()) ? trainCompleted.getNotes() : "unknown"));
             result.setElapsedMs(Duration.ofNanos(System.nanoTime() - startNanos).toMillis());
             return;
         }
@@ -832,7 +833,7 @@ public class ResearchSweepService {
         persist(state);
 
         BacktestRun oosCompleted = waitForRun(oosRunId, state, result);
-        if (oosCompleted == null) {
+        if (ObjectUtils.isEmpty(oosCompleted)) {
             result.setStatus(STATUS_FAILED);
             result.setErrorMessage("OOS leg did not complete in "
                     + (PER_RUN_TIMEOUT_MS / 1000) + "s");
@@ -863,13 +864,13 @@ public class ResearchSweepService {
         result.setStatus(STATUS_RUNNING);
         persist(state);
 
-        int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
-        java.time.LocalDateTime sweepEnd = state.getHoldoutFromDate() != null
+        int k = ObjectUtils.isEmpty(spec.getWalkForwardWindows()) ? 4 : spec.getWalkForwardWindows();
+        java.time.LocalDateTime sweepEnd = ObjectUtils.isNotEmpty(state.getHoldoutFromDate())
                 ? state.getHoldoutFromDate()
                 : spec.getToDate();
         // Same OOS-fraction semantics as TRAIN_OOS / validation. Defaults
         // to 30% when the user didn't supply one (matches TRAIN_OOS default).
-        double oosFraction = (spec.getOosFractionPct() != null
+        double oosFraction = (ObjectUtils.isNotEmpty(spec.getOosFractionPct())
                 ? spec.getOosFractionPct().doubleValue() : 30.0) / 100.0;
         java.util.List<WalkForwardWindowing.Fold> foldPlan =
                 WalkForwardWindowing.buildFolds(spec.getFromDate(), sweepEnd, k, oosFraction);
@@ -880,7 +881,7 @@ public class ResearchSweepService {
         for (int i = 0; i < k; i++) {
             WindowResult fold = runOneFold(state, result, spec, foldPlan.get(i), i + 1);
             folds.add(fold);
-            if (fold.getOosSharpeRatio() != null) {
+            if (ObjectUtils.isNotEmpty(fold.getOosSharpeRatio())) {
                 oosSharpes.add(fold.getOosSharpeRatio().doubleValue());
             }
         }
@@ -917,7 +918,7 @@ public class ResearchSweepService {
         // Stamp the runId regardless of completion so the operator can navigate
         // to the (timed-out / failed) run from the fold UI.
         fold.setTrainBacktestRunId(train.runId());
-        if (train.completed() == null
+        if (ObjectUtils.isEmpty(train.completed())
                 || !STATUS_COMPLETED.equalsIgnoreCase(train.completed().getStatus())) {
             fold.setStatus(STATUS_FAILED);
             return fold;
@@ -926,7 +927,7 @@ public class ResearchSweepService {
 
         FoldLegOutcome oos = runFoldLeg(state, result, spec, plan.oosFromDate(), plan.oosToDate());
         fold.setOosBacktestRunId(oos.runId());
-        if (oos.completed() == null
+        if (ObjectUtils.isEmpty(oos.completed())
                 || !STATUS_COMPLETED.equalsIgnoreCase(oos.completed().getStatus())) {
             fold.setStatus(STATUS_FAILED);
             return fold;
@@ -977,9 +978,9 @@ public class ResearchSweepService {
         result.setSharpeRatio(mean);
 
         WindowResult lastSuccessful = findLastSuccessfulFold(folds);
-        if (lastSuccessful != null && lastSuccessful.getOosBacktestRunId() != null) {
+        if (ObjectUtils.isNotEmpty(lastSuccessful) && ObjectUtils.isNotEmpty(lastSuccessful.getOosBacktestRunId())) {
             BacktestRun lastRun = runRepository.findById(lastSuccessful.getOosBacktestRunId()).orElse(null);
-            if (lastRun != null) {
+            if (ObjectUtils.isNotEmpty(lastRun)) {
                 populateMetrics(result, lastRun);
                 // populateMetrics overwrites sharpeRatio with the single-fold
                 // value — restore the cohort mean.
@@ -1026,9 +1027,9 @@ public class ResearchSweepService {
         long start = System.currentTimeMillis();
         while (System.currentTimeMillis() - start < PER_RUN_TIMEOUT_MS) {
             BacktestRun run = runRepository.findById(runId).orElse(null);
-            if (run != null) {
+            if (ObjectUtils.isNotEmpty(run)) {
                 Integer pct = run.getProgressPercent();
-                if (pct != null && !pct.equals(result.getProgressPercent())) {
+                if (ObjectUtils.isNotEmpty(pct) && !pct.equals(result.getProgressPercent())) {
                     result.setProgressPercent(pct);
                     persist(state);
                 }
@@ -1103,7 +1104,7 @@ public class ResearchSweepService {
      * the threshold by eye.
      */
     private void enrichDsrThreshold(SweepState state) {
-        if (state == null || state.getResults() == null) return;
+        if (ObjectUtils.isEmpty(state) || CollectionUtils.isEmpty(state.getResults())) return;
         double[] sharpes = state.getResults().stream()
                 .filter(r -> STATUS_COMPLETED.equalsIgnoreCase(r.getStatus()))
                 .map(SweepResult::getSharpeRatio)
@@ -1154,7 +1155,7 @@ public class ResearchSweepService {
         // already ensured the keys don't overlap, so the order is purely
         // defensive — if they did, the swept value wins.
         Map<String, Object> merged = new LinkedHashMap<>();
-        if (spec.getFixedParams() != null) merged.putAll(spec.getFixedParams());
+        if (ObjectUtils.isNotEmpty(spec.getFixedParams())) merged.putAll(spec.getFixedParams());
         merged.putAll(paramSet);
 
         Map<String, Map<String, Object>> overrides = new LinkedHashMap<>();
@@ -1167,7 +1168,7 @@ public class ResearchSweepService {
 
     private int resolveRounds(SweepSpec spec) {
         Integer r = spec.getRounds();
-        if (r == null || r <= 1) return 1;
+        if (ObjectUtils.isEmpty(r) || r <= 1) return 1;
         if (r > MAX_ROUNDS) {
             throw new IllegalArgumentException("rounds capped at " + MAX_ROUNDS);
         }
@@ -1199,7 +1200,7 @@ public class ResearchSweepService {
      */
     static List<Map<String, Object>> refineAroundElite(
             Map<String, ParamRange> ranges, Map<String, Object> elite) {
-        if (ranges == null || elite == null) return List.of();
+        if (ObjectUtils.isEmpty(ranges) || ObjectUtils.isEmpty(elite)) return List.of();
         Map<String, List<Object>> perKey = new LinkedHashMap<>();
         for (Map.Entry<String, ParamRange> e : ranges.entrySet()) {
             List<Object> refined = refinedValuesForKey(e.getValue(), elite.get(e.getKey()));
@@ -1212,13 +1213,13 @@ public class ResearchSweepService {
 
     private static List<Object> refinedValuesForKey(ParamRange range, Object seedRaw) {
         BigDecimal seed = toDecimal(seedRaw);
-        if (seed == null) return List.of();
+        if (ObjectUtils.isEmpty(seed)) return List.of();
         List<BigDecimal> vals = range.refineAround(seed, 1);
         return vals.isEmpty() ? List.of() : new ArrayList<>(vals);
     }
 
     private static BigDecimal toDecimal(Object v) {
-        if (v == null) return null;
+        if (ObjectUtils.isEmpty(v)) return null;
         if (v instanceof BigDecimal bd) return bd;
         if (v instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
         try { return new BigDecimal(v.toString()); } catch (NumberFormatException e) { return null; }
@@ -1229,9 +1230,9 @@ public class ResearchSweepService {
         return (a, b) -> {
             BigDecimal av = pickMetric(a, metric);
             BigDecimal bv = pickMetric(b, metric);
-            if (av == null && bv == null) return 0;
-            if (av == null) return 1;
-            if (bv == null) return -1;
+            if (ObjectUtils.isEmpty(av) && ObjectUtils.isEmpty(bv)) return 0;
+            if (ObjectUtils.isEmpty(av)) return 1;
+            if (ObjectUtils.isEmpty(bv)) return -1;
             return bv.compareTo(av); // descending
         };
     }
@@ -1294,8 +1295,8 @@ public class ResearchSweepService {
      * {@link #MAX_TOTAL_RUNS} at submit time.
      */
     private int estimateTotalCombos(SweepSpec spec) {
-        int rounds = spec.getRounds() == null ? 1 : spec.getRounds();
-        if (rounds > 1 && spec.getParamRanges() != null) {
+        int rounds = ObjectUtils.isEmpty(spec.getRounds()) ? 1 : spec.getRounds();
+        if (rounds > 1 && ObjectUtils.isNotEmpty(spec.getParamRanges())) {
             // Round 1 from ranges, then up to MAX_COMBOS_PER_ROUND per
             // refinement round. Realistic upper bound on what we'd run.
             int round1 = expandFromRanges(spec.getParamRanges()).size();
@@ -1318,7 +1319,7 @@ public class ResearchSweepService {
         boolean trainOosMode = "TRAIN_OOS".equalsIgnoreCase(spec.getSplitMode());
         boolean walkForwardMode = "WALK_FORWARD_K".equalsIgnoreCase(spec.getSplitMode());
         BigDecimal holdoutPct = spec.getHoldoutFractionPct();
-        if (holdoutPct != null && !trainOosMode && !walkForwardMode) {
+        if (ObjectUtils.isNotEmpty(holdoutPct) && !trainOosMode && !walkForwardMode) {
             throw new IllegalArgumentException(
                     "holdoutFractionPct only applies with splitMode TRAIN_OOS or WALK_FORWARD_K");
         }
@@ -1332,7 +1333,7 @@ public class ResearchSweepService {
     }
 
     private static void validateRequiredFields(SweepSpec spec) {
-        if (spec == null) throw new IllegalArgumentException("spec required");
+        if (ObjectUtils.isEmpty(spec)) throw new IllegalArgumentException("spec required");
         if (!StringUtils.hasText(spec.getStrategyCode())) throw new IllegalArgumentException("strategyCode required");
         if (!RESEARCH_CAPABLE_CODES.contains(spec.getStrategyCode().toUpperCase())) {
             throw new IllegalArgumentException(
@@ -1343,16 +1344,16 @@ public class ResearchSweepService {
         }
         if (!StringUtils.hasText(spec.getAsset())) throw new IllegalArgumentException("asset required");
         if (!StringUtils.hasText(spec.getInterval())) throw new IllegalArgumentException("interval required");
-        if (spec.getFromDate() == null || spec.getToDate() == null) {
+        if (ObjectUtils.isEmpty(spec.getFromDate()) || ObjectUtils.isEmpty(spec.getToDate())) {
             throw new IllegalArgumentException("fromDate / toDate required");
         }
         if (!spec.getFromDate().isBefore(spec.getToDate())) {
             throw new IllegalArgumentException("fromDate must be before toDate");
         }
-        if (spec.getAccountStrategyId() == null) {
+        if (ObjectUtils.isEmpty(spec.getAccountStrategyId())) {
             throw new IllegalArgumentException("accountStrategyId required");
         }
-        if (spec.getInitialCapital() == null || spec.getInitialCapital().signum() <= 0) {
+        if (ObjectUtils.isEmpty(spec.getInitialCapital()) || spec.getInitialCapital().signum() <= 0) {
             throw new IllegalArgumentException("initialCapital must be positive");
         }
     }
@@ -1364,13 +1365,13 @@ public class ResearchSweepService {
      *  open positions; otherwise the metrics are mostly noise. */
     private static void validateTrainOosMode(SweepSpec spec, BigDecimal holdoutPct) {
         BigDecimal oosPct = spec.getOosFractionPct();
-        if (oosPct == null) oosPct = new BigDecimal("30");
+        if (ObjectUtils.isEmpty(oosPct)) oosPct = new BigDecimal("30");
         if (oosPct.compareTo(new BigDecimal("10")) < 0
                 || oosPct.compareTo(new BigDecimal("50")) > 0) {
             throw new IllegalArgumentException(
                     "oosFractionPct must be between 10 and 50, got " + oosPct);
         }
-        BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
+        BigDecimal hPct = ObjectUtils.isNotEmpty(holdoutPct) ? holdoutPct : BigDecimal.ZERO;
         if (hPct.signum() < 0
                 || hPct.compareTo(new BigDecimal("40")) > 0) {
             throw new IllegalArgumentException(
@@ -1408,17 +1409,17 @@ public class ResearchSweepService {
      *  available (non-holdout) window. The OOS coverage is controlled by
      *  oosFractionPct (default 30%) — train head is whatever remains. */
     private static void validateWalkForwardMode(SweepSpec spec, BigDecimal holdoutPct) {
-        int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
+        int k = ObjectUtils.isEmpty(spec.getWalkForwardWindows()) ? 4 : spec.getWalkForwardWindows();
         if (k < 2 || k > 8) {
             throw new IllegalArgumentException(
                     "walkForwardWindows must be between 2 and 8, got " + k);
         }
-        BigDecimal hPct = holdoutPct != null ? holdoutPct : BigDecimal.ZERO;
+        BigDecimal hPct = ObjectUtils.isNotEmpty(holdoutPct) ? holdoutPct : BigDecimal.ZERO;
         if (hPct.signum() < 0 || hPct.compareTo(new BigDecimal("40")) > 0) {
             throw new IllegalArgumentException(
                     "holdoutFractionPct must be between 0 and 40, got " + hPct);
         }
-        BigDecimal oosPctRaw = spec.getOosFractionPct() != null
+        BigDecimal oosPctRaw = ObjectUtils.isNotEmpty(spec.getOosFractionPct())
                 ? spec.getOosFractionPct() : new BigDecimal("30");
         if (oosPctRaw.compareTo(new BigDecimal("10")) < 0
                 || oosPctRaw.compareTo(new BigDecimal("70")) > 0) {
@@ -1454,7 +1455,7 @@ public class ResearchSweepService {
     }
 
     private void validateRoundsAndKeys(SweepSpec spec) {
-        int rounds = spec.getRounds() == null ? 1 : spec.getRounds();
+        int rounds = ObjectUtils.isEmpty(spec.getRounds()) ? 1 : spec.getRounds();
         Set<String> knownKeys = knownParamKeysFor(spec.getStrategyCode());
         if (rounds > 1) {
             validateMultiRoundRanges(spec, rounds, knownKeys);
@@ -1473,7 +1474,7 @@ public class ResearchSweepService {
         }
         for (Map.Entry<String, ParamRange> e : spec.getParamRanges().entrySet()) {
             ParamRange r = e.getValue();
-            if (r == null || r.getMin() == null || r.getMax() == null || r.getStep() == null
+            if (ObjectUtils.isEmpty(r) || ObjectUtils.isEmpty(r.getMin()) || ObjectUtils.isEmpty(r.getMax()) || ObjectUtils.isEmpty(r.getStep())
                     || r.getStep().signum() <= 0
                     || r.getMin().compareTo(r.getMax()) > 0) {
                 throw new IllegalArgumentException(
@@ -1502,8 +1503,8 @@ public class ResearchSweepService {
 
         Set<String> knownKeys = knownParamKeysFor(spec.getStrategyCode());
         Set<String> sweptKeys = new HashSet<>();
-        if (spec.getParamRanges() != null) sweptKeys.addAll(spec.getParamRanges().keySet());
-        if (spec.getParamGrid() != null)   sweptKeys.addAll(spec.getParamGrid().keySet());
+        if (ObjectUtils.isNotEmpty(spec.getParamRanges())) sweptKeys.addAll(spec.getParamRanges().keySet());
+        if (ObjectUtils.isNotEmpty(spec.getParamGrid()))   sweptKeys.addAll(spec.getParamGrid().keySet());
         for (String key : fixed.keySet()) {
             rejectUnknownKey(key, knownKeys, spec.getStrategyCode());
             if (sweptKeys.contains(key)) {
@@ -1519,7 +1520,7 @@ public class ResearchSweepService {
      *  set. Pulled out of {@link #validate} so the ternaries flatten. */
     private static int runsPerCombo(SweepSpec spec, boolean trainOosMode, boolean walkForwardMode) {
         if (walkForwardMode) {
-            int k = spec.getWalkForwardWindows() == null ? 4 : spec.getWalkForwardWindows();
+            int k = ObjectUtils.isEmpty(spec.getWalkForwardWindows()) ? 4 : spec.getWalkForwardWindows();
             return 2 * k;
         }
         return trainOosMode ? 2 : 1;
@@ -1589,7 +1590,7 @@ public class ResearchSweepService {
     );
 
     private Set<String> knownParamKeysFor(String strategyCode) {
-        if (strategyCode == null) return Set.of();
+        if (ObjectUtils.isEmpty(strategyCode)) return Set.of();
         return KNOWN_PARAM_KEYS.getOrDefault(strategyCode.toUpperCase(), Set.of());
     }
 
@@ -1703,7 +1704,7 @@ public class ResearchSweepService {
      * JVM.
      */
     private void failOrphanedRuns(SweepState s) {
-        if (s.getResults() == null) return;
+        if (ObjectUtils.isEmpty(s.getResults())) return;
         for (SweepResult r : s.getResults()) {
             failOrphanedRun(s.getSweepId(), r.getBacktestRunId());
         }
@@ -1712,10 +1713,10 @@ public class ResearchSweepService {
     /** Best-effort orphan-run cleanup for a single result. Pulled out so the
      *  caller's loop has zero {@code continue} statements (Sonar S135). */
     private void failOrphanedRun(UUID sweepId, UUID runId) {
-        if (runId == null) return;
+        if (ObjectUtils.isEmpty(runId)) return;
         try {
             BacktestRun run = runRepository.findById(runId).orElse(null);
-            if (run == null) return;
+            if (ObjectUtils.isEmpty(run)) return;
             String status = run.getStatus();
             if (STATUS_PENDING.equalsIgnoreCase(status)
                     || STATUS_RUNNING.equalsIgnoreCase(status)) {
@@ -1732,7 +1733,7 @@ public class ResearchSweepService {
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private static Integer asInt(Object v) {
-        if (v == null) return null;
+        if (ObjectUtils.isEmpty(v)) return null;
         if (v instanceof Number n) return n.intValue();
         try { return Integer.parseInt(v.toString()); } catch (NumberFormatException e) { return null; }
     }
@@ -1740,7 +1741,7 @@ public class ResearchSweepService {
     /** Number → BigDecimal via toString to avoid double-precision rounding —
      *  e.g. 0.1 + 0.2 = 0.30000000000000004 if you go through doubleValue(). */
     private static java.math.BigDecimal asDecimal(Object v) {
-        if (v == null) return null;
+        if (ObjectUtils.isEmpty(v)) return null;
         if (v instanceof java.math.BigDecimal bd) return bd;
         if (v instanceof Number n) {
             try {

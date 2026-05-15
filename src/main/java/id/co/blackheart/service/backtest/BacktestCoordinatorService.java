@@ -27,9 +27,10 @@ import id.co.blackheart.service.strategy.StrategyExecutorFactory;
 import id.co.blackheart.service.tradelistener.TradeListenerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
-import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -134,7 +135,7 @@ public class BacktestCoordinatorService {
                 ));
 
         List<FeatureStore> sortedStrategyFeatures = strategyFeatures.stream()
-                .filter(f -> f != null && f.getStartTime() != null)
+                .filter(f -> ObjectUtils.isNotEmpty(f) && f.getStartTime() != null)
                 .sorted(Comparator.comparing(FeatureStore::getStartTime))
                 .toList();
 
@@ -220,7 +221,7 @@ public class BacktestCoordinatorService {
         // Discard any pending entries that never filled — they don't represent
         // real exposure (no positions were ever opened) but leaving them in
         // state would surface as ghost entries in any post-run inspection.
-        if (state.getPendingEntriesByStrategy() != null) {
+        if (ObjectUtils.isNotEmpty(state.getPendingEntriesByStrategy())) {
             int leftover = state.getPendingEntriesByStrategy().size();
             if (leftover > 0) {
                 log.debug("Discarding {} unfilled pending entries at end-of-run", leftover);
@@ -260,13 +261,12 @@ public class BacktestCoordinatorService {
 
     private List<BacktestTradePosition> collectAllActivePositions(BacktestState state) {
         List<BacktestTradePosition> all = new ArrayList<>();
-        if (state.getActiveTradePositionsByStrategy() != null
-                && !CollectionUtils.isEmpty(state.getActiveTradePositionsByStrategy())) {
+        if (ObjectUtils.isNotEmpty(state.getActiveTradePositionsByStrategy())) {
             for (List<BacktestTradePosition> perStrategy
                     : state.getActiveTradePositionsByStrategy().values()) {
-                if (perStrategy != null) all.addAll(perStrategy);
+                if (ObjectUtils.isNotEmpty(perStrategy)) all.addAll(perStrategy);
             }
-        } else if (state.getActiveTradePositions() != null) {
+        } else if (ObjectUtils.isNotEmpty(state.getActiveTradePositions())) {
             all.addAll(state.getActiveTradePositions());
         }
         return all;
@@ -351,7 +351,7 @@ public class BacktestCoordinatorService {
 
         // (1) Existing owners manage their trades — but ONLY when this
         // monitor tick aligns with the owner's strategy interval.
-        Set<String> ownersAtTickStart = state.getActiveTradesByStrategy() == null
+        Set<String> ownersAtTickStart = CollectionUtils.isEmpty(state.getActiveTradesByStrategy())
                 ? Collections.emptySet()
                 : new HashSet<>(state.getActiveTradesByStrategy().keySet());
         for (String ownerCode : ownersAtTickStart) {
@@ -380,13 +380,13 @@ public class BacktestCoordinatorService {
             Map<String, StrategySizing> sizingByStrategy
     ) {
         StrategyExecutorEntry ownerEntry = findExecutorByCode(executors, ownerCode);
-        if (ownerEntry == null) return;
+        if (ObjectUtils.isEmpty(ownerEntry)) return;
         IntervalContext ic = perStrategyContext.get(ownerCode);
-        if (ic == null) return;
+        if (ObjectUtils.isEmpty(ic)) return;
         MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
-        if (strategyCandle == null) return;  // owner's bar isn't closing yet
+        if (ObjectUtils.isEmpty(strategyCandle)) return;  // owner's bar isn't closing yet
         FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
-        if (strategyFeature == null) return;
+        if (ObjectUtils.isEmpty(strategyFeature)) return;
 
         PositionSnapshot ownerSnapshot = buildPositionSnapshotFor(state, ownerEntry.code());
         int ownerOpenCount = countOpenPositionsFor(state, ownerEntry.code());
@@ -435,7 +435,7 @@ public class BacktestCoordinatorService {
         if (state.hasActiveTradeFor(entry.code()) || state.hasPendingEntryFor(entry.code())) return;
 
         IntervalContext ic = perStrategyContext.get(entry.code());
-        if (ic == null) return;
+        if (ObjectUtils.isEmpty(ic)) return;
 
         // Per-interval-group cap (matches live's
         // LiveOrchestratorCoordinatorService.fanOutForEntry semantic):
@@ -448,9 +448,9 @@ public class BacktestCoordinatorService {
         }
 
         MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
-        if (strategyCandle == null) return;
+        if (ObjectUtils.isEmpty(strategyCandle)) return;
         FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
-        if (strategyFeature == null) return;
+        if (ObjectUtils.isEmpty(strategyFeature)) return;
 
         // Entry path: this strategy has no trade by construction (filtered
         // above). Snapshot/count/hasOpenTrade reflect THIS strategy's empty
@@ -540,7 +540,7 @@ public class BacktestCoordinatorService {
      * caller short-circuits to allow.
      */
     private Account resolveBacktestAccount(BacktestState state, AccountStrategy syntheticAs) {
-        if (syntheticAs == null || syntheticAs.getAccountId() == null) return null;
+        if (ObjectUtils.isEmpty(syntheticAs) || syntheticAs.getAccountId() == null) return null;
         UUID accountId = syntheticAs.getAccountId();
         return state.getAccountCache().computeIfAbsent(
                 accountId,
@@ -566,7 +566,7 @@ public class BacktestCoordinatorService {
     }
 
     private static void putIfPresent(Map<String, Boolean> map, String key, Boolean v) {
-        if (v != null) map.put(key, v);
+        if (ObjectUtils.isNotEmpty(v)) map.put(key, v);
     }
 
     /**
@@ -586,11 +586,11 @@ public class BacktestCoordinatorService {
             Map<String, StrategySizing> sizingByStrategy
     ) {
         IntervalContext ic = perStrategyContext.get(only.code());
-        if (ic == null) return;
+        if (ObjectUtils.isEmpty(ic)) return;
         MarketData strategyCandle = ic.candleByEndTime().get(monitorCandle.getEndTime());
-        if (strategyCandle == null) return;
+        if (ObjectUtils.isEmpty(strategyCandle)) return;
         FeatureStore strategyFeature = ic.featureByStartTime().get(strategyCandle.getStartTime());
-        if (strategyFeature == null) {
+        if (ObjectUtils.isEmpty(strategyFeature)) {
             log.warn("FeatureStore missing for symbol={} interval={} startTime={}",
                     backtestRun.getAsset(), ic.interval(), strategyCandle.getStartTime());
             return;
@@ -674,9 +674,9 @@ public class BacktestCoordinatorService {
         for (StrategyExecutorEntry entry : executors) {
             String code = entry.code();
             String resolved = primaryInterval;
-            if (intervalsByCode != null) {
+            if (ObjectUtils.isNotEmpty(intervalsByCode)) {
                 String override = intervalsByCode.get(code);
-                if (override == null && code != null) {
+                if (ObjectUtils.isEmpty(override) && StringUtils.hasText(code)) {
                     override = intervalsByCode.get(code.toUpperCase());
                 }
                 if (StringUtils.hasText(override)) resolved = override;
@@ -728,7 +728,7 @@ public class BacktestCoordinatorService {
                 .collect(Collectors.toMap(FeatureStore::getStartTime, Function.identity(),
                         (existing, replacement) -> existing));
         List<FeatureStore> sortedFeatures = features.stream()
-                .filter(f -> f != null && f.getStartTime() != null)
+                .filter(f -> ObjectUtils.isNotEmpty(f) && f.getStartTime() != null)
                 .sorted(Comparator.comparing(FeatureStore::getStartTime))
                 .toList();
         log.info("Loaded multi-interval stream | symbol={} interval={} candles={} features={}",
@@ -790,17 +790,17 @@ public class BacktestCoordinatorService {
         EnrichedStrategyContext enrichedContext =
                 strategyContextEnrichmentService.enrich(baseContext, requirements);
 
-        if (requirements != null && requirements.isRequireBiasTimeframe()) {
+        if (ObjectUtils.isNotEmpty(requirements) && requirements.isRequireBiasTimeframe()) {
             MarketData resolvedBiasMarket = resolveLatestCompletedBiasCandle(
                     biasData.biasCandles(), monitorCandle.getEndTime());
             enrichedContext.setBiasMarketData(resolvedBiasMarket);
-            if (resolvedBiasMarket != null) {
+            if (ObjectUtils.isNotEmpty(resolvedBiasMarket)) {
                 enrichedContext.setBiasFeatureStore(
                         biasData.biasFeatureByStartTime().get(resolvedBiasMarket.getStartTime()));
             }
         }
 
-        if (requirements != null && requirements.isRequirePreviousFeatureStore()) {
+        if (ObjectUtils.isNotEmpty(requirements) && requirements.isRequirePreviousFeatureStore()) {
             enrichedContext.setPreviousFeatureStore(
                     resolvePreviousFeatureStore(sortedStrategyFeatures, strategyCandle.getStartTime()));
         }
@@ -809,7 +809,7 @@ public class BacktestCoordinatorService {
     }
 
     private boolean isEntryDecision(StrategyDecision decision) {
-        if (decision == null || decision.getDecisionType() == null) return false;
+        if (ObjectUtils.isEmpty(decision) || decision.getDecisionType() == null) return false;
         return decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
                 || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
     }
@@ -835,7 +835,7 @@ public class BacktestCoordinatorService {
 
         for (StrategyExecutorEntry entry : executors) {
             StrategyRequirements req = entry.executor().getRequirements();
-            if (req == null
+            if (ObjectUtils.isEmpty(req)
                     || !req.isRequireBiasTimeframe()
                     || !StringUtils.hasText(req.getBiasInterval())) {
                 byStrategy.put(entry.code(), empty);
@@ -851,9 +851,9 @@ public class BacktestCoordinatorService {
 
     /** Look up a strategy's bias series; falls back to an empty one when missing. */
     private BiasData biasFor(Map<String, BiasData> biasByStrategy, String strategyCode) {
-        if (biasByStrategy == null) return new BiasData(List.of(), Map.of());
+        if (CollectionUtils.isEmpty(biasByStrategy)) return new BiasData(List.of(), Map.of());
         BiasData b = biasByStrategy.get(strategyCode);
-        return b == null ? new BiasData(List.of(), Map.of()) : b;
+        return ObjectUtils.isEmpty(b) ? new BiasData(List.of(), Map.of()) : b;
     }
 
     private BiasData loadBiasFor(BacktestRun backtestRun, String biasInterval) {
@@ -865,7 +865,7 @@ public class BacktestCoordinatorService {
                 backtestRun.getAsset(), biasInterval,
                 backtestRun.getStartTime(), backtestRun.getEndTime());
 
-        Map<LocalDateTime, FeatureStore> biasFeatureByStartTime = biasFeatures == null
+        Map<LocalDateTime, FeatureStore> biasFeatureByStartTime = CollectionUtils.isEmpty(biasFeatures)
                 ? Map.of()
                 : biasFeatures.stream()
                         .filter(Objects::nonNull)
@@ -874,7 +874,7 @@ public class BacktestCoordinatorService {
                                 Function.identity(),
                                 (existing, replacement) -> existing));
 
-        List<MarketData> sortedBiasCandles = biasCandles == null
+        List<MarketData> sortedBiasCandles = CollectionUtils.isEmpty(biasCandles)
                 ? List.of()
                 : biasCandles.stream()
                         .filter(Objects::nonNull)
@@ -883,7 +883,7 @@ public class BacktestCoordinatorService {
 
         log.info("Loaded bias stream | symbol={} biasInterval={} candles={} features={}",
                 backtestRun.getAsset(), biasInterval, sortedBiasCandles.size(),
-                biasFeatures == null ? 0 : biasFeatures.size());
+                CollectionUtils.isEmpty(biasFeatures) ? 0 : biasFeatures.size());
         return new BiasData(sortedBiasCandles, biasFeatureByStartTime);
     }
 
@@ -941,7 +941,7 @@ public class BacktestCoordinatorService {
     private PositionSnapshot buildPositionSnapshotFor(BacktestState state, String strategyCode) {
         BacktestTrade trade = strategyTrade(state, strategyCode);
         List<BacktestTradePosition> positions = strategyPositions(state, strategyCode);
-        if (trade == null || CollectionUtils.isEmpty(positions)) {
+        if (ObjectUtils.isEmpty(trade) || CollectionUtils.isEmpty(positions)) {
             return PositionSnapshot.builder()
                     .hasOpenPosition(false)
                     .build();
@@ -961,7 +961,7 @@ public class BacktestCoordinatorService {
     }
 
     private int countOpenPositionsFor(BacktestState state, String strategyCode) {
-        if (state == null) return 0;
+        if (ObjectUtils.isEmpty(state)) return 0;
         List<BacktestTradePosition> positions = strategyPositions(state, strategyCode);
         if (CollectionUtils.isEmpty(positions)) return 0;
         return (int) positions.stream()
@@ -970,16 +970,16 @@ public class BacktestCoordinatorService {
     }
 
     private boolean hasOpenTradeFor(BacktestState state, String strategyCode) {
-        if (state == null) return false;
+        if (ObjectUtils.isEmpty(state)) return false;
         List<BacktestTradePosition> positions = strategyPositions(state, strategyCode);
-        return positions != null
+        return ObjectUtils.isNotEmpty(positions)
                 && positions.stream().anyMatch(p -> "OPEN".equalsIgnoreCase(p.getStatus()));
     }
 
     private BacktestTrade strategyTrade(BacktestState state, String strategyCode) {
-        if (state == null) return null;
+        if (ObjectUtils.isEmpty(state)) return null;
         Map<String, BacktestTrade> byStrategy = state.getActiveTradesByStrategy();
-        if (!CollectionUtils.isEmpty(byStrategy)) {
+        if (ObjectUtils.isNotEmpty(byStrategy)) {
             // Multi-trade mode is active: per-strategy entries are
             // authoritative. Absence means "this strategy has no trade",
             // NOT "fall through to the legacy mirror" — the mirror points
@@ -987,7 +987,7 @@ public class BacktestCoordinatorService {
             // another strategy's position into this strategy's evaluation.
             // Use BacktestState's case-insensitive accessor so the lookup
             // matches the upper-cased keys written by addActiveTrade.
-            return strategyCode == null ? null : state.getActiveTradeFor(strategyCode);
+            return StringUtils.isEmpty(strategyCode) ? null : state.getActiveTradeFor(strategyCode);
         }
         // No multi-trade entries — single-strategy / pre-B1 path. The
         // legacy mirror is the only source, and there's only one trade
@@ -996,15 +996,15 @@ public class BacktestCoordinatorService {
     }
 
     private List<BacktestTradePosition> strategyPositions(BacktestState state, String strategyCode) {
-        if (state == null) return List.of();
+        if (ObjectUtils.isEmpty(state)) return List.of();
         Map<String, List<BacktestTradePosition>> byStrategy = state.getActiveTradePositionsByStrategy();
-        if (!CollectionUtils.isEmpty(byStrategy)) {
+        if (ObjectUtils.isNotEmpty(byStrategy)) {
             // See strategyTrade — same rule applies to positions.
-            if (strategyCode == null) return List.of();
+            if (StringUtils.isEmpty(strategyCode)) return List.of();
             return state.getActivePositionsFor(strategyCode);
         }
         List<BacktestTradePosition> legacy = state.getActiveTradePositions();
-        return legacy == null ? List.of() : legacy;
+        return CollectionUtils.isEmpty(legacy) ? List.of() : legacy;
     }
 
     private String resolveStrategyLookupCode(BacktestRun backtestRun) {
@@ -1077,15 +1077,15 @@ public class BacktestCoordinatorService {
         Map<String, UUID> idMap = backtestRun.getStrategyAccountStrategyIds();
 
         for (String code : codes) {
-            UUID resolvedId = (idMap != null && code != null && idMap.containsKey(code))
+            UUID resolvedId = (ObjectUtils.isNotEmpty(idMap) && StringUtils.hasText(code) && idMap.containsKey(code))
                     ? idMap.get(code)
                     : backtestRun.getAccountStrategyId();
-            if (resolvedId == null) {
+            if (ObjectUtils.isEmpty(resolvedId)) {
                 out.put(code, Integer.MAX_VALUE);
                 continue;
             }
             AccountStrategy persisted = accountStrategyRepository.findById(resolvedId).orElse(null);
-            if (persisted != null && persisted.getPriorityOrder() != null) {
+            if (ObjectUtils.isNotEmpty(persisted) && ObjectUtils.isNotEmpty(persisted.getPriorityOrder())) {
                 out.put(code, persisted.getPriorityOrder());
             } else {
                 out.put(code, Integer.MAX_VALUE);
@@ -1096,7 +1096,7 @@ public class BacktestCoordinatorService {
 
     /**
      * Merges multiple {@link StrategyRequirements} using OR-logic for boolean flags.
-     * The first non-null bias interval is used.
+     * The first non-empty bias interval is used.
      */
     private StrategyRequirements mergeRequirements(List<StrategyRequirements> list) {
         if (CollectionUtils.isEmpty(list)) {
@@ -1106,15 +1106,15 @@ public class BacktestCoordinatorService {
             return list.getFirst();
         }
 
-        boolean biasTimeframe          = list.stream().anyMatch(r -> r != null && r.isRequireBiasTimeframe());
-        boolean regimeSnapshot         = list.stream().anyMatch(r -> r != null && r.isRequireRegimeSnapshot());
-        boolean volatilitySnapshot     = list.stream().anyMatch(r -> r != null && r.isRequireVolatilitySnapshot());
-        boolean riskSnapshot           = list.stream().anyMatch(r -> r != null && r.isRequireRiskSnapshot());
-        boolean marketQualitySnapshot  = list.stream().anyMatch(r -> r != null && r.isRequireMarketQualitySnapshot());
-        boolean previousFeatureStore   = list.stream().anyMatch(r -> r != null && r.isRequirePreviousFeatureStore());
+        boolean biasTimeframe          = list.stream().anyMatch(r -> ObjectUtils.isNotEmpty(r) && r.isRequireBiasTimeframe());
+        boolean regimeSnapshot         = list.stream().anyMatch(r -> ObjectUtils.isNotEmpty(r) && r.isRequireRegimeSnapshot());
+        boolean volatilitySnapshot     = list.stream().anyMatch(r -> ObjectUtils.isNotEmpty(r) && r.isRequireVolatilitySnapshot());
+        boolean riskSnapshot           = list.stream().anyMatch(r -> ObjectUtils.isNotEmpty(r) && r.isRequireRiskSnapshot());
+        boolean marketQualitySnapshot  = list.stream().anyMatch(r -> ObjectUtils.isNotEmpty(r) && r.isRequireMarketQualitySnapshot());
+        boolean previousFeatureStore   = list.stream().anyMatch(r -> ObjectUtils.isNotEmpty(r) && r.isRequirePreviousFeatureStore());
 
         String biasInterval = list.stream()
-                .filter(r -> r != null && StringUtils.hasText(r.getBiasInterval()))
+                .filter(r -> ObjectUtils.isNotEmpty(r) && StringUtils.hasText(r.getBiasInterval()))
                 .map(StrategyRequirements::getBiasInterval)
                 .findFirst()
                 .orElse(null);
@@ -1131,7 +1131,7 @@ public class BacktestCoordinatorService {
     }
 
     private StrategyExecutorEntry findExecutorByCode(List<StrategyExecutorEntry> executors, String code) {
-        if (code == null || executors == null) return null;
+        if (StringUtils.isEmpty(code) || CollectionUtils.isEmpty(executors)) return null;
         return executors.stream()
                 .filter(e -> code.equalsIgnoreCase(e.code()))
                 .findFirst()
@@ -1154,10 +1154,10 @@ public class BacktestCoordinatorService {
             String interval,
             Map<String, IntervalContext> perStrategyContext
     ) {
-        if (interval == null) return false;
+        if (StringUtils.isEmpty(interval)) return false;
         for (StrategyExecutorEntry entry : executors) {
             IntervalContext ic = perStrategyContext.get(entry.code());
-            if (ic == null || !interval.equals(ic.interval())) continue;
+            if (ObjectUtils.isEmpty(ic) || !interval.equals(ic.interval())) continue;
             if (state.hasActiveTradeFor(entry.code()) || state.hasPendingEntryFor(entry.code())) {
                 return true;
             }
@@ -1188,7 +1188,7 @@ public class BacktestCoordinatorService {
             BacktestRun backtestRun, String strategyCode, String resolvedInterval,
             Map<String, StrategySizing> sizingByStrategy
     ) {
-        UUID resolvedId = (backtestRun.getStrategyAccountStrategyIds() != null
+        UUID resolvedId = (ObjectUtils.isNotEmpty(backtestRun.getStrategyAccountStrategyIds())
                 && backtestRun.getStrategyAccountStrategyIds().containsKey(strategyCode))
                 ? backtestRun.getStrategyAccountStrategyIds().get(strategyCode)
                 : backtestRun.getAccountStrategyId();
@@ -1208,7 +1208,7 @@ public class BacktestCoordinatorService {
         // allocation so the synthetic AS mirrors the live row's sizing
         // model. Falls back to legacy 100% allocation + risk-based OFF when
         // no entry exists (single-strategy legacy runs etc).
-        StrategySizing sizing = (sizingByStrategy != null && strategyCode != null
+        StrategySizing sizing = (ObjectUtils.isNotEmpty(sizingByStrategy) && StringUtils.hasText(strategyCode)
                 && sizingByStrategy.containsKey(strategyCode))
                 ? sizingByStrategy.get(strategyCode)
                 : StrategySizing.legacy(new BigDecimal("100"));
@@ -1243,7 +1243,7 @@ public class BacktestCoordinatorService {
                 // synthetic AS so the gate (when enabled) denies entries
                 // for a currently-tripped strategy in backtest, matching live.
                 .isKillSwitchTripped(
-                        sizing.isKillSwitchTripped() != null ? sizing.isKillSwitchTripped() : Boolean.FALSE)
+                        ObjectUtils.isNotEmpty(sizing.isKillSwitchTripped()) ? sizing.isKillSwitchTripped() : Boolean.FALSE)
                 .killSwitchReason(sizing.killSwitchReason())
                 .build();
     }
@@ -1384,30 +1384,30 @@ public class BacktestCoordinatorService {
     }
 
     private static Boolean defaultTrue(Boolean flag) {
-        return flag != null ? flag : Boolean.TRUE;
+        return ObjectUtils.isNotEmpty(flag) ? flag : Boolean.TRUE;
     }
 
     // Direction flags precedence: (1) wizard per-strategy override (V58 strategyAllowLong /
     // strategyAllowShort), (2) bound account_strategy, (3) run-level flag (permissive
     // fallback for ad-hoc specs that don't pin an account_strategy).
     private Boolean resolveEffectiveAllowLong(AccountStrategy persisted, Boolean override, BacktestRun run) {
-        Boolean base = persisted != null ? defaultTrue(persisted.getAllowLong()) : resolveAllowLong(run);
-        return override != null ? override : base;
+        Boolean base = ObjectUtils.isNotEmpty(persisted) ? defaultTrue(persisted.getAllowLong()) : resolveAllowLong(run);
+        return ObjectUtils.isNotEmpty(override) ? override : base;
     }
 
     private Boolean resolveEffectiveAllowShort(AccountStrategy persisted, Boolean override, BacktestRun run) {
-        Boolean base = persisted != null ? defaultTrue(persisted.getAllowShort()) : resolveAllowShort(run);
-        return override != null ? override : base;
+        Boolean base = ObjectUtils.isNotEmpty(persisted) ? defaultTrue(persisted.getAllowShort()) : resolveAllowShort(run);
+        return ObjectUtils.isNotEmpty(override) ? override : base;
     }
 
     private StrategySizing buildSizingRecord(BigDecimal allocation, BigDecimal riskOverride,
             AccountStrategy persisted, Boolean allowLong, Boolean allowShort) {
-        if (persisted == null) {
+        if (ObjectUtils.isEmpty(persisted)) {
             // No persisted row resolved. A wizard riskOverride is explicit operator
             // intent — honour it even without a persisted anchor so it isn't dropped
             // on ad-hoc runs that don't pin an account_strategy. Gate toggles
             // default off (StrategySizing.legacy would also produce this).
-            if (riskOverride != null) {
+            if (ObjectUtils.isNotEmpty(riskOverride)) {
                 return new StrategySizing(allocation, Boolean.TRUE, riskOverride, allowLong, allowShort,
                         Boolean.FALSE, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE,
                         Boolean.FALSE, null, null);
@@ -1417,11 +1417,11 @@ public class BacktestCoordinatorService {
         Boolean useRisk = persisted.getUseRiskBasedSizing();
         BigDecimal riskPct;
         // V57 — wizard-level riskPct override wins and implicitly forces risk-based sizing on.
-        if (riskOverride != null) {
+        if (ObjectUtils.isNotEmpty(riskOverride)) {
             useRisk = Boolean.TRUE;
             riskPct = riskOverride;
         } else {
-            riskPct = persisted.getRiskPct() != null ? persisted.getRiskPct() : new BigDecimal("0.0500");
+            riskPct = ObjectUtils.isNotEmpty(persisted.getRiskPct()) ? persisted.getRiskPct() : new BigDecimal("0.0500");
         }
         // V62 — copy gate toggles from the persisted row so the synthetic
         // AccountStrategy the engine sees during backtest mirrors live's gate
@@ -1455,9 +1455,9 @@ public class BacktestCoordinatorService {
     }
 
     private BigDecimal resolveWizardOverride(Map<String, BigDecimal> wizardOverrides, String code) {
-        if (wizardOverrides == null || code == null) return null;
+        if (CollectionUtils.isEmpty(wizardOverrides) || StringUtils.isEmpty(code)) return null;
         BigDecimal override = wizardOverrides.get(code.toUpperCase());
-        return (override != null && override.signum() > 0) ? override : null;
+        return (ObjectUtils.isNotEmpty(override) && override.signum() > 0) ? override : null;
     }
 
     /**
@@ -1471,17 +1471,17 @@ public class BacktestCoordinatorService {
     // to false would silently override every strategy not in the map.
     @SuppressWarnings("java:S2447")
     private Boolean resolveBoolOverride(Map<String, Boolean> wizardOverrides, String code) {
-        if (wizardOverrides == null || code == null) return null;
+        if (CollectionUtils.isEmpty(wizardOverrides) || StringUtils.isEmpty(code)) return null;
         return wizardOverrides.get(code.toUpperCase());
     }
 
     private AccountStrategy resolvePersistedAccountStrategy(
             Map<String, UUID> idMap, String code, BacktestRun backtestRun
     ) {
-        UUID resolvedId = (idMap != null && code != null && idMap.containsKey(code))
-                ? idMap.get(code)
-                : backtestRun.getAccountStrategyId();
-        if (resolvedId == null) return null;
+        UUID resolvedId = (CollectionUtils.isEmpty(idMap) || StringUtils.isEmpty(code) || !idMap.containsKey(code))
+                ? backtestRun.getAccountStrategyId()
+                : idMap.get(code);
+        if (ObjectUtils.isEmpty(resolvedId)) return null;
         return accountStrategyRepository.findById(resolvedId).orElse(null);
     }
 
@@ -1490,7 +1490,7 @@ public class BacktestCoordinatorService {
             BacktestState state,
             MarketData finalCandle
     ) {
-        if (finalCandle == null) {
+        if (ObjectUtils.isEmpty(finalCandle)) {
             return;
         }
 
@@ -1498,16 +1498,15 @@ public class BacktestCoordinatorService {
         // still-open legs get force-closed at end-of-backtest. Falls back to
         // the single-slot iteration when no multi-trade state is registered.
         List<BacktestTradePosition> allPositions = new ArrayList<>();
-        if (state.getActiveTradePositionsByStrategy() != null
-                && !CollectionUtils.isEmpty(state.getActiveTradePositionsByStrategy())) {
+        if (ObjectUtils.isNotEmpty(state.getActiveTradePositionsByStrategy())) {
             for (List<BacktestTradePosition> perStrategy
                     : state.getActiveTradePositionsByStrategy().values()) {
-                if (perStrategy != null) allPositions.addAll(perStrategy);
+                if (ObjectUtils.isNotEmpty(perStrategy)) allPositions.addAll(perStrategy);
             }
-        } else if (state.getActiveTradePositions() != null) {
+        } else if (ObjectUtils.isNotEmpty(state.getActiveTradePositions())) {
             allPositions.addAll(state.getActiveTradePositions());
         }
-        if (allPositions.isEmpty()) {
+        if (CollectionUtils.isEmpty(allPositions)) {
             return;
         }
 
@@ -1534,11 +1533,11 @@ public class BacktestCoordinatorService {
             BacktestState state,
             MarketData strategyCandle
     ) {
-        if (state == null || strategyCandle == null || strategyCandle.getClosePrice() == null) {
+        if (ObjectUtils.isEmpty(state) || ObjectUtils.isEmpty(strategyCandle) || strategyCandle.getClosePrice() == null) {
             return BigDecimal.ZERO;
         }
 
-        if (state.getCashBalance() == null || state.getCashBalance().compareTo(BigDecimal.ZERO) <= 0) {
+        if (ObjectUtils.isEmpty(state.getCashBalance()) || state.getCashBalance().compareTo(BigDecimal.ZERO) <= 0) {
             return BigDecimal.ZERO;
         }
 
@@ -1551,7 +1550,7 @@ public class BacktestCoordinatorService {
     }
 
     private void validateBacktestRun(BacktestRun backtestRun) {
-        if (backtestRun == null) {
+        if (ObjectUtils.isEmpty(backtestRun)) {
             throw new IllegalArgumentException("Backtest run must not be null");
         }
 
@@ -1563,7 +1562,7 @@ public class BacktestCoordinatorService {
             throw new IllegalArgumentException("Backtest interval must not be blank");
         }
 
-        if (backtestRun.getStartTime() == null || backtestRun.getEndTime() == null) {
+        if (ObjectUtils.isEmpty(backtestRun.getStartTime()) || ObjectUtils.isEmpty(backtestRun.getEndTime())) {
             throw new IllegalArgumentException("Backtest startTime and endTime must not be null");
         }
 
@@ -1578,9 +1577,9 @@ public class BacktestCoordinatorService {
      * Must be called after updatePriceExtremes so highestPriceSinceEntry / lowestPriceSinceEntry are current.
      */
     private void updateTrailingStop(BacktestTradePosition position) {
-        if (position.getTrailingStopPrice() == null
-                || position.getInitialTrailingStopPrice() == null
-                || position.getEntryPrice() == null) {
+        if (ObjectUtils.isEmpty(position.getTrailingStopPrice())
+                || ObjectUtils.isEmpty(position.getInitialTrailingStopPrice())
+                || ObjectUtils.isEmpty(position.getEntryPrice())) {
             return;
         }
         if ("LONG".equalsIgnoreCase(position.getSide())) {
@@ -1592,7 +1591,7 @@ public class BacktestCoordinatorService {
 
     private void updateLongTrailingStop(BacktestTradePosition position) {
         BigDecimal highestPrice = position.getHighestPriceSinceEntry();
-        if (highestPrice == null) return;
+        if (ObjectUtils.isEmpty(highestPrice)) return;
         BigDecimal offset = position.getEntryPrice().subtract(position.getInitialTrailingStopPrice());
         if (offset.compareTo(BigDecimal.ZERO) <= 0) return;
         BigDecimal newTrailing = highestPrice.subtract(offset);
@@ -1603,7 +1602,7 @@ public class BacktestCoordinatorService {
 
     private void updateShortTrailingStop(BacktestTradePosition position) {
         BigDecimal lowestPrice = position.getLowestPriceSinceEntry();
-        if (lowestPrice == null) return;
+        if (ObjectUtils.isEmpty(lowestPrice)) return;
         BigDecimal offset = position.getInitialTrailingStopPrice().subtract(position.getEntryPrice());
         if (offset.compareTo(BigDecimal.ZERO) <= 0) return;
         BigDecimal newTrailing = lowestPrice.add(offset);
@@ -1625,16 +1624,16 @@ public class BacktestCoordinatorService {
     }
 
     private void updateHighestPrice(BacktestTradePosition position, BigDecimal price) {
-        if (price != null
-                && (position.getHighestPriceSinceEntry() == null
+        if (ObjectUtils.isNotEmpty(price)
+                && (ObjectUtils.isEmpty(position.getHighestPriceSinceEntry())
                 || price.compareTo(position.getHighestPriceSinceEntry()) > 0)) {
             position.setHighestPriceSinceEntry(price);
         }
     }
 
     private void updateLowestPrice(BacktestTradePosition position, BigDecimal price) {
-        if (price != null
-                && (position.getLowestPriceSinceEntry() == null
+        if (ObjectUtils.isNotEmpty(price)
+                && (ObjectUtils.isEmpty(position.getLowestPriceSinceEntry())
                 || price.compareTo(position.getLowestPriceSinceEntry()) < 0)) {
             position.setLowestPriceSinceEntry(price);
         }

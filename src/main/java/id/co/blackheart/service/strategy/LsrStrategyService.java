@@ -13,6 +13,7 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -81,11 +82,11 @@ public class LsrStrategyService implements StrategyExecutor {
 
     @Override
     public StrategyDecision execute(EnrichedStrategyContext context) {
-        if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData()) || ObjectUtils.isEmpty(context.getFeatureStore())) {
             return hold(context, "Invalid context or missing market data");
         }
 
-        UUID accountStrategyId = context.getAccountStrategy() != null
+        UUID accountStrategyId = ObjectUtils.isNotEmpty(context.getAccountStrategy())
                 ? context.getAccountStrategy().getAccountStrategyId() : null;
         LsrParams p = lsrStrategyParamService.getParams(accountStrategyId);
 
@@ -110,11 +111,11 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         PositionSnapshot snap = context.getPositionSnapshot();
-        if (context.hasTradablePosition() && snap != null) {
+        if (context.hasTradablePosition() && ObjectUtils.isNotEmpty(snap)) {
             return managePosition(context, md, fs, snap, p);
         }
 
-        if (context.getPreviousFeatureStore() == null) {
+        if (ObjectUtils.isEmpty(context.getPreviousFeatureStore())) {
             return hold(context, "Previous FeatureStore unavailable");
         }
 
@@ -128,7 +129,7 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         StrategyDecision entry = tryEntries(context, md, fs, prevFs, regime, p);
-        return entry != null ? entry : hold(context, "No qualified LSR adaptive v5 setup");
+        return ObjectUtils.isNotEmpty(entry) ? entry : hold(context, "No qualified LSR adaptive v5 setup");
     }
 
     private StrategyDecision tryEntries(EnrichedStrategyContext context, MarketData md, FeatureStore fs,
@@ -138,10 +139,10 @@ public class LsrStrategyService implements StrategyExecutor {
                 || regime == RegimeState.NEUTRAL)
                 && context.isLongAllowed()) {
             StrategyDecision sweepLong = tryLongSweepReclaimEntry(context, md, fs, prevFs, regime, p);
-            if (sweepLong != null) return sweepLong;
+            if (ObjectUtils.isNotEmpty(sweepLong)) return sweepLong;
 
             StrategyDecision contLong = tryLongContinuationReclaimEntry(context, md, fs, prevFs, regime, p);
-            if (contLong != null) return contLong;
+            if (ObjectUtils.isNotEmpty(contLong)) return contLong;
         }
 
         if ((regime == RegimeState.BEAR_TREND || regime == RegimeState.RANGING)
@@ -163,7 +164,7 @@ public class LsrStrategyService implements StrategyExecutor {
         FeatureStore bias = context.getBiasFeatureStore();
         MarketData biasData = context.getBiasMarketData();
 
-        if (bias == null || biasData == null) {
+        if (ObjectUtils.isEmpty(bias) || ObjectUtils.isEmpty(biasData)) {
             return RegimeState.NEUTRAL;
         }
 
@@ -262,7 +263,7 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         FeatureStore biasFs = context.getBiasFeatureStore();
-        if (biasFs != null && "NEUTRAL".equalsIgnoreCase(biasFs.getTrendRegime())) {
+        if (ObjectUtils.isNotEmpty(biasFs) && "NEUTRAL".equalsIgnoreCase(biasFs.getTrendRegime())) {
             return null;
         }
 
@@ -361,7 +362,7 @@ public class LsrStrategyService implements StrategyExecutor {
         }
 
         FeatureStore biasFsCont = context.getBiasFeatureStore();
-        if (biasFsCont != null && "NEUTRAL".equalsIgnoreCase(biasFsCont.getTrendRegime())) {
+        if (ObjectUtils.isNotEmpty(biasFsCont) && "NEUTRAL".equalsIgnoreCase(biasFsCont.getTrendRegime())) {
             return null;
         }
 
@@ -516,7 +517,7 @@ public class LsrStrategyService implements StrategyExecutor {
             PositionSnapshot snap,
             LsrParams p
     ) {
-        if (snap.getSide() == null || snap.getEntryPrice() == null || snap.getCurrentStopLossPrice() == null) {
+        if (ObjectUtils.isEmpty(snap.getSide()) || ObjectUtils.isEmpty(snap.getEntryPrice()) || ObjectUtils.isEmpty(snap.getCurrentStopLossPrice())) {
             return hold(context, "Position management incomplete");
         }
 
@@ -847,16 +848,16 @@ public class LsrStrategyService implements StrategyExecutor {
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
     private boolean isMarketVetoed(EnrichedStrategyContext context) {
-        if (context.getMarketQualitySnapshot() != null
+        if (ObjectUtils.isNotEmpty(context.getMarketQualitySnapshot())
                 && Boolean.FALSE.equals(context.getMarketQualitySnapshot().getTradable())) {
             return true;
         }
 
         VolatilitySnapshot vol = context.getVolatilitySnapshot();
-        return vol != null
-                && vol.getJumpRiskScore() != null
-                && context.getRuntimeConfig() != null
-                && context.getRuntimeConfig().getMaxJumpRiskScore() != null
+        return ObjectUtils.isNotEmpty(vol)
+                && ObjectUtils.isNotEmpty(vol.getJumpRiskScore())
+                && ObjectUtils.isNotEmpty(context.getRuntimeConfig())
+                && ObjectUtils.isNotEmpty(context.getRuntimeConfig().getMaxJumpRiskScore())
                 && vol.getJumpRiskScore().compareTo(context.getRuntimeConfig().getMaxJumpRiskScore()) > 0;
     }
 
@@ -872,28 +873,28 @@ public class LsrStrategyService implements StrategyExecutor {
     }
 
     private BigDecimal resolveAtr(FeatureStore fs) {
-        return (fs != null && fs.getAtr() != null && fs.getAtr().compareTo(ZERO) > 0)
+        return (ObjectUtils.isNotEmpty(fs) && ObjectUtils.isNotEmpty(fs.getAtr()) && fs.getAtr().compareTo(ZERO) > 0)
                 ? fs.getAtr() : ONE;
     }
 
     private BigDecimal resolveRegimeScore(EnrichedStrategyContext context) {
         RegimeSnapshot r = context.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getTrendScore())) ? r.getTrendScore() : ZERO;
     }
 
     private BigDecimal resolveJumpRisk(EnrichedStrategyContext context) {
-        if (context == null) return ZERO;
+        if (ObjectUtils.isEmpty(context)) return ZERO;
         VolatilitySnapshot v = context.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(v) && ObjectUtils.isNotEmpty(v.getJumpRiskScore())) ? v.getJumpRiskScore() : ZERO;
     }
 
     private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext context) {
         RiskSnapshot r = context.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getRiskMultiplier())) ? r.getRiskMultiplier() : ONE;
     }
 
     private long computeBarsInTrade(PositionSnapshot snap, MarketData md, String interval) {
-        if (snap.getEntryTime() == null || md.getEndTime() == null) return 0;
+        if (ObjectUtils.isEmpty(snap.getEntryTime()) || ObjectUtils.isEmpty(md.getEndTime())) return 0;
 
         long minutes = Duration.between(snap.getEntryTime(), md.getEndTime()).toMinutes();
         if (minutes < 0) return 0;
@@ -908,7 +909,7 @@ public class LsrStrategyService implements StrategyExecutor {
     }
 
     private String inferSetupType(PositionSnapshot snap) {
-        if (snap.getPositionRole() == null) {
+        if (ObjectUtils.isEmpty(snap.getPositionRole())) {
             return SETUP_LONG_SWEEP;
         }
         String role = snap.getPositionRole().toUpperCase();
@@ -936,7 +937,7 @@ public class LsrStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(context != null ? context.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(context) ? context.getInterval() : null)
                 .signalType(SIGNAL_TYPE_SWEEP)
                 .reason(reason)
                 .decisionTime(LocalDateTime.now())
@@ -950,7 +951,7 @@ public class LsrStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(context != null ? context.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(context) ? context.getInterval() : null)
                 .vetoed(Boolean.TRUE)
                 .vetoReason(vetoReason)
                 .reason("LSR_V5 vetoed by risk layer")

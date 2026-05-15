@@ -1,0 +1,53 @@
+{
+  "entry_type": "STRATEGY_OUTCOME",
+  "strategy_code": null,
+  "title": "ARCHETYPE_EXHAUSTION_2026-05-11 - All BTCUSDT archetypes exhausted or NO_EDGE confirmed",
+  "content": "Updated exhaustion after session 9 (2026-05-10/11). All available spec-driven archetypes on BTCUSDT have been null-screened or fully swept. Results: (1) DCB 4h: NOT_ROBUST walk-forward (regime collapse 2025-2026). (2) DCB 1h: NO_EDGE null-screen. (3) DCB 15m: NO_EDGE null-screen. (4) MRO 1h/4h/15m: NO_EDGE null-screens. (5) MMR 1h: NO_EDGE null-screen. (6) MMR 4h: NO_EDGE null-screen (all 8 draws PF<0.72). (7) TPB 1h: Frequency-starved (n=2-32). (8) TPB 4h: Frequency-starved (n=0-3 native, worst case). (9) TPR: Frequency-starved all intervals. (10) FCARRY: Blocked by Java param bug. DCB 5m remains untested (currently running null-screen). Remaining credible options require operator action: ETH backfill, FCARRY fix, or a new spec archetype.",
+  "structured_data": {
+    "kind": "ARCHETYPE_EXHAUSTION",
+    "date": "2026-05-11",
+    "session": 9,
+    "archetype_status": {
+      "DCB_5m": "TESTING NOW (null-screen running)",
+      "DCB_15m": "NO_EDGE",
+      "DCB_1h": "NO_EDGE",
+      "DCB_4h": "NOT_ROBUST_WF",
+      "MRO_15m": "NO_EDGE",
+      "MRO_1h": "NO_EDGE",
+      "MRO_4h": "NO_EDGE",
+      "MMR_1h": "NO_EDGE",
+      "MMR_4h": "NO_EDGE",
+      "TPB_1h": "DISCARDED (frequency-starved)",
+      "TPB_4h": "DISCARDED (frequency-starved)",
+      "TPR": "DISCARDED (frequency-starved all intervals)",
+      "FCARRY": "BLOCKED (Java param bug)"
+    },
+    "data_wishlist": [
+      {
+        "priority": 1,
+        "action": "Fix FCARRY param override bug",
+        "file": "src/main/java/id/co/blackheart/service/strategy/FundingCarryStrategyService.java",
+        "effort": "1-line Java fix: replace strategyParamService.getActiveOverrides() with BacktestParamOverrideContext approach",
+        "impact": "Enables FCARRY sweep with varying entryZ, positionSizePct, fundingThreshBps. Funding-rate carry is fundamentally regime-neutral (positive when funding is positive, regardless of BTC price direction).",
+        "unlocks": "FCARRY BTCUSDT 1h/4h sweep"
+      },
+      {
+        "priority": 2,
+        "action": "Backfill ETHUSDT feature_store for all 4 intervals",
+        "effort": "Operator triggers backfill job",
+        "impact": "Opens ETH for DCB/MRO/MMR. ETH had different regime dynamics in 2025-2026. DCB 4h ETH may not have the 2024 bias issue.",
+        "unlocks": "DCB ETHUSDT 4h, MRO ETHUSDT 4h, MMR ETHUSDT 4h"
+      },
+      {
+        "priority": 3,
+        "action": "Design and deploy a new spec archetype targeting the 2025-2026 range-bound regime",
+        "effort": "New engine class + YAML spec + operator deploy",
+        "impact": "All existing archetypes (DCB=breakout, MRO/MMR=mean-reversion) are tuned for specific regimes. A dual-mode strategy that adapts between trending and range-bound regimes may find the missing edge.",
+        "unlocks": "New archetype tailored to 2025-2026 choppy BTC"
+      }
+    ],
+    "key_finding": "All tested strategies show regime-dependent performance. DCB works in 2024 trending BTC but fails in 2025-2026 choppy market. Mean-reversion strategies (MRO, MMR) show no edge at any interval on BTCUSDT. The 4th strategy requires either (a) a regime-neutral mechanism (FCARRY), (b) a different symbol (ETH), or (c) a new archetype design."
+  },
+  "status": "ACTIVE",
+  "created_by": "quant-researcher"
+}

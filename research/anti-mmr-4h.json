@@ -1,0 +1,47 @@
+{
+  "entry_type": "ANTI_PATTERN",
+  "strategy_code": "MMR",
+  "interval_name": "4h",
+  "instrument": "BTCUSDT",
+  "title": "NULL_SCREEN MMR BTCUSDT 4h -> NO_EDGE_DETECTED",
+  "content": "Null screen on MMR (BTCUSDT 4h, n_draws=8, seed=42). Verdict: NO_EDGE_DETECTED. P95(PF)=0.694 < 1.2 OR share(PF>=1.2)=0.0 < 0.1. PF range: 0.507-0.709 across 8 draws (n_trades=220-335 per draw). MMR mechanism (EMA200 ATR-deviation mean reversion) has no edge on BTCUSDT at 4h. Combined with 1h NO_EDGE (d1a58e1a), this falsifies the MMR hypothesis (21e868cc): the mechanism is inherently weak on BTCUSDT regardless of interval. Root cause: BTC's trend-following character overwhelms mean-reversion signals; entries at ATR extremes from EMA200 do not reliably revert to EMA50 within the holding period.",
+  "structured_data": {
+    "kind": "null_screen",
+    "seed": 42,
+    "n_draws": 8,
+    "instrument": "BTCUSDT",
+    "interval_name": "4h",
+    "strategy_code": "MMR",
+    "completed_draws": 8,
+    "distribution": {
+      "max": 0.709,
+      "p25": 0.518,
+      "p75": 0.662,
+      "p95": 0.694,
+      "mean": 0.603,
+      "median": 0.624,
+      "n_finite": 8,
+      "n_attempted": 8,
+      "share_pf_ge_1_0": 0.0,
+      "share_pf_ge_1_2": 0.0
+    },
+    "verdict": {
+      "verdict": "NO_EDGE_DETECTED",
+      "reason": "P95(PF)=0.694 < 1.2 OR share(PF>=1.2)=0.0 < 0.1. PF distribution centered at noise; archetype likely dead on this axis set."
+    },
+    "draws": [
+      {"pf": 0.507134, "n_trades": 230},
+      {"pf": 0.709478, "n_trades": 266},
+      {"pf": 0.503739, "n_trades": 248},
+      {"pf": 0.633634, "n_trades": 220},
+      {"pf": 0.665392, "n_trades": 277},
+      {"pf": 0.615514, "n_trades": 335},
+      {"pf": 0.530912, "n_trades": 303},
+      {"pf": 0.658797, "n_trades": 234}
+    ],
+    "prior_mmr_1h": "NO_EDGE (d1a58e1a)",
+    "hypothesis_falsified": "21e868cc-4476-4070-a588-94b5a6e6f7d3"
+  },
+  "status": "ACTIVE",
+  "created_by": "quant-researcher"
+}

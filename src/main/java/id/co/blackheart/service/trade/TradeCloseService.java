@@ -10,6 +10,7 @@ import id.co.blackheart.model.Account;
 import id.co.blackheart.repository.TradePositionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
@@ -40,7 +41,7 @@ public class TradeCloseService {
             String exitReason
     ) {
         TradePosition validated = validateClosePositionInputs(user, tradePosition, asset, tradeType);
-        if (validated == null) {
+        if (ObjectUtils.isEmpty(validated)) {
             return;
         }
 

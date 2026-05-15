@@ -13,6 +13,7 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -76,11 +77,11 @@ public class VcbStrategyService implements StrategyExecutor {
 
     @Override
     public StrategyDecision execute(EnrichedStrategyContext context) {
-        if (context == null || context.getMarketData() == null || context.getFeatureStore() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getMarketData()) || ObjectUtils.isEmpty(context.getFeatureStore())) {
             return hold(context, "Invalid context or missing data");
         }
 
-        UUID accountStrategyId = context.getAccountStrategy() != null
+        UUID accountStrategyId = ObjectUtils.isNotEmpty(context.getAccountStrategy())
                 ? context.getAccountStrategy().getAccountStrategyId() : null;
         VcbParams p = vcbStrategyParamService.getParams(accountStrategyId);
 
@@ -98,7 +99,7 @@ public class VcbStrategyService implements StrategyExecutor {
             return veto("Market vetoed by quality / jump-risk filter", context);
         }
 
-        if (context.hasTradablePosition() && snap != null) {
+        if (context.hasTradablePosition() && ObjectUtils.isNotEmpty(snap)) {
             return managePosition(context, marketData, feature, snap, p);
         }
 
@@ -106,26 +107,26 @@ public class VcbStrategyService implements StrategyExecutor {
 
         if (context.isLongAllowed()) {
             StrategyDecision d = tryLongEntry(context, marketData, feature, p);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
 
         if (context.isShortAllowed()) {
             StrategyDecision d = tryShortEntry(context, marketData, feature, p);
-            if (d != null) return d;
+            if (ObjectUtils.isNotEmpty(d)) return d;
         }
 
         return hold(context, "No qualified VCB setup");
     }
 
     private void logVeto(EnrichedStrategyContext context, MarketData marketData) {
-        Object tradable = context.getMarketQualitySnapshot() != null
+        Object tradable = ObjectUtils.isNotEmpty(context.getMarketQualitySnapshot())
                 ? context.getMarketQualitySnapshot().getTradable() : "null";
         log.info("VCB VETOED time={} tradable={} jumpRisk={}",
                 marketData.getEndTime(), tradable, resolveJumpRisk(context));
     }
 
     private void logEvaluation(EnrichedStrategyContext context, MarketData marketData) {
-        String prevFs = context.getPreviousFeatureStore() != null ? "present" : "NULL";
+        String prevFs = ObjectUtils.isNotEmpty(context.getPreviousFeatureStore()) ? "present" : "NULL";
         log.info("VCB evaluate time={} longAllowed={} shortAllowed={} prevFs={}",
                 marketData.getEndTime(), context.isLongAllowed(), context.isShortAllowed(), prevFs);
     }
@@ -144,7 +145,7 @@ public class VcbStrategyService implements StrategyExecutor {
         if (!passesLongGates(context, marketData, feature, p)) return null;
 
         EntrySizing sizing = computeLongSizing(marketData, feature, p);
-        if (sizing == null) return null;
+        if (ObjectUtils.isEmpty(sizing)) return null;
 
         BigDecimal signalScore = calculateLongSignalScore(context, feature, p);
         BigDecimal confidenceScore = calculateConfidenceScore(context, signalScore);
@@ -173,16 +174,16 @@ public class VcbStrategyService implements StrategyExecutor {
     private boolean passesLongGates(EnrichedStrategyContext context, MarketData marketData,
                                     FeatureStore feature, VcbParams p) {
         String trendRegime = feature.getTrendRegime();
-        if (trendRegime != null && !"BULL".equalsIgnoreCase(trendRegime)) {
+        if (ObjectUtils.isNotEmpty(trendRegime) && !"BULL".equalsIgnoreCase(trendRegime)) {
             log.info("VCB LONG gate1a FAIL [regime not BULL] time={} regime={}", marketData.getEndTime(), trendRegime);
             return false;
         }
-        if (feature.getAdx() != null && feature.getAdx().compareTo(p.getAdxEntryMax()) >= 0) {
+        if (ObjectUtils.isNotEmpty(feature.getAdx()) && feature.getAdx().compareTo(p.getAdxEntryMax()) >= 0) {
             log.info("VCB LONG gate1b FAIL [ADX too high] time={} adx={}", marketData.getEndTime(), feature.getAdx());
             return false;
         }
         if (!passesLongDiSpread(marketData, feature, p)) return false;
-        if (feature.getRsi() != null && feature.getRsi().compareTo(p.getLongRsiMin()) < 0) {
+        if (ObjectUtils.isNotEmpty(feature.getRsi()) && feature.getRsi().compareTo(p.getLongRsiMin()) < 0) {
             log.info("VCB LONG gate1d FAIL [RSI too weak] time={} rsi={}", marketData.getEndTime(), feature.getRsi());
             return false;
         }
@@ -199,7 +200,7 @@ public class VcbStrategyService implements StrategyExecutor {
     }
 
     private boolean passesLongDiSpread(MarketData marketData, FeatureStore feature, VcbParams p) {
-        if (feature.getPlusDI() == null || feature.getMinusDI() == null) return true;
+        if (ObjectUtils.isEmpty(feature.getPlusDI()) || ObjectUtils.isEmpty(feature.getMinusDI())) return true;
         BigDecimal diSpread = feature.getPlusDI().subtract(feature.getMinusDI());
         if (diSpread.compareTo(p.getLongDiSpreadMin()) < 0) {
             log.info("VCB LONG gate1c FAIL [DI spread too weak] time={} +DI={} -DI={} spread={}",
@@ -214,15 +215,15 @@ public class VcbStrategyService implements StrategyExecutor {
     private boolean passesCompressionGate(String side, MarketData marketData, FeatureStore feature,
                                           FeatureStore prevFeature, VcbParams p) {
         boolean currCompressed = isCompressionActive(feature, p);
-        boolean prevCompressed = prevFeature != null && isCompressionActive(prevFeature, p);
+        boolean prevCompressed = ObjectUtils.isNotEmpty(prevFeature) && isCompressionActive(prevFeature, p);
         if (currCompressed || prevCompressed) return true;
         log.info("VCB {} gate2 FAIL [compression] time={} curr[bbW={} kcW={} atrR={} er={}] prev[bbW={} kcW={} atrR={} er={}]",
                 side, marketData.getEndTime(),
                 feature.getBbWidth(), feature.getKcWidth(), feature.getAtrRatio(), feature.getEfficiencyRatio20(),
-                prevFeature != null ? prevFeature.getBbWidth() : "n/a",
-                prevFeature != null ? prevFeature.getKcWidth() : "n/a",
-                prevFeature != null ? prevFeature.getAtrRatio() : "n/a",
-                prevFeature != null ? prevFeature.getEfficiencyRatio20() : "n/a");
+                ObjectUtils.isNotEmpty(prevFeature) ? prevFeature.getBbWidth() : "n/a",
+                ObjectUtils.isNotEmpty(prevFeature) ? prevFeature.getKcWidth() : "n/a",
+                ObjectUtils.isNotEmpty(prevFeature) ? prevFeature.getAtrRatio() : "n/a",
+                ObjectUtils.isNotEmpty(prevFeature) ? prevFeature.getEfficiencyRatio20() : "n/a");
         return false;
     }
 
@@ -272,10 +273,10 @@ public class VcbStrategyService implements StrategyExecutor {
                 .takeProfitPrice3(null)
                 .exitStructure(EXIT_STRUCTURE)
                 .targetPositionRole(TARGET_ALL)
-                .entryAdx(feature != null ? feature.getAdx() : null)
-                .entryAtr(feature != null ? feature.getAtr() : null)
-                .entryRsi(feature != null ? feature.getRsi() : null)
-                .entryTrendRegime(feature != null ? feature.getTrendRegime() : null)
+                .entryAdx(ObjectUtils.isNotEmpty(feature) ? feature.getAdx() : null)
+                .entryAtr(ObjectUtils.isNotEmpty(feature) ? feature.getAtr() : null)
+                .entryRsi(ObjectUtils.isNotEmpty(feature) ? feature.getRsi() : null)
+                .entryTrendRegime(ObjectUtils.isNotEmpty(feature) ? feature.getTrendRegime() : null)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("ENTRY", "VCB", SIDE_LONG, "BREAKOUT", "V2_1_BALANCE"))
                 .diagnostics(buildDiagnostics(sizing.entry(), sizing.stop(), sizing.tp1()))
@@ -324,7 +325,7 @@ public class VcbStrategyService implements StrategyExecutor {
             log.info("VCB SHORT gate1a FAIL [regime not BEAR] time={} regime={}", marketData.getEndTime(), trendRegime);
             return false;
         }
-        if (feature.getAdx() != null && feature.getAdx().compareTo(p.getAdxEntryMax()) >= 0) {
+        if (ObjectUtils.isNotEmpty(feature.getAdx()) && feature.getAdx().compareTo(p.getAdxEntryMax()) >= 0) {
             log.info("VCB SHORT gate1b FAIL [ADX too high] time={} adx={}", marketData.getEndTime(), feature.getAdx());
             return false;
         }
@@ -346,7 +347,7 @@ public class VcbStrategyService implements StrategyExecutor {
     }
 
     private boolean passesShortDiSpread(MarketData marketData, FeatureStore feature, VcbParams p) {
-        if (feature.getPlusDI() == null || feature.getMinusDI() == null) return true;
+        if (ObjectUtils.isEmpty(feature.getPlusDI()) || ObjectUtils.isEmpty(feature.getMinusDI())) return true;
         BigDecimal diSpread = feature.getMinusDI().subtract(feature.getPlusDI());
         if (diSpread.compareTo(p.getShortDiSpreadMin()) < 0) {
             log.info("VCB SHORT gate1c FAIL [DI spread too weak] time={} +DI={} -DI={} spread={}",
@@ -400,10 +401,10 @@ public class VcbStrategyService implements StrategyExecutor {
                 .takeProfitPrice3(null)
                 .exitStructure(EXIT_STRUCTURE)
                 .targetPositionRole(TARGET_ALL)
-                .entryAdx(feature != null ? feature.getAdx() : null)
-                .entryAtr(feature != null ? feature.getAtr() : null)
-                .entryRsi(feature != null ? feature.getRsi() : null)
-                .entryTrendRegime(feature != null ? feature.getTrendRegime() : null)
+                .entryAdx(ObjectUtils.isNotEmpty(feature) ? feature.getAdx() : null)
+                .entryAtr(ObjectUtils.isNotEmpty(feature) ? feature.getAtr() : null)
+                .entryRsi(ObjectUtils.isNotEmpty(feature) ? feature.getRsi() : null)
+                .entryTrendRegime(ObjectUtils.isNotEmpty(feature) ? feature.getTrendRegime() : null)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("ENTRY", "VCB", SIDE_SHORT, "BREAKOUT", "V2_1_BALANCE"))
                 .diagnostics(buildDiagnostics(sizing.entry(), sizing.stop(), sizing.tp1()))
@@ -417,7 +418,7 @@ public class VcbStrategyService implements StrategyExecutor {
             PositionSnapshot snap,
             VcbParams p
     ) {
-        if (snap.getSide() == null || snap.getEntryPrice() == null || snap.getCurrentStopLossPrice() == null) {
+        if (ObjectUtils.isEmpty(snap.getSide()) || ObjectUtils.isEmpty(snap.getEntryPrice()) || ObjectUtils.isEmpty(snap.getCurrentStopLossPrice())) {
             return hold(context, "Position management: incomplete snapshot");
         }
 
@@ -520,7 +521,7 @@ public class VcbStrategyService implements StrategyExecutor {
         BigDecimal close = strategyHelper.safe(marketData.getClosePrice());
         BigDecimal atr = resolveAtr(feature);
 
-        BigDecimal initStop = snap.getInitialStopLossPrice() != null ? snap.getInitialStopLossPrice() : curStop;
+        BigDecimal initStop = ObjectUtils.isNotEmpty(snap.getInitialStopLossPrice()) ? snap.getInitialStopLossPrice() : curStop;
         BigDecimal initRisk = entry.subtract(initStop);
         if (initRisk.compareTo(ZERO) <= 0) return hold(context, "Invalid runner risk");
 
@@ -558,7 +559,7 @@ public class VcbStrategyService implements StrategyExecutor {
             }
         }
 
-        if (candidate == null) return hold(context, "Runner not ready");
+        if (ObjectUtils.isEmpty(candidate)) return hold(context, "Runner not ready");
         if (candidate.compareTo(curStop) <= 0 || candidate.compareTo(close) >= 0) {
             return hold(context, "Runner stop already optimal");
         }
@@ -600,7 +601,7 @@ public class VcbStrategyService implements StrategyExecutor {
         BigDecimal close = strategyHelper.safe(marketData.getClosePrice());
         BigDecimal atr = resolveAtr(feature);
 
-        BigDecimal initStop = snap.getInitialStopLossPrice() != null ? snap.getInitialStopLossPrice() : curStop;
+        BigDecimal initStop = ObjectUtils.isNotEmpty(snap.getInitialStopLossPrice()) ? snap.getInitialStopLossPrice() : curStop;
         BigDecimal initRisk = initStop.subtract(entry);
         if (initRisk.compareTo(ZERO) <= 0) return hold(context, "Invalid runner risk");
 
@@ -638,7 +639,7 @@ public class VcbStrategyService implements StrategyExecutor {
             }
         }
 
-        if (candidate == null) return hold(context, "Short runner not ready");
+        if (ObjectUtils.isEmpty(candidate)) return hold(context, "Short runner not ready");
         if (candidate.compareTo(curStop) >= 0 || candidate.compareTo(close) <= 0) {
             return hold(context, "Short runner stop already optimal");
         }
@@ -653,7 +654,7 @@ public class VcbStrategyService implements StrategyExecutor {
         FeatureStore bias = context.getBiasFeatureStore();
         MarketData biasData = context.getBiasMarketData();
 
-        if (bias == null || biasData == null) {
+        if (ObjectUtils.isEmpty(bias) || ObjectUtils.isEmpty(biasData)) {
             log.debug("VCB: no 4H bias data, rejecting long entry");
             return false;
         }
@@ -664,7 +665,7 @@ public class VcbStrategyService implements StrategyExecutor {
                 && bias.getEma50().compareTo(bias.getEma200()) > 0
                 && biasData.getClosePrice().compareTo(bias.getEma200()) > 0;
 
-        boolean erAligned = bias.getSignedEr20() == null
+        boolean erAligned = ObjectUtils.isEmpty(bias.getSignedEr20())
                 || bias.getSignedEr20().compareTo(p.getBiasErMin()) > 0;
 
         log.debug("VCB 4H BULL bias: emaStructure={} erAligned={} | ema50={} ema200={} close={} slope={} signedEr20={}",
@@ -679,7 +680,7 @@ public class VcbStrategyService implements StrategyExecutor {
         FeatureStore bias = context.getBiasFeatureStore();
         MarketData biasData = context.getBiasMarketData();
 
-        if (bias == null || biasData == null) {
+        if (ObjectUtils.isEmpty(bias) || ObjectUtils.isEmpty(biasData)) {
             log.debug("VCB: no 4H bias data, rejecting short entry");
             return false;
         }
@@ -690,7 +691,7 @@ public class VcbStrategyService implements StrategyExecutor {
                 && bias.getEma50().compareTo(bias.getEma200()) < 0
                 && biasData.getClosePrice().compareTo(bias.getEma200()) < 0;
 
-        boolean erAligned = bias.getSignedEr20() == null
+        boolean erAligned = ObjectUtils.isEmpty(bias.getSignedEr20())
                 || bias.getSignedEr20().compareTo(p.getBiasErMin().negate()) < 0;
 
         return emaStructure && erAligned;
@@ -698,16 +699,16 @@ public class VcbStrategyService implements StrategyExecutor {
 
     private boolean isCompressionActive(FeatureStore feature, VcbParams p) {
         boolean bbSqueeze = false;
-        if (feature.getBbWidth() != null && feature.getKcWidth() != null
+        if (ObjectUtils.isNotEmpty(feature.getBbWidth()) && ObjectUtils.isNotEmpty(feature.getKcWidth())
                 && feature.getKcWidth().compareTo(ZERO) > 0) {
             BigDecimal kcThreshold = feature.getKcWidth().multiply(p.getSqueezeKcTolerance());
             bbSqueeze = feature.getBbWidth().compareTo(kcThreshold) < 0;
         }
 
-        boolean atrCompressed = feature.getAtrRatio() != null
+        boolean atrCompressed = ObjectUtils.isNotEmpty(feature.getAtrRatio())
                 && feature.getAtrRatio().compareTo(p.getAtrRatioCompressMax()) < 0;
 
-        boolean erLow = feature.getEfficiencyRatio20() != null
+        boolean erLow = ObjectUtils.isNotEmpty(feature.getEfficiencyRatio20())
                 && feature.getEfficiencyRatio20().compareTo(p.getErCompressMax()) < 0;
 
         int conditionsMet = (bbSqueeze ? 1 : 0) + (atrCompressed ? 1 : 0) + (erLow ? 1 : 0);
@@ -720,7 +721,7 @@ public class VcbStrategyService implements StrategyExecutor {
     }
 
     private boolean isBullishBreakoutCandle(FeatureStore feature, FeatureStore prevFeature, MarketData marketData, VcbParams p) {
-        if (prevFeature == null || !strategyHelper.hasValue(prevFeature.getDonchianUpper20())
+        if (ObjectUtils.isEmpty(prevFeature) || !strategyHelper.hasValue(prevFeature.getDonchianUpper20())
                 || !strategyHelper.hasValue(marketData.getClosePrice())) {
             return false;
         }
@@ -737,7 +738,7 @@ public class VcbStrategyService implements StrategyExecutor {
     }
 
     private boolean isBearishBreakoutCandle(FeatureStore feature, FeatureStore prevFeature, MarketData marketData, VcbParams p) {
-        if (prevFeature == null || !strategyHelper.hasValue(prevFeature.getDonchianLower20())
+        if (ObjectUtils.isEmpty(prevFeature) || !strategyHelper.hasValue(prevFeature.getDonchianLower20())
                 || !strategyHelper.hasValue(marketData.getClosePrice())) {
             return false;
         }
@@ -822,15 +823,15 @@ public class VcbStrategyService implements StrategyExecutor {
      *  Pulled out of the per-side score methods so they stay under Sonar's
      *  cognitive-complexity ceiling without changing the additive components. */
     private BigDecimal scoreCompressionDepth(FeatureStore prevFeature) {
-        if (prevFeature == null) return ZERO;
+        if (ObjectUtils.isEmpty(prevFeature)) return ZERO;
         BigDecimal bonus = ZERO;
-        if (prevFeature.getBbWidth() != null
-                && prevFeature.getKcWidth() != null
+        if (ObjectUtils.isNotEmpty(prevFeature.getBbWidth())
+                && ObjectUtils.isNotEmpty(prevFeature.getKcWidth())
                 && prevFeature.getKcWidth().compareTo(ZERO) > 0) {
             BigDecimal ratio = prevFeature.getBbWidth().divide(prevFeature.getKcWidth(), 4, RoundingMode.HALF_UP);
             if (ratio.compareTo(new BigDecimal("0.70")) < 0) bonus = bonus.add(new BigDecimal("0.10"));
         }
-        if (prevFeature.getAtrRatio() != null
+        if (ObjectUtils.isNotEmpty(prevFeature.getAtrRatio())
                 && prevFeature.getAtrRatio().compareTo(new BigDecimal("0.90")) < 0) {
             bonus = bonus.add(new BigDecimal("0.10"));
         }
@@ -864,15 +865,15 @@ public class VcbStrategyService implements StrategyExecutor {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private boolean isMarketVetoed(EnrichedStrategyContext context) {
-        if (context.getMarketQualitySnapshot() != null
+        if (ObjectUtils.isNotEmpty(context.getMarketQualitySnapshot())
                 && Boolean.FALSE.equals(context.getMarketQualitySnapshot().getTradable())) {
             return true;
         }
         VolatilitySnapshot vol = context.getVolatilitySnapshot();
-        return vol != null
-                && vol.getJumpRiskScore() != null
-                && context.getRuntimeConfig() != null
-                && context.getRuntimeConfig().getMaxJumpRiskScore() != null
+        return ObjectUtils.isNotEmpty(vol)
+                && ObjectUtils.isNotEmpty(vol.getJumpRiskScore())
+                && ObjectUtils.isNotEmpty(context.getRuntimeConfig())
+                && ObjectUtils.isNotEmpty(context.getRuntimeConfig().getMaxJumpRiskScore())
                 && vol.getJumpRiskScore().compareTo(context.getRuntimeConfig().getMaxJumpRiskScore()) > 0;
     }
 
@@ -923,30 +924,30 @@ public class VcbStrategyService implements StrategyExecutor {
     }
 
     private BigDecimal resolveAtr(FeatureStore feature) {
-        return (feature != null && feature.getAtr() != null && feature.getAtr().compareTo(ZERO) > 0)
+        return (ObjectUtils.isNotEmpty(feature) && ObjectUtils.isNotEmpty(feature.getAtr()) && feature.getAtr().compareTo(ZERO) > 0)
                 ? feature.getAtr() : ONE;
     }
 
     private BigDecimal resolveRegimeScore(EnrichedStrategyContext context) {
         RegimeSnapshot r = context.getRegimeSnapshot();
-        return (r != null && r.getTrendScore() != null) ? r.getTrendScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getTrendScore())) ? r.getTrendScore() : ZERO;
     }
 
     private BigDecimal resolveJumpRisk(EnrichedStrategyContext context) {
         VolatilitySnapshot v = context.getVolatilitySnapshot();
-        return (v != null && v.getJumpRiskScore() != null) ? v.getJumpRiskScore() : ZERO;
+        return (ObjectUtils.isNotEmpty(v) && ObjectUtils.isNotEmpty(v.getJumpRiskScore())) ? v.getJumpRiskScore() : ZERO;
     }
 
     private BigDecimal resolveRiskMultiplier(EnrichedStrategyContext context) {
         RiskSnapshot r = context.getRiskSnapshot();
-        return (r != null && r.getRiskMultiplier() != null) ? r.getRiskMultiplier() : ONE;
+        return (ObjectUtils.isNotEmpty(r) && ObjectUtils.isNotEmpty(r.getRiskMultiplier())) ? r.getRiskMultiplier() : ONE;
     }
 
     private String resolveRegimeLabel(EnrichedStrategyContext context, FeatureStore feature) {
-        if (context.getRegimeSnapshot() != null && context.getRegimeSnapshot().getRegimeLabel() != null) {
+        if (ObjectUtils.isNotEmpty(context.getRegimeSnapshot()) && ObjectUtils.isNotEmpty(context.getRegimeSnapshot().getRegimeLabel())) {
             return context.getRegimeSnapshot().getRegimeLabel();
         }
-        return feature != null ? feature.getTrendRegime() : null;
+        return ObjectUtils.isNotEmpty(feature) ? feature.getTrendRegime() : null;
     }
 
     private Map<String, Object> buildDiagnostics(
@@ -961,7 +962,7 @@ public class VcbStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(context != null ? context.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(context) ? context.getInterval() : null)
                 .signalType(SIGNAL_TYPE_BREAKOUT)
                 .reason(reason)
                 .decisionTime(LocalDateTime.now())
@@ -975,11 +976,11 @@ public class VcbStrategyService implements StrategyExecutor {
                 .strategyCode(STRATEGY_CODE)
                 .strategyName(STRATEGY_NAME)
                 .strategyVersion(STRATEGY_VERSION)
-                .strategyInterval(context != null ? context.getInterval() : null)
+                .strategyInterval(ObjectUtils.isNotEmpty(context) ? context.getInterval() : null)
                 .vetoed(Boolean.TRUE)
                 .vetoReason(vetoReason)
                 .reason("VCB vetoed by risk layer")
-                .jumpRiskScore(context != null ? resolveJumpRisk(context) : ZERO)
+                .jumpRiskScore(ObjectUtils.isNotEmpty(context) ? resolveJumpRisk(context) : ZERO)
                 .decisionTime(LocalDateTime.now())
                 .tags(List.of("VETO", "VCB", "RISK_LAYER"))
                 .diagnostics(Map.of())

@@ -3,6 +3,7 @@ package id.co.blackheart.service.strategy;
 import id.co.blackheart.dto.strategy.EnrichedStrategyContext;
 import id.co.blackheart.model.AccountStrategy;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -39,7 +40,7 @@ public class StrategyHelper {
      * the canonical sizing field — a strategy without it doesn't trade.
      */
     public BigDecimal calculateEntryNotional(EnrichedStrategyContext context, String side) {
-        if (context == null || !StringUtils.hasText(side)) return ZERO;
+        if (ObjectUtils.isEmpty(context) || !StringUtils.hasText(side)) return ZERO;
 
         BigDecimal allocFraction = resolveCapitalAllocationFraction(context);
         if (allocFraction.signum() <= 0) return ZERO;

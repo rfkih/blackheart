@@ -17,9 +17,10 @@ import id.co.blackheart.repository.StrategyPromotionLogRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -136,8 +137,8 @@ public class StrategyPromotionService {
             log.error("[PaperTrade-EvidenceLoss] failed to record simulated decision " +
                             "| accountStrategyId={} strategy={} decision={} — investigate DB health",
                     accountStrategyId,
-                    decision != null ? decision.getStrategyCode() : null,
-                    decision != null ? decision.getDecisionType() : null, e);
+                    ObjectUtils.isNotEmpty(decision) ? decision.getStrategyCode() : null,
+                    ObjectUtils.isNotEmpty(decision) ? decision.getDecisionType() : null, e);
             recordPaperTradeFailureAudit(accountStrategyId, e);
         }
     }
@@ -145,26 +146,26 @@ public class StrategyPromotionService {
     private PaperTradeRun buildPaperTradeRow(UUID accountStrategyId,
                                              StrategyDecision decision,
                                              EnrichedStrategyContext context) {
-        AccountStrategy as = context != null ? context.getAccountStrategy() : null;
-        BigDecimal price = context != null && context.getMarketData() != null
+        AccountStrategy as = ObjectUtils.isNotEmpty(context) ? context.getAccountStrategy() : null;
+        BigDecimal price = ObjectUtils.isNotEmpty(context) && ObjectUtils.isNotEmpty(context.getMarketData())
                 ? context.getMarketData().getClosePrice() : null;
-        JsonNode decisionSnap = decision != null ? objectMapper.valueToTree(decision) : null;
-        JsonNode contextSnap = context != null
+        JsonNode decisionSnap = ObjectUtils.isNotEmpty(decision) ? objectMapper.valueToTree(decision) : null;
+        JsonNode contextSnap = ObjectUtils.isNotEmpty(context)
                 ? objectMapper.valueToTree(buildContextSnapshot(context)) : null;
 
         return PaperTradeRun.builder()
                 .paperTradeId(UUID.randomUUID())
                 .accountStrategyId(accountStrategyId)
-                .strategyCode(decision != null ? decision.getStrategyCode() : UNKNOWN)
-                .symbol(as != null ? as.getSymbol() : UNKNOWN)
-                .intervalName(as != null ? as.getIntervalName() : UNKNOWN)
+                .strategyCode(ObjectUtils.isNotEmpty(decision) ? decision.getStrategyCode() : UNKNOWN)
+                .symbol(ObjectUtils.isNotEmpty(as) ? as.getSymbol() : UNKNOWN)
+                .intervalName(ObjectUtils.isNotEmpty(as) ? as.getIntervalName() : UNKNOWN)
                 .decisionType(decisionTypeName(decision))
                 .side(inferSide(decision))
                 .intendedPrice(price)
-                .intendedQuantity(decision != null ? decision.getPositionSize() : null)
-                .intendedNotionalUsdt(decision != null ? decision.getNotionalSize() : null)
-                .stopLossPrice(decision != null ? decision.getStopLossPrice() : null)
-                .takeProfitPrice(decision != null ? decision.getTakeProfitPrice1() : null)
+                .intendedQuantity(ObjectUtils.isNotEmpty(decision) ? decision.getPositionSize() : null)
+                .intendedNotionalUsdt(ObjectUtils.isNotEmpty(decision) ? decision.getNotionalSize() : null)
+                .stopLossPrice(ObjectUtils.isNotEmpty(decision) ? decision.getStopLossPrice() : null)
+                .takeProfitPrice(ObjectUtils.isNotEmpty(decision) ? decision.getTakeProfitPrice1() : null)
                 .decisionSnapshot(decisionSnap)
                 .contextSnapshot(contextSnap)
                 .skipReason("SIMULATED")
@@ -173,7 +174,7 @@ public class StrategyPromotionService {
     }
 
     private static String decisionTypeName(StrategyDecision decision) {
-        if (decision == null || decision.getDecisionType() == null) return UNKNOWN;
+        if (ObjectUtils.isEmpty(decision) || ObjectUtils.isEmpty(decision.getDecisionType())) return UNKNOWN;
         return decision.getDecisionType().name();
     }
 
@@ -193,7 +194,7 @@ public class StrategyPromotionService {
                     .entityType("AccountStrategy")
                     .entityId(accountStrategyId)
                     .reason("Failed to persist paper_trade_run row: "
-                            + (cause != null ? cause.getClass().getSimpleName()
+                            + (ObjectUtils.isNotEmpty(cause) ? cause.getClass().getSimpleName()
                                     + ": " + cause.getMessage() : "unknown"))
                     .createdAt(LocalDateTime.now())
                     .build();
@@ -492,7 +493,7 @@ public class StrategyPromotionService {
     }
 
     private String inferSide(StrategyDecision decision) {
-        if (decision == null || decision.getDecisionType() == null) return null;
+        if (ObjectUtils.isEmpty(decision) || ObjectUtils.isEmpty(decision.getDecisionType())) return null;
         return switch (decision.getDecisionType()) {
             case OPEN_LONG, CLOSE_LONG -> "LONG";
             case OPEN_SHORT, CLOSE_SHORT -> "SHORT";
@@ -502,12 +503,12 @@ public class StrategyPromotionService {
 
     private Map<String, Object> buildContextSnapshot(EnrichedStrategyContext ctx) {
         Map<String, Object> snap = new HashMap<>();
-        if (ctx.getAccountStrategy() != null) {
+        if (ObjectUtils.isNotEmpty(ctx.getAccountStrategy())) {
             snap.put("accountStrategyId", ctx.getAccountStrategy().getAccountStrategyId());
             snap.put("symbol", ctx.getAccountStrategy().getSymbol());
             snap.put("interval", ctx.getAccountStrategy().getIntervalName());
         }
-        if (ctx.getMarketData() != null) {
+        if (ObjectUtils.isNotEmpty(ctx.getMarketData())) {
             snap.put("startTime", ctx.getMarketData().getStartTime());
             snap.put("close", ctx.getMarketData().getClosePrice());
         }

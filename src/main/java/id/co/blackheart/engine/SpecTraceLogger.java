@@ -8,6 +8,7 @@ import id.co.blackheart.model.SpecTrace;
 import id.co.blackheart.repository.SpecTraceRepository;
 import id.co.blackheart.util.TradeConstant.DecisionType;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -106,16 +107,16 @@ public class SpecTraceLogger {
                 .traceId(UUID.randomUUID())
                 .backtestRunId(extractBacktestRunId(context))
                 .accountStrategyId(extractAccountStrategyId(context))
-                .strategyCode(spec == null ? null : spec.getStrategyCode())
+                .strategyCode(ObjectUtils.isEmpty(spec) ? null : spec.getStrategyCode())
                 .barTime(extractBarTime(context))
                 .phase(derivePhase(decision, context))
                 .specSnapshot(snapshotSpec(spec))
-                .rules(rules == null ? new ArrayList<>() : rules)
+                .rules(ObjectUtils.isEmpty(rules) ? new ArrayList<>() : rules)
                 .decision(deriveDecisionLabel(decision, error))
                 .decisionReason(deriveReason(decision, error))
                 .evalLatencyUs(toMicros(latencyNs))
-                .errorClass(error == null ? null : error.getClass().getName())
-                .errorMessage(error == null ? null : truncate(error.getMessage(), 4000))
+                .errorClass(ObjectUtils.isEmpty(error) ? null : error.getClass().getName())
+                .errorMessage(ObjectUtils.isEmpty(error) ? null : truncate(error.getMessage(), 4000))
                 .createdTime(LocalDateTime.now())
                 .build();
     }
@@ -130,7 +131,7 @@ public class SpecTraceLogger {
     }
 
     private boolean isBacktest(EnrichedStrategyContext context) {
-        if (context == null || context.getExecutionMetadata() == null) return false;
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getExecutionMetadata())) return false;
         Object source = context.getExecutionMetadata().get(EXEC_SOURCE_KEY);
         return EXEC_SOURCE_BACKTEST.equalsIgnoreCase(String.valueOf(source));
     }
@@ -138,7 +139,7 @@ public class SpecTraceLogger {
     // ── Field derivation ─────────────────────────────────────────────────────
 
     private UUID extractBacktestRunId(EnrichedStrategyContext context) {
-        if (context == null || context.getExecutionMetadata() == null) return null;
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getExecutionMetadata())) return null;
         Object raw = context.getExecutionMetadata().get(EXEC_BACKTEST_RUN_ID_KEY);
         if (raw instanceof UUID u) return u;
         if (raw instanceof String s) {
@@ -149,41 +150,41 @@ public class SpecTraceLogger {
     }
 
     private UUID extractAccountStrategyId(EnrichedStrategyContext context) {
-        if (context == null) return null;
+        if (ObjectUtils.isEmpty(context)) return null;
         AccountStrategy as = context.getAccountStrategy();
-        return as == null ? null : as.getAccountStrategyId();
+        return ObjectUtils.isEmpty(as) ? null : as.getAccountStrategyId();
     }
 
     private LocalDateTime extractBarTime(EnrichedStrategyContext context) {
-        if (context == null) return LocalDateTime.now();
+        if (ObjectUtils.isEmpty(context)) return LocalDateTime.now();
         MarketData md = context.getMarketData();
-        if (md != null && md.getEndTime() != null) return md.getEndTime();
+        if (ObjectUtils.isNotEmpty(md) && ObjectUtils.isNotEmpty(md.getEndTime())) return md.getEndTime();
         return LocalDateTime.now();
     }
 
     private String derivePhase(StrategyDecision decision, EnrichedStrategyContext context) {
-        if (decision == null || decision.getDecisionType() == null) return "ERROR";
+        if (ObjectUtils.isEmpty(decision) || ObjectUtils.isEmpty(decision.getDecisionType())) return "ERROR";
         DecisionType type = decision.getDecisionType();
         return switch (type) {
             case OPEN_LONG -> "ENTRY_LONG";
             case OPEN_SHORT -> "ENTRY_SHORT";
             case CLOSE_LONG, CLOSE_SHORT -> "EXIT";
             case UPDATE_POSITION_MANAGEMENT -> "MANAGE";
-            case HOLD -> (context != null && context.hasTradablePosition()) ? "MANAGE" : "SCAN";
+            case HOLD -> (ObjectUtils.isNotEmpty(context) && context.hasTradablePosition()) ? "MANAGE" : "SCAN";
         };
     }
 
     private String deriveDecisionLabel(StrategyDecision decision, Throwable error) {
-        if (error != null) return "ERROR";
-        if (decision == null || decision.getDecisionType() == null) return "NO_TRADE";
+        if (ObjectUtils.isNotEmpty(error)) return "ERROR";
+        if (ObjectUtils.isEmpty(decision) || ObjectUtils.isEmpty(decision.getDecisionType())) return "NO_TRADE";
         return decision.getDecisionType().name();
     }
 
     private String deriveReason(StrategyDecision decision, Throwable error) {
-        if (error != null) return error.getMessage();
-        if (decision == null) return null;
-        if (decision.getReason() != null) return decision.getReason();
-        if (decision.getExitReason() != null) return decision.getExitReason();
+        if (ObjectUtils.isNotEmpty(error)) return error.getMessage();
+        if (ObjectUtils.isEmpty(decision)) return null;
+        if (ObjectUtils.isNotEmpty(decision.getReason())) return decision.getReason();
+        if (ObjectUtils.isNotEmpty(decision.getExitReason())) return decision.getExitReason();
         return decision.getVetoReason();
     }
 
@@ -195,7 +196,7 @@ public class SpecTraceLogger {
 
     private Map<String, Object> snapshotSpec(StrategySpec spec) {
         Map<String, Object> snap = HashMap.newHashMap(7);
-        if (spec == null) return snap;
+        if (ObjectUtils.isEmpty(spec)) return snap;
         snap.put("strategyCode", spec.getStrategyCode());
         snap.put("strategyName", spec.getStrategyName());
         snap.put("archetype", spec.getArchetype());
@@ -204,13 +205,13 @@ public class SpecTraceLogger {
         // Defensive copies: the underlying maps are nominally immutable after
         // construction, but a downstream mutation (engine bug, override merge)
         // would otherwise leak into the persisted snapshot.
-        snap.put("params", spec.getParams() == null ? new HashMap<>() : new HashMap<>(spec.getParams()));
-        snap.put("body", spec.getBody() == null ? new HashMap<>() : new HashMap<>(spec.getBody()));
+        snap.put("params", ObjectUtils.isEmpty(spec.getParams()) ? new HashMap<>() : new HashMap<>(spec.getParams()));
+        snap.put("body", ObjectUtils.isEmpty(spec.getBody()) ? new HashMap<>() : new HashMap<>(spec.getBody()));
         return snap;
     }
 
     private static String truncate(String s, int max) {
-        if (s == null) return null;
+        if (ObjectUtils.isEmpty(s)) return null;
         return s.length() <= max ? s : s.substring(0, max);
     }
 }

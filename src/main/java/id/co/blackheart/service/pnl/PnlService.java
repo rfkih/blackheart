@@ -13,6 +13,7 @@ import id.co.blackheart.service.statistics.GeometricReturnCalculator;
 import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -49,11 +50,11 @@ public class PnlService {
         List<Trades> open = tradesRepository.findOpenByAccountIds(accountIds);
 
         BigDecimal realizedPnl = closed.stream()
-                .map(t -> t.getRealizedPnlAmount() != null ? t.getRealizedPnlAmount() : BigDecimal.ZERO)
+                .map(t -> ObjectUtils.isNotEmpty(t.getRealizedPnlAmount()) ? t.getRealizedPnlAmount() : BigDecimal.ZERO)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         long wins = closed.stream()
-                .filter(t -> t.getRealizedPnlAmount() != null && t.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) > 0)
+                .filter(t -> ObjectUtils.isNotEmpty(t.getRealizedPnlAmount()) && t.getRealizedPnlAmount().compareTo(BigDecimal.ZERO) > 0)
                 .count();
 
         BigDecimal winRate = closed.isEmpty() ? BigDecimal.ZERO
@@ -85,7 +86,7 @@ public class PnlService {
      * notional are skipped inside the calculator.
      */
     private GeometricReturnCalculator.Result computePerTradeReturnStats(List<Trades> closed) {
-        if (closed == null || closed.isEmpty()) {
+        if (ObjectUtils.isEmpty(closed)) {
             return GeometricReturnCalculator.Result.zero();
         }
         List<GeometricReturnCalculator.TradeReturn> series = closed.stream()
@@ -130,14 +131,14 @@ public class PnlService {
 
     public List<StrategyPnlResponse> getByStrategy(UUID userId, LocalDate from, LocalDate to) {
         List<UUID> accountIds = getAccountIds(userId);
-        LocalDateTime fromDt = (from != null) ? from.atStartOfDay() : LocalDateTime.of(2020, 1, 1, 0, 0);
-        LocalDateTime toDt = (to != null) ? to.atTime(LocalTime.MAX) : LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime fromDt = (ObjectUtils.isNotEmpty(from)) ? from.atStartOfDay() : LocalDateTime.of(2020, 1, 1, 0, 0);
+        LocalDateTime toDt = (ObjectUtils.isNotEmpty(to)) ? to.atTime(LocalTime.MAX) : LocalDateTime.now(ZoneOffset.UTC);
 
         List<Trades> closed = tradesRepository.findClosedInPeriodByAccountIds(accountIds, fromDt, toDt);
 
         Map<String, List<Trades>> byStrategy = new TreeMap<>();
         for (Trades t : closed) {
-            String code = t.getStrategyName() != null ? t.getStrategyName() : "UNKNOWN";
+            String code = ObjectUtils.isNotEmpty(t.getStrategyName()) ? t.getStrategyName() : "UNKNOWN";
             byStrategy.computeIfAbsent(code, k -> new ArrayList<>()).add(t);
         }
 
@@ -193,7 +194,7 @@ public class PnlService {
             return Collections.emptyList();
         }
 
-        BigDecimal baseline = (initialCapital != null && initialCapital.signum() > 0)
+        BigDecimal baseline = (ObjectUtils.isNotEmpty(initialCapital) && initialCapital.signum() > 0)
                 ? initialCapital
                 : DEFAULT_INITIAL_CAPITAL;
 
@@ -236,8 +237,8 @@ public class PnlService {
     private void applyTrade(EquityCurveState state, Trades t, BigDecimal baseline,
                             LocalDateTime fromDt, long fromMs) {
         LocalDateTime exit = t.getExitTime();
-        if (exit == null) return;
-        BigDecimal pnl = t.getRealizedPnlAmount() != null ? t.getRealizedPnlAmount() : BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(exit)) return;
+        BigDecimal pnl = ObjectUtils.isNotEmpty(t.getRealizedPnlAmount()) ? t.getRealizedPnlAmount() : BigDecimal.ZERO;
 
         // Carry pnl that closed BEFORE the window into the starting baseline.
         if (exit.isBefore(fromDt)) {
@@ -300,7 +301,7 @@ public class PnlService {
         for (Trades t : openTrades) {
             try {
                 BigDecimal price = cacheService.getLatestPrice(t.getAsset());
-                if (price == null || t.getAvgEntryPrice() == null || t.getTotalRemainingQty() == null) continue;
+                if (ObjectUtils.isEmpty(price) || ObjectUtils.isEmpty(t.getAvgEntryPrice()) || ObjectUtils.isEmpty(t.getTotalRemainingQty())) continue;
                 BigDecimal pnl;
                 if ("SHORT".equalsIgnoreCase(t.getSide())) {
                     pnl = t.getAvgEntryPrice().subtract(price).multiply(t.getTotalRemainingQty());
