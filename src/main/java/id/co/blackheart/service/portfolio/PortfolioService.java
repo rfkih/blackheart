@@ -43,7 +43,7 @@ public class PortfolioService {
      * <em>next</em> candle sees fresh balance data even if the current one uses the
      * last-persisted value.
      */
-    @Async
+    @Async("taskExecutor")
     public void refreshAccountBalance(Account account) {
         try {
             updateAndGetBinanceAssetBalance(account);
@@ -52,7 +52,7 @@ public class PortfolioService {
         }
     }
 
-    @Async
+    @Async("taskExecutor")
     public void reloadAsset() {
         log.info("Starting portfolio reload...");
         List<Account> accountList = accountRepository.findByIsActive("1");
@@ -132,6 +132,10 @@ public class PortfolioService {
         request.setRecvWindow(RECV_WINDOW);
 
         BinanceAssetResponse response = binanceClientService.getBinanceAssetDetails(request);
+        if (response == null || response.getAssets() == null) {
+            log.warn("[Portfolio] No asset data returned from Binance for account={} asset={}", user.getUsername(), asset);
+            return null;
+        }
         saveAllBinanceAssets(user, response.getAssets());
 
         return response.getAssets().stream()

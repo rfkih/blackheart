@@ -1,0 +1,40 @@
+{
+  "target_id": "plan:DCB2:b1540884c707afa74a8df035c3d93f4daaab1459f1876706f19287b87693acaf:75bf7fcd-ee36-4d3a-acca-b4ceedff7471",
+  "target_kind": "plan",
+  "verdict": "REJECTED",
+  "strategy_code": "DCB2",
+  "summary_reason": "Blocker failed: pre_registration. Hypothesis 75bf7fcd was already swept and FALSIFIED in the prior session (journal_id=395fe4a2, created 2026-05-07T01:59:03). The sweep exhausted 27 cells (stopAtrMult x breakEvenR x tpR at adxEntryMin=26): best CI_lower=0.863, never exceeds 1.0. This review request was re-submitted after the sweep was completed — there is no open experiment to gate. Do not re-run this hypothesis.",
+  "summary_n_blocker_fails": 1,
+  "summary_n_warning_fails": 0,
+  "findings": [
+    {
+      "check_name": "pre_registration",
+      "severity": "blocker",
+      "passed": false,
+      "finding": "Hypothesis 75bf7fcd-ee36-4d3a-acca-b4ceedff7471 was already fully swept and FALSIFIED (journal 395fe4a2: 'DCB2 ETH 1h exit-structure sweep FALSIFIED: hypothesis 75bf7fcd second sweep complete, CI_lower never clears 1.0', best_ci_lower=0.863). This review request was re-submitted in a new session after the sweep already ran. The plan is stale. Re-queueing this hypothesis would violate the append-only evidence principle and constitute p-hacking.",
+      "details": {
+        "outcome_journal_id": "395fe4a2-f1ca-4a1a-bc23-4712d1bdcda3",
+        "best_ci_lower": 0.863,
+        "sweep_status": "FALSIFIED",
+        "resolution": "Do not re-queue. Pivot to different archetype."
+      }
+    },
+    {
+      "check_name": "mechanism_named",
+      "severity": "warning",
+      "passed": false,
+      "finding": "Hypothesis 75bf7fcd content does not contain mechanism markers (because, driven by, due to, caused by, mechanism, rationale, explained by, follows from). Content length=577. 'Reduce' is not a mechanism marker.",
+      "details": {"markers_searched": ["because", "driven by", "due to", "caused by", "mechanism", "rationale", "explained by", "follows from"]}
+    },
+    {
+      "check_name": "axis_not_recently_failed",
+      "severity": "warning",
+      "passed": false,
+      "finding": "Axis combo [stopAtrMult, breakEvenR, tpR] was swept on 2026-05-07T01:59 (journal 395fe4a2) and produced INSUFFICIENT_EVIDENCE (best CI_lower=0.863). Re-running the same axes on the same strategy is p-hacking regardless of the gate status.",
+      "details": {
+        "prior_outcome_journal_id": "395fe4a2-f1ca-4a1a-bc23-4712d1bdcda3",
+        "prior_verdict": "FALSIFIED"
+      }
+    }
+  ]
+}

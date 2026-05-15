@@ -11,7 +11,10 @@ import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.repository.TradesRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -25,6 +28,8 @@ import static id.co.blackheart.util.TradeConstant.*;
 @RequiredArgsConstructor
 @Slf4j
 public class TradeOpenService {
+
+    private static final String POSITION_ROLE_RUNNER = "RUNNER";
 
     private final TradesRepository tradesRepository;
     private final TradePositionRepository tradePositionRepository;
@@ -41,7 +46,7 @@ public class TradeOpenService {
     ) {
         UUID tradeId = openParentTrade(context, decision, tradeAmount, tradeType, asset);
 
-        if (tradeId == null) {
+        if (ObjectUtils.isEmpty(tradeId)) {
             log.info("Failed to create parent trade | type={} asset={}", tradeType, asset);
             return;
         }
@@ -58,7 +63,7 @@ public class TradeOpenService {
     ) {
         Trades persistedTrade = null;
         String strategyName = resolveStrategyName(context, decision);
-        String entryReason = decision != null ? decision.getReason() : null;
+        String entryReason = ObjectUtils.isNotEmpty(decision) ? decision.getReason() : null;
 
         try {
             PreTradeValidationResult validation = validateBeforeOpen(
@@ -76,6 +81,18 @@ public class TradeOpenService {
                         asset,
                         tradeQuoteNotional,
                         validation.reason
+                );
+                // V66 — pre-trade validation rejections (insufficient qty,
+                // bad price, exit-plan invalid, balance check, …) used to
+                // exit silently here; only post-Binance failures landed in
+                // trade_execution_log. The "rejected_before_execution"
+                // rows give operators a single auditable surface for every
+                // attempted entry, success or fail.
+                tradeExecutionLogService.logOpenFailure(
+                        context != null ?context.getAccount() : null,
+                        asset, strategyName, tradeType.name(),
+                        entryReason, null,
+                        "Pre-trade validation: " + validation.reason
                 );
                 return null;
             }
@@ -169,13 +186,13 @@ public class TradeOpenService {
         } catch (Exception e) {
             log.error("❌ Error placing {} parent trade for {}", tradeType, asset, e);
 
-            UUID failedTradeId = persistedTrade != null ? persistedTrade.getTradeId() : null;
+            UUID failedTradeId = persistedTrade != null ?persistedTrade.getTradeId() : null;
             tradeExecutionLogService.logOpenFailure(
-                    context != null ? context.getAccount() : null,
+                    context != null ?context.getAccount() : null,
                     asset, strategyName, tradeType.name(), entryReason, failedTradeId, e.getMessage()
             );
 
-            if (persistedTrade != null) {
+            if (ObjectUtils.isNotEmpty(persistedTrade)) {
                 persistedTrade.setTradeMode("UNALLOCATED");
                 persistedTrade.setExitReason("EXIT_PLAN_PENDING");
                 tradesRepository.save(persistedTrade);
@@ -205,7 +222,7 @@ public class TradeOpenService {
             return PreTradeValidationResult.invalid("AccountStrategy is null");
         }
 
-        if (asset == null || asset.isBlank()) {
+        if (!StringUtils.hasText(asset)) {
             return PreTradeValidationResult.invalid("Asset is null or blank");
         }
 
@@ -269,7 +286,7 @@ public class TradeOpenService {
             return PreTradeValidationResult.invalid("No valid exit structure can be generated for estimated quantity");
         }
 
-        return PreTradeValidationResult.valid(
+        return PreTradeValidationResult.accepted(
                 estimatedQty,
                 normalizedQty,
                 bufferedPrice,
@@ -278,14 +295,13 @@ public class TradeOpenService {
     }
 
     private String resolveStrategyName(EnrichedStrategyContext context, StrategyDecision decision) {
-        if (decision != null && decision.getStrategyCode() != null && !decision.getStrategyCode().isBlank()) {
+        if (decision != null && StringUtils.hasText(decision.getStrategyCode())) {
             return decision.getStrategyCode();
         }
 
         if (context != null
                 && context.getAccountStrategy() != null
-                && context.getAccountStrategy().getStrategyCode() != null
-                && !context.getAccountStrategy().getStrategyCode().isBlank()) {
+                && StringUtils.hasText(context.getAccountStrategy().getStrategyCode())) {
             return context.getAccountStrategy().getStrategyCode();
         }
 
@@ -332,7 +348,7 @@ public class TradeOpenService {
         BigDecimal totalFee = BigDecimal.ZERO;
         String feeCurrency = null;
 
-        if (response.getFills() != null && !response.getFills().isEmpty()) {
+        if (!CollectionUtils.isEmpty(response.getFills())) {
             for (BinanceOrderFill fill : response.getFills()) {
                 BigDecimal qty = new BigDecimal(fill.getQty());
                 BigDecimal price = new BigDecimal(fill.getPrice());
@@ -451,7 +467,7 @@ public class TradeOpenService {
     }
 
     private String normalizeExitStructure(String exitStructure) {
-        if (exitStructure == null || exitStructure.isBlank()) {
+        if (!StringUtils.hasText(exitStructure)) {
             return EXIT_STRUCTURE_SINGLE;
         }
         return exitStructure.trim().toUpperCase();
@@ -579,7 +595,7 @@ public class TradeOpenService {
                                 decision.getTakeProfitPrice2()
                         ),
                         PlannedPosition.of(
-                                "RUNNER",
+                                POSITION_ROLE_RUNNER,
                                 runnerQty,
                                 decision.getStopLossPrice(),
                                 decision.getStopLossPrice(),
@@ -629,7 +645,7 @@ public class TradeOpenService {
                                 decision.getTakeProfitPrice1()
                         ),
                         PlannedPosition.of(
-                                "RUNNER",
+                                POSITION_ROLE_RUNNER,
                                 runnerQty,
                                 decision.getStopLossPrice(),
                                 decision.getStopLossPrice(),
@@ -655,7 +671,7 @@ public class TradeOpenService {
                 EXIT_STRUCTURE_RUNNER_ONLY,
                 List.of(
                         PlannedPosition.of(
-                                "RUNNER",
+                                POSITION_ROLE_RUNNER,
                                 runnerQty,
                                 decision.getStopLossPrice(),
                                 decision.getStopLossPrice(),
@@ -712,7 +728,7 @@ public class TradeOpenService {
     }
 
     private boolean isInvalidPlan(SplitPlan splitPlan) {
-        return splitPlan == null || splitPlan.positions == null || splitPlan.positions.isEmpty();
+        return splitPlan == null || CollectionUtils.isEmpty(splitPlan.positions);
     }
 
     private SplitPlan invalidPlan() {
@@ -740,7 +756,7 @@ public class TradeOpenService {
     }
 
     private BigDecimal safe(BigDecimal value) {
-        return value == null ? BigDecimal.ZERO : value;
+        return ObjectUtils.isEmpty(value) ? BigDecimal.ZERO : value;
     }
 
     private static class FillProcessingResult {
@@ -835,7 +851,7 @@ public class TradeOpenService {
             this.plannedMode = plannedMode;
         }
 
-        static PreTradeValidationResult valid(
+        static PreTradeValidationResult accepted(
                 BigDecimal estimatedQty,
                 BigDecimal normalizedQty,
                 BigDecimal estimatedPrice,

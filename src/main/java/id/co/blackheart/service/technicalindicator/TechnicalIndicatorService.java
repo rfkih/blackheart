@@ -1,12 +1,25 @@
 package id.co.blackheart.service.technicalindicator;
 
 import id.co.blackheart.model.FeatureStore;
+import id.co.blackheart.model.FundingRate;
 import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.FeatureStoreRepository;
+import id.co.blackheart.repository.FundingRateRepository;
 import id.co.blackheart.repository.MarketDataRepository;
+import id.co.blackheart.service.funding.FundingRateService;
+import id.co.blackheart.service.funding.FundingRateService.FundingFeatureSnapshot;
+import id.co.blackheart.service.marketdata.job.JobContext;
 import id.co.blackheart.util.MapperUtil;
-import lombok.AllArgsConstructor;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import lombok.RequiredArgsConstructor;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.CollectionUtils;
 
 import org.ta4j.core.*;
 import org.ta4j.core.indicators.*;
@@ -17,28 +30,56 @@ import org.ta4j.core.indicators.helpers.*;
 import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
 import org.ta4j.core.num.Num;
 
-import java.math.RoundingMode;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.util.Comparator;
-import java.util.List;
-
-
 import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
-@AllArgsConstructor
+@RequiredArgsConstructor
 public class TechnicalIndicatorService {
+
+    /** Bars of warmup loaded before each computation target — matches the
+     *  live single-bar path's findLast300 query, so backfilled values are
+     *  saturated to the same degree as live. */
+    private static final int LIVE_WARMUP_BARS = 300;
+
+    /** Save-buffer size during chunked feature_store writes. Bounds Hibernate
+     *  L1 cache memory between flush+clear cycles. */
+    private static final int CHUNK_SIZE = 500;
+
+    /** Length of one bulk-backfill window. Each window opens its own
+     *  REQUIRES_NEW transaction so cancellation rolls back at most one
+     *  window's worth of work. */
+    private static final int WINDOW_MONTHS = 1;
+
+    /** Soft minimum on warmup data — fewer rows than this won't saturate
+     *  long-period indicators (EMA200 in particular). Returns null/zero from
+     *  the live path; bulk path skips the window. */
+    private static final int MIN_WARMUP_ROWS = 250;
 
     private final MarketDataRepository marketDataRepository;
     private final FeatureStoreRepository featureStoreRepository;
+    private final FundingRateRepository fundingRateRepository;
+    private final FundingRateService fundingRateService;
     private final MapperUtil mapperUtil;
+    private final PlatformTransactionManager transactionManager;
+
+    // Field-injected so it cooperates with @RequiredArgsConstructor — Lombok
+    // skips non-final fields when generating the constructor, leaving
+    // @PersistenceContext to provide the transaction-bound EntityManager.
+    @PersistenceContext
+    private EntityManager entityManager;
 
 
     public FeatureStore computeIndicatorsAndStoreByStartTime(String symbol, String interval, LocalDateTime startTime) {
@@ -54,193 +95,253 @@ public class TechnicalIndicatorService {
 
 
     public FeatureStore computeIndicatorsAndStore(String symbol, String interval, LocalDateTime startTime) {
-
-
-
-
         List<MarketData> historicalData = marketDataRepository.findLast300BySymbolAndIntervalAndTime(symbol, interval, startTime);
 
-        if (historicalData == null || historicalData.size() < 250) {
+        if (CollectionUtils.isEmpty(historicalData) || historicalData.size() < MIN_WARMUP_ROWS) {
             log.warn("Not enough historical data to compute indicators for {} {}", symbol, interval);
             return null;
         }
 
-        // Make sure the data is sorted ascending by start time
         historicalData.sort(Comparator.comparing(MarketData::getStartTime));
-
         MarketData latestMarketData = historicalData.getLast();
-        BigDecimal price = latestMarketData.getClosePrice();
 
-        BarSeries series = convertToBarSeries(historicalData,interval);
-        int endIndex = series.getEndIndex();
-
-        Optional<FeatureStore> existingFeature = featureStoreRepository.findBySymbolAndIntervalAndStartTime(symbol, interval, latestMarketData.getStartTime());
-
+        Optional<FeatureStore> existingFeature = featureStoreRepository.findBySymbolAndIntervalAndStartTime(
+                symbol, interval, latestMarketData.getStartTime());
         if (existingFeature.isPresent()) {
-            log.debug("Feature already exists. symbol={} interval={} startTime={}",symbol, interval, latestMarketData.getStartTime());
+            log.debug("Feature already exists. symbol={} interval={} startTime={}",
+                    symbol, interval, latestMarketData.getStartTime());
             return existingFeature.get();
         }
 
-        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+        // Single-bar path: build indicators on the 300-bar window, then defer
+        // the row construction to the shared helper used by bulk backfill.
+        // Live behavior is preserved exactly — the helper mirrors the prior
+        // inline implementation column-for-column.
+        BarSeries series = convertToBarSeries(historicalData, interval);
+        IndicatorBundle ind = IndicatorBundle.build(series);
+        int endIndex = series.getEndIndex();
 
-        FeatureStore featureData = new FeatureStore();
-        featureData.setIdMarketData(latestMarketData.getId());
-        featureData.setSymbol(symbol);
-        featureData.setInterval(interval);
-        featureData.setStartTime(latestMarketData.getStartTime());
-        featureData.setEndTime(latestMarketData.getEndTime());
-        featureData.setPrice(price);
+        FundingFeatureSnapshot funding = fundingRateService.computeFundingFeatures(
+                symbol, latestMarketData.getEndTime());
+
+        FeatureStore featureData = buildFeatureRowFromPrecomputed(
+                endIndex, symbol, interval, historicalData, ind, funding);
+        return featureStoreRepository.save(featureData);
+    }
+
+    /**
+     * Builds one {@link FeatureStore} row from precomputed TA4j indicators at
+     * the given bar index. Shared between the live single-bar path
+     * ({@link #computeIndicatorsAndStore}) and the bulk backfill path
+     * ({@link #bulkComputeAndStoreInRange}) — produces the same column values
+     * for the same input data, so backfilled rows and live rows are
+     * indistinguishable.
+     *
+     * <p>{@code dataUpToIdx} must be the prefix of the loaded market_data
+     * ending at {@code idx} inclusive, sorted ascending by start_time. The
+     * helpers ({@code calculateRelativeVolume}, {@code calculateAtrRatio},
+     * etc.) read the tail of this list and assume the last element is the
+     * target bar.
+     */
+    private FeatureStore buildFeatureRowFromPrecomputed(
+            int idx,
+            String symbol,
+            String interval,
+            List<MarketData> dataUpToIdx,
+            IndicatorBundle ind,
+            FundingFeatureSnapshot funding
+    ) {
+        MarketData md = dataUpToIdx.get(dataUpToIdx.size() - 1);
+        BigDecimal price = md.getClosePrice();
+
+        FeatureStore f = new FeatureStore();
+        f.setIdMarketData(md.getId());
+        f.setSymbol(symbol);
+        f.setInterval(interval);
+        f.setStartTime(md.getStartTime());
+        f.setEndTime(md.getEndTime());
+        f.setPrice(price);
 
         // Trend
-        EMAIndicator ema20 = new EMAIndicator(closePrice, 20);
-        EMAIndicator ema50 = new EMAIndicator(closePrice, 50);
-        EMAIndicator ema200 = new EMAIndicator(closePrice, 200);
+        f.setEma20(toBigDecimal(ind.ema20.getValue(idx)));
+        f.setEma50(toBigDecimal(ind.ema50.getValue(idx)));
+        f.setEma200(toBigDecimal(ind.ema200.getValue(idx)));
 
-        featureData.setEma20(toBigDecimal(ema20.getValue(endIndex)));
-        featureData.setEma50(toBigDecimal(ema50.getValue(endIndex)));
-        featureData.setEma200(toBigDecimal(ema200.getValue(endIndex)));
+        if (idx > 0) {
+            f.setEma50Slope(toBigDecimal(ind.ema50.getValue(idx).minus(ind.ema50.getValue(idx - 1))));
+            f.setEma200Slope(toBigDecimal(ind.ema200.getValue(idx).minus(ind.ema200.getValue(idx - 1))));
+        } else {
+            f.setEma50Slope(BigDecimal.ZERO);
+            f.setEma200Slope(BigDecimal.ZERO);
+        }
 
-        if (endIndex > 0) {
-            featureData.setEma50Slope(
-                    toBigDecimal(ema50.getValue(endIndex).minus(ema50.getValue(endIndex - 1)))
+        if (idx >= 200) {
+            f.setSlope200(
+                    toBigDecimal(ind.ema200.getValue(idx).minus(ind.ema200.getValue(idx - 200)))
+                            .divide(new BigDecimal("200"), 8, RoundingMode.HALF_UP)
             );
-            featureData.setEma200Slope(
-                    toBigDecimal(ema200.getValue(endIndex).minus(ema200.getValue(endIndex - 1)))
+        } else if (idx > 0) {
+            f.setSlope200(
+                    toBigDecimal(ind.ema200.getValue(idx).minus(ind.ema200.getValue(0)))
+                            .divide(BigDecimal.valueOf(idx), 8, RoundingMode.HALF_UP)
             );
         } else {
-            featureData.setEma50Slope(BigDecimal.ZERO);
-            featureData.setEma200Slope(BigDecimal.ZERO);
+            f.setSlope200(BigDecimal.ZERO);
         }
 
         // Trend strength
-        ADXIndicator adx = new ADXIndicator(series, 14);
-        PlusDIIndicator plusDI = new PlusDIIndicator(series, 14);
-        MinusDIIndicator minusDI = new MinusDIIndicator(series, 14);
-
-        featureData.setAdx(toBigDecimal(adx.getValue(endIndex)));
-        featureData.setPlusDI(toBigDecimal(plusDI.getValue(endIndex)));
-        featureData.setMinusDI(toBigDecimal(minusDI.getValue(endIndex)));
-        featureData.setEfficiencyRatio20(calculateEfficiencyRatio(historicalData, 20));
+        f.setAdx(toBigDecimal(ind.adx.getValue(idx)));
+        f.setPlusDI(toBigDecimal(ind.plusDI.getValue(idx)));
+        f.setMinusDI(toBigDecimal(ind.minusDI.getValue(idx)));
+        f.setEfficiencyRatio20(calculateEfficiencyRatio(dataUpToIdx, 20));
 
         // Volatility
-        ATRIndicator atr = new ATRIndicator(series, 14);
-        BigDecimal atrValue = toBigDecimal(atr.getValue(endIndex));
-
-        featureData.setAtr(atrValue);
-        featureData.setAtrPct(
+        BigDecimal atrValue = toBigDecimal(ind.atr.getValue(idx));
+        f.setAtr(atrValue);
+        f.setAtrPct(
                 price.compareTo(BigDecimal.ZERO) == 0
                         ? BigDecimal.ZERO
                         : atrValue.divide(price, 8, RoundingMode.HALF_UP)
         );
 
         // Momentum
-        MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);
-        EMAIndicator macdSignal = new EMAIndicator(macd, 9);
-
-        BigDecimal macdValue = toBigDecimal(macd.getValue(endIndex));
-        BigDecimal macdSignalValue = toBigDecimal(macdSignal.getValue(endIndex));
-
-        featureData.setMacd(macdValue);
-        featureData.setMacdSignal(macdSignalValue);
-        featureData.setMacdHistogram(macdValue.subtract(macdSignalValue));
-        featureData.setRsi(toBigDecimal(new RSIIndicator(closePrice, 14).getValue(endIndex)));
+        BigDecimal macdValue = toBigDecimal(ind.macd.getValue(idx));
+        BigDecimal macdSignalValue = toBigDecimal(ind.macdSignal.getValue(idx));
+        f.setMacd(macdValue);
+        f.setMacdSignal(macdSignalValue);
+        f.setMacdHistogram(macdValue.subtract(macdSignalValue));
+        f.setRsi(toBigDecimal(ind.rsi.getValue(idx)));
 
         // Structure / breakout
-        featureData.setHighestHigh20(calculateHighestHigh(historicalData, 20));
-        featureData.setLowestLow20(calculateLowestLow(historicalData, 20));
-        featureData.setDonchianUpper20(featureData.getHighestHigh20());
-        featureData.setDonchianLower20(featureData.getLowestLow20());
-        featureData.setDonchianMid20(
-                featureData.getDonchianUpper20()
-                        .add(featureData.getDonchianLower20())
+        f.setHighestHigh20(calculateHighestHigh(dataUpToIdx, 20));
+        f.setLowestLow20(calculateLowestLow(dataUpToIdx, 20));
+        f.setDonchianUpper20(f.getHighestHigh20());
+        f.setDonchianLower20(f.getLowestLow20());
+        f.setDonchianMid20(
+                f.getDonchianUpper20()
+                        .add(f.getDonchianLower20())
                         .divide(BigDecimal.valueOf(2), 8, RoundingMode.HALF_UP)
         );
 
         // Candle quality
-        BigDecimal open = latestMarketData.getOpenPrice();
-        BigDecimal high = latestMarketData.getHighPrice();
-        BigDecimal low = latestMarketData.getLowPrice();
-        BigDecimal close = latestMarketData.getClosePrice();
-
+        BigDecimal open = md.getOpenPrice();
+        BigDecimal high = md.getHighPrice();
+        BigDecimal low = md.getLowPrice();
+        BigDecimal close = md.getClosePrice();
         BigDecimal bodySize = close.subtract(open).abs();
         BigDecimal candleRange = high.subtract(low);
-
-        featureData.setBodySize(bodySize);
-        featureData.setCandleRange(candleRange);
-        featureData.setBodyToRangeRatio(
+        f.setBodySize(bodySize);
+        f.setCandleRange(candleRange);
+        f.setBodyToRangeRatio(
                 candleRange.compareTo(BigDecimal.ZERO) == 0
                         ? BigDecimal.ZERO
                         : bodySize.divide(candleRange, 8, RoundingMode.HALF_UP)
         );
-        featureData.setCloseLocationValue(
+        f.setCloseLocationValue(
                 candleRange.compareTo(BigDecimal.ZERO) == 0
                         ? BigDecimal.ZERO
                         : close.subtract(low).divide(candleRange, 8, RoundingMode.HALF_UP)
         );
-
-        featureData.setRelativeVolume20(calculateRelativeVolume(historicalData, 20));
+        f.setRelativeVolume20(calculateRelativeVolume(dataUpToIdx, 20));
 
         // Regime summary
-        Integer trendScore = calculateTrendScore(featureData, price);
-        featureData.setTrendScore(trendScore);
-        featureData.setTrendRegime(resolveTrendRegime(trendScore));
-        featureData.setVolatilityRegime(resolveVolatilityRegime(featureData.getAtrPct()));
-        featureData.setIsBearishBreakout(isBearishBreakout(featureData, price));
-        featureData.setIsBullishBreakout(isBullishBreakout(featureData, price));
-        featureData.setIsBullishPullback(isBullishPullback(featureData, price));
-        featureData.setIsBearishPullback(isBearishPullback(featureData, price));
-        featureData.setEntryBias(resolveEntryBias(featureData));
+        Integer trendScore = calculateTrendScore(f, price);
+        f.setTrendScore(trendScore);
+        f.setTrendRegime(resolveTrendRegime(trendScore));
+        f.setVolatilityRegime(resolveVolatilityRegime(f.getAtrPct()));
+        f.setIsBearishBreakout(isBearishBreakout(f, price));
+        f.setIsBullishBreakout(isBullishBreakout(f, price));
+        f.setIsBullishPullback(isBullishPullback(f, price));
+        f.setIsBearishPullback(isBearishPullback(f, price));
+        f.setEntryBias(resolveEntryBias(f));
 
-        // ── VCB indicators ────────────────────────────────────────────────────
-
-        StandardDeviationIndicator stdDev20 = new StandardDeviationIndicator(closePrice, 20);
-        Num bbUpperValue = ema20.getValue(endIndex).plus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
-        Num bbLowerValue = ema20.getValue(endIndex).minus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
-
+        // VCB band features
+        Num bbUpperValue = ind.ema20.getValue(idx)
+                .plus(ind.stdDev20.getValue(idx).multipliedBy(ind.series.numOf(2)));
+        Num bbLowerValue = ind.ema20.getValue(idx)
+                .minus(ind.stdDev20.getValue(idx).multipliedBy(ind.series.numOf(2)));
         BigDecimal bbUpper = toBigDecimal(bbUpperValue);
         BigDecimal bbLower = toBigDecimal(bbLowerValue);
-        BigDecimal ema20Value = toBigDecimal(ema20.getValue(endIndex));
-
-        featureData.setBbUpperBand(bbUpper);
-        featureData.setBbLowerBand(bbLower);
-        featureData.setBbWidth(
+        BigDecimal ema20Value = toBigDecimal(ind.ema20.getValue(idx));
+        f.setBbUpperBand(bbUpper);
+        f.setBbLowerBand(bbLower);
+        f.setBbWidth(
                 ema20Value.compareTo(BigDecimal.ZERO) == 0
                         ? BigDecimal.ZERO
                         : bbUpper.subtract(bbLower).divide(ema20Value, 8, RoundingMode.HALF_UP)
         );
 
-        // 2. Keltner Channels (1.5 ATR multiplier — for squeeze detection)
-
         BigDecimal kcMultiplier = new BigDecimal("1.5");
         BigDecimal kcUpper = ema20Value.add(atrValue.multiply(kcMultiplier));
         BigDecimal kcLower = ema20Value.subtract(atrValue.multiply(kcMultiplier));
-
-        featureData.setKcUpperBand(kcUpper);
-        featureData.setKcLowerBand(kcLower);
-        featureData.setKcWidth(
+        f.setKcUpperBand(kcUpper);
+        f.setKcLowerBand(kcLower);
+        f.setKcWidth(
                 ema20Value.compareTo(BigDecimal.ZERO) == 0
                         ? BigDecimal.ZERO
                         : kcUpper.subtract(kcLower).divide(ema20Value, 8, RoundingMode.HALF_UP)
         );
 
-        // 3. ATR Ratio = current ATR / median ATR over last 20 periods
-        featureData.setAtrRatio(calculateAtrRatio(historicalData, 14, 20));
+        f.setAtrRatio(calculateAtrRatio(dataUpToIdx, 14, 20));
+        f.setSignedEr20(calculateSignedEfficiencyRatio(dataUpToIdx, 20));
 
-        // 4. Signed ER20
+        // Funding (V35) — perp-only; null on spot symbols or when
+        // funding_rate_history is cold-started for this symbol.
+        f.setFundingRate8h(funding.rate8h());
+        f.setFundingRate7dAvg(funding.rate7dAvg());
+        f.setFundingRateZ(funding.rateZ());
 
-        featureData.setSignedEr20(calculateSignedEfficiencyRatio(historicalData, 20));
+        return f;
+    }
 
+    /**
+     * Bundle of TA4j indicators built once over a {@link BarSeries}. Keeps the
+     * bulk-backfill path's signature manageable and guarantees the indicator
+     * set stays aligned with the live single-bar path.
+     */
+    private static final class IndicatorBundle {
+        BarSeries series;
+        ClosePriceIndicator closePrice;
+        EMAIndicator ema20;
+        EMAIndicator ema50;
+        EMAIndicator ema200;
+        ADXIndicator adx;
+        PlusDIIndicator plusDI;
+        MinusDIIndicator minusDI;
+        ATRIndicator atr;
+        MACDIndicator macd;
+        EMAIndicator macdSignal;
+        RSIIndicator rsi;
+        StandardDeviationIndicator stdDev20;
 
-        return  featureStoreRepository.save(featureData);
+        private IndicatorBundle() {}
+
+        static IndicatorBundle build(BarSeries series) {
+            IndicatorBundle b = new IndicatorBundle();
+            b.series = series;
+            b.closePrice = new ClosePriceIndicator(series);
+            b.ema20 = new EMAIndicator(b.closePrice, 20);
+            b.ema50 = new EMAIndicator(b.closePrice, 50);
+            b.ema200 = new EMAIndicator(b.closePrice, 200);
+            b.adx = new ADXIndicator(series, 14);
+            b.plusDI = new PlusDIIndicator(series, 14);
+            b.minusDI = new MinusDIIndicator(series, 14);
+            b.atr = new ATRIndicator(series, 14);
+            b.macd = new MACDIndicator(b.closePrice, 12, 26);
+            b.macdSignal = new EMAIndicator(b.macd, 9);
+            b.rsi = new RSIIndicator(b.closePrice, 14);
+            b.stdDev20 = new StandardDeviationIndicator(b.closePrice, 20);
+            return b;
+        }
     }
 
     private boolean isBullishPullback(FeatureStore feature, BigDecimal price) {
-        if (feature == null || price == null) {
+        if (ObjectUtils.isEmpty(feature) || ObjectUtils.isEmpty(price)) {
             log.debug("Bullish pullback check failed: feature or price is null");
             return false;
         }
 
-        if (feature.getEma20() == null || feature.getEma50() == null) {
+        if (ObjectUtils.isEmpty(feature.getEma20()) || ObjectUtils.isEmpty(feature.getEma50())) {
             log.debug("Bullish pullback check failed: ema20 or ema50 is null");
             return false;
         }
@@ -259,7 +360,7 @@ public class TechnicalIndicatorService {
 
         boolean stillAboveEma50 = price.compareTo(ema50) >= 0;
 
-        boolean acceptableCandle = feature.getCloseLocationValue() == null
+        boolean acceptableCandle = ObjectUtils.isEmpty(feature.getCloseLocationValue())
                 || feature.getCloseLocationValue().compareTo(new BigDecimal("0.4")) >= 0;
 
         boolean result = bullishStructure
@@ -283,12 +384,12 @@ public class TechnicalIndicatorService {
     }
 
     private boolean isBearishPullback(FeatureStore feature, BigDecimal price) {
-        if (feature == null || price == null) {
+        if (ObjectUtils.isEmpty(feature) || ObjectUtils.isEmpty(price)) {
             log.debug("Bearish pullback check failed: feature or price is null");
             return false;
         }
 
-        if (feature.getEma20() == null || feature.getEma50() == null) {
+        if (ObjectUtils.isEmpty(feature.getEma20()) || ObjectUtils.isEmpty(feature.getEma50())) {
             log.debug("Bearish pullback check failed: ema20 or ema50 is null");
             return false;
         }
@@ -331,7 +432,7 @@ public class TechnicalIndicatorService {
     }
 
     private boolean isBullishBreakout(FeatureStore feature, BigDecimal price) {
-        if (feature.getDonchianUpper20() == null || price == null) {
+        if (ObjectUtils.isEmpty(feature.getDonchianUpper20()) || ObjectUtils.isEmpty(price)) {
             log.debug("Bullish breakout check failed: Donchian upper or price is null");
             return false;
         }
@@ -350,7 +451,7 @@ public class TechnicalIndicatorService {
     }
 
     private boolean isBearishBreakout(FeatureStore feature, BigDecimal price) {
-        if (feature.getDonchianLower20() == null || price == null) {
+        if (ObjectUtils.isEmpty(feature.getDonchianLower20()) || ObjectUtils.isEmpty(price)) {
             log.debug("Bearish breakout check failed: Donchian lower or price is null");
             return false;
         }
@@ -379,7 +480,7 @@ public class TechnicalIndicatorService {
     }
 
     private String resolveTrendRegime(Integer trendScore) {
-        if (trendScore == null) {
+        if (ObjectUtils.isEmpty(trendScore)) {
             return "NEUTRAL";
         }
         if (trendScore >= 4) {
@@ -392,7 +493,7 @@ public class TechnicalIndicatorService {
     }
 
     private String resolveVolatilityRegime(BigDecimal atrPct) {
-        if (atrPct == null) {
+        if (ObjectUtils.isEmpty(atrPct)) {
             return "NORMAL";
         }
 
@@ -408,12 +509,12 @@ public class TechnicalIndicatorService {
     private Integer calculateTrendScore(FeatureStore feature, BigDecimal price) {
         int score = 0;
 
-        if (feature.getEma20() != null && price.compareTo(feature.getEma20()) > 0) score++;
-        if (feature.getEma50() != null && price.compareTo(feature.getEma50()) > 0) score++;
-        if (feature.getEma200() != null && price.compareTo(feature.getEma200()) > 0) score++;
-        if (feature.getEma50() != null && feature.getEma200() != null
+        if (ObjectUtils.isNotEmpty(feature.getEma20()) && price.compareTo(feature.getEma20()) > 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getEma50()) && price.compareTo(feature.getEma50()) > 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getEma200()) && price.compareTo(feature.getEma200()) > 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getEma50()) && ObjectUtils.isNotEmpty(feature.getEma200())
                 && feature.getEma50().compareTo(feature.getEma200()) > 0) score++;
-        if (feature.getAdx() != null && feature.getAdx().compareTo(new BigDecimal("20")) >= 0) score++;
+        if (ObjectUtils.isNotEmpty(feature.getAdx()) && feature.getAdx().compareTo(new BigDecimal("20")) >= 0) score++;
 
         return score;
     }
@@ -481,37 +582,11 @@ public class TechnicalIndicatorService {
     }
 
     private BigDecimal toBigDecimal(Num value) {
-        return new BigDecimal(value.toString()).setScale(8, RoundingMode.HALF_UP);
+        return BarSeriesUtil.toBigDecimal(value);
     }
 
     private BarSeries convertToBarSeries(List<MarketData> historicalData, String interval) {
-        BarSeries series = new BaseBarSeries();
-
-        Duration barDuration = Duration.ofMinutes(mapperUtil.getIntervalMinutes(interval));
-
-        for (MarketData data : historicalData) {
-            Instant barTimestamp = data.getEndTime().atZone(ZoneId.of("UTC")).toInstant();
-
-            Num openPrice = series.numOf(data.getOpenPrice());
-            Num highPrice = series.numOf(data.getHighPrice());
-            Num lowPrice = series.numOf(data.getLowPrice());
-            Num closePrice = series.numOf(data.getClosePrice());
-            Num volume = series.numOf(data.getVolume());
-
-            BaseBar bar = BaseBar.builder()
-                    .timePeriod(barDuration)
-                    .endTime(barTimestamp.atZone(ZoneId.of("UTC")))
-                    .openPrice(openPrice)
-                    .highPrice(highPrice)
-                    .lowPrice(lowPrice)
-                    .closePrice(closePrice)
-                    .volume(volume)
-                    .build();
-
-            series.addBar(bar);
-        }
-
-        return series;
+        return BarSeriesUtil.toBarSeries(historicalData, interval, mapperUtil);
     }
 
     /**
@@ -598,96 +673,369 @@ public class TechnicalIndicatorService {
     }
 
     /**
-     * Backfills VCB indicator fields (bbWidth, kcWidth, atrRatio, signedEr20 and
-     * their band values) for existing FeatureStore records that were saved before
-     * these columns were added to the computation pipeline.
+     * Bulk feature backfill — chunks the {@code [from, to]} range into
+     * 1-month windows and processes each in its own {@code REQUIRES_NEW}
+     * transaction. Within each window: loads market_data with a 300-bar
+     * warmup, builds the BarSeries + indicators once, walks target bars in
+     * O(N), saves in chunks of 500 with {@code flush() + clear()} so the
+     * Hibernate L1 cache stays bounded.
      *
-     * Safe to call repeatedly — skips records where bb_width is already populated.
+     * <p><b>Warmup parity</b>: each window pulls a fresh 300 bars before
+     * {@code windowStart}, so target-bar indicator values are computed with
+     * the same effective lookback as the live single-bar path. Backfilled
+     * rows match what live ingestion would have produced for the same
+     * {@code start_time}.
      *
-     * @param symbol   e.g. "BTCUSDT"
-     * @param interval e.g. "1h"
-     * @param from     inclusive start of backfill window
-     * @param to       inclusive end of backfill window
-     * @return number of records updated
+     * <p><b>Memory</b>: peak heap is bounded by one 1-month window's bars
+     * + the 500-row save buffer. A multi-year backfill no longer risks OOM.
+     *
+     * <p><b>Cancellation</b>: cooperative — the runner flips
+     * {@code cancel_requested} and the loop checks {@code ctx.isCancellationRequested()}
+     * between chunks. On cancel, the current window is rolled back via
+     * {@code setRollbackOnly()} (no half-saved window), and previously
+     * committed windows remain. Cancel latency is bounded by chunk processing
+     * time (~1s per 500 rows).
+     *
+     * <p><b>Recompute</b>: when {@code recompute=true} the per-window delete
+     * happens inside that window's transaction, so a cancelled window's
+     * deletes also roll back. Previously committed windows remain in their
+     * recomputed state.
+     *
+     * <p>Optional {@code ctx} drives progress emission and cooperative cancel
+     * — pass null when called from a non-job context (legacy sync endpoint
+     * or tests).
      */
-    public int backfillVcbIndicators(String symbol, String interval,
-                                     LocalDateTime from, LocalDateTime to) {
-        List<FeatureStore> missing = featureStoreRepository
-                .findMissingVcbIndicatorsInRange(symbol, interval, from, to);
+    public BulkBackfillResult bulkComputeAndStoreInRange(String symbol, String interval,
+                                                         LocalDateTime from, LocalDateTime to,
+                                                         boolean recompute, JobContext ctx) {
+        long intervalMinutes = mapperUtil.getIntervalMinutes(interval);
 
-        if (missing == null || missing.isEmpty()) {
-            log.info("VCB backfill: no records need updating for {}/{} [{} → {}]",
-                    symbol, interval, from, to);
-            return 0;
+        // Pre-count target candidates across the whole range for stable
+        // progress totals — small aggregate query, not a partition scan.
+        long totalCandidates = marketDataRepository
+                .countBySymbolIntervalAndRange(symbol, interval, from, to);
+        if (totalCandidates <= 0) {
+            log.info("Bulk backfill: no market_data in [{} → {}] for {}/{}", from, to, symbol, interval);
+            return new BulkBackfillResult(0, 0, 0, 0);
+        }
+        int totalCandidatesInt = (int) Math.min(totalCandidates, Integer.MAX_VALUE);
+        if (ctx != null) {
+            ctx.setPhase("bulk:walking_windows");
+            ctx.setProgress(0, totalCandidatesInt);
+        }
+        log.info("Bulk backfill: {} target candle(s) for {}/{} [{} → {}] (recompute={})",
+                totalCandidates, symbol, interval, from, to, recompute);
+
+        warnIfFundingCold(symbol);
+
+        TransactionTemplate windowTx = new TransactionTemplate(transactionManager);
+        windowTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        BulkAccumulator acc = new BulkAccumulator();
+        WindowIterationContext wic = new WindowIterationContext(
+                symbol, interval, intervalMinutes, to, recompute, windowTx, ctx, totalCandidatesInt);
+        boolean cancelled = false;
+        LocalDateTime windowStart = from;
+        while (!cancelled && !windowStart.isAfter(to)) {
+            WindowAdvance advance = advanceWindow(wic, windowStart, acc);
+            cancelled = advance.cancelled();
+            windowStart = advance.nextStart();
         }
 
-        log.info("VCB backfill: {} records to patch for {}/{}", missing.size(), symbol, interval);
-        int updated = 0;
+        if (ctx != null && !ctx.isCancellationRequested()) {
+            ctx.setProgress(totalCandidatesInt, totalCandidatesInt);
+        }
 
-        for (FeatureStore fs : missing) {
-            try {
-                List<MarketData> historical = marketDataRepository
-                        .findLast300BySymbolAndIntervalAndTime(symbol, interval, fs.getStartTime());
+        log.info("Bulk backfill complete: inserted={} skipped={} failed={} totalProcessed={} for {}/{} (recompute={})",
+                acc.totalInserted, acc.totalSkipped, acc.totalFailed, acc.totalProcessed,
+                symbol, interval, recompute);
+        return new BulkBackfillResult(acc.totalInserted, acc.totalSkipped, acc.totalFailed, totalCandidatesInt);
+    }
 
-                if (historical == null || historical.size() < 50) {
-                    log.warn("VCB backfill: not enough history for {} {} startTime={}",
-                            symbol, interval, fs.getStartTime());
-                    continue;
-                }
-
-                historical.sort(Comparator.comparing(MarketData::getStartTime));
-                MarketData latest = historical.getLast();
-
-                BarSeries series = convertToBarSeries(historical, interval);
-                int endIndex = series.getEndIndex();
-
-                ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
-                EMAIndicator ema20 = new EMAIndicator(closePrice, 20);
-                ATRIndicator atr = new ATRIndicator(series, 14);
-
-                Num ema20Val = ema20.getValue(endIndex);
-                Num atrVal   = atr.getValue(endIndex);
-
-                StandardDeviationIndicator stdDev20 = new StandardDeviationIndicator(closePrice, 20);
-                Num bbUpperVal = ema20Val.plus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
-                Num bbLowerVal = ema20Val.minus(stdDev20.getValue(endIndex).multipliedBy(series.numOf(2)));
-
-                BigDecimal bbUpper   = toBigDecimal(bbUpperVal);
-                BigDecimal bbLower   = toBigDecimal(bbLowerVal);
-                BigDecimal ema20Bd   = toBigDecimal(ema20Val);
-                BigDecimal atrBd     = toBigDecimal(atrVal);
-
-                fs.setBbUpperBand(bbUpper);
-                fs.setBbLowerBand(bbLower);
-                fs.setBbWidth(ema20Bd.compareTo(BigDecimal.ZERO) == 0
-                        ? BigDecimal.ZERO
-                        : bbUpper.subtract(bbLower).divide(ema20Bd, 8, RoundingMode.HALF_UP));
-
-                BigDecimal kcMultiplier = new BigDecimal("1.5");
-                BigDecimal kcUpper = ema20Bd.add(atrBd.multiply(kcMultiplier));
-                BigDecimal kcLower = ema20Bd.subtract(atrBd.multiply(kcMultiplier));
-
-                fs.setKcUpperBand(kcUpper);
-                fs.setKcLowerBand(kcLower);
-                fs.setKcWidth(ema20Bd.compareTo(BigDecimal.ZERO) == 0
-                        ? BigDecimal.ZERO
-                        : kcUpper.subtract(kcLower).divide(ema20Bd, 8, RoundingMode.HALF_UP));
-
-                fs.setAtrRatio(calculateAtrRatio(historical, 14, 20));
-                fs.setSignedEr20(calculateSignedEfficiencyRatio(historical, 20));
-
-                featureStoreRepository.save(fs);
-                updated++;
-
-            } catch (Exception e) {
-                log.error("VCB backfill failed for {} {} startTime={}: {}",
-                        symbol, interval, fs.getStartTime(), e.getMessage());
+    private WindowAdvance advanceWindow(WindowIterationContext wic, LocalDateTime windowStart, BulkAccumulator acc) {
+        if (wic.jobCtx() != null && wic.jobCtx().isCancellationRequested()) {
+            log.info("Bulk backfill cancelled before window starting at {} for {}/{}",
+                    windowStart, wic.symbol(), wic.interval());
+            return new WindowAdvance(windowStart, true);
+        }
+        LocalDateTime windowEnd = windowStart.plusMonths(WINDOW_MONTHS);
+        if (windowEnd.isAfter(wic.to())) windowEnd = wic.to();
+        WindowSpec spec = new WindowSpec(wic.symbol(), wic.interval(), windowStart, windowEnd,
+                wic.intervalMinutes(), wic.recompute());
+        ProgressTracker progress = new ProgressTracker(wic.jobCtx(), acc.totalProcessed, wic.totalCandidatesInt());
+        final LocalDateTime we = windowEnd;
+        WindowResult res = wic.windowTx().execute(status -> processBulkWindow(spec, progress, status));
+        if (res != null) {
+            acc.add(res);
+            if (res.cancelled) {
+                log.info("Bulk backfill: window [{} → {}] rolled back on cancel for {}/{}",
+                        windowStart, we, wic.symbol(), wic.interval());
+                return new WindowAdvance(we.plusNanos(1), true);
             }
         }
+        return new WindowAdvance(windowEnd.plusNanos(1), false);
+    }
 
-        log.info("VCB backfill complete: {}/{} records updated for {}/{}",
-                updated, missing.size(), symbol, interval);
-        return updated;
+    // Pre-flight: warn loudly if funding_rate_history is cold for this
+    // symbol. The bulk path does not auto-trigger the funding backfill —
+    // every feature_store row written here will have NULL funding
+    // columns, and the downstream PATCH_NULL_COLUMN job (or the chained
+    // patch in BACKFILL_FUNDING_HISTORY) will need to rescue them later.
+    // Surfacing this upfront prevents the silent-NULL class of bugs that
+    // masqueraded as "patch ran but did nothing".
+    private void warnIfFundingCold(String symbol) {
+        if (fundingRateRepository.countBySymbol(symbol) == 0) {
+            log.warn("Bulk backfill: funding_rate_history is cold for symbol={} — feature_store rows " +
+                            "will be written with NULL funding columns. Run BACKFILL_FUNDING_HISTORY " +
+                            "for {} first if it's a perpetual symbol; otherwise the chained patch " +
+                            "after the next funding-history backfill will fill them retroactively.",
+                    symbol, symbol);
+        }
+    }
+
+    /**
+     * Processes one 1-month window inside the caller's {@code REQUIRES_NEW}
+     * transaction. Returns a {@link WindowResult}; sets the transaction
+     * status to rollback when cancellation is observed mid-window, so partial
+     * deletes/inserts are reverted.
+     */
+    private WindowResult processBulkWindow(WindowSpec spec, ProgressTracker progress, TransactionStatus txStatus) {
+        progress.setPhase("bulk:" + spec.windowStart().toLocalDate());
+
+        deleteWindowIfRecompute(spec);
+
+        List<MarketData> data = loadWindowData(spec);
+        if (CollectionUtils.isEmpty(data)) {
+            return new WindowResult(0, 0, 0, 0, false);
+        }
+
+        Set<LocalDateTime> existing = loadExistingStartTimes(spec);
+        BarSeries series = convertToBarSeries(data, spec.interval());
+        IndicatorBundle ind = IndicatorBundle.build(series);
+        List<FundingRate> fundingSeries = loadFundingSeries(spec);
+
+        return processCandles(spec, data, existing, ind, fundingSeries, progress, txStatus);
+    }
+
+    // Per-window delete (when recompute=true) so cancel rolls back THIS
+    // window's deletes too — not just inserts. Avoids leaving "deleted but
+    // not yet recomputed" gaps when a recompute is cancelled.
+    private void deleteWindowIfRecompute(WindowSpec spec) {
+        if (!spec.recompute()) return;
+        int deleted = featureStoreRepository.deleteBySymbolAndIntervalInRange(
+                spec.symbol(), spec.interval(), spec.windowStart(), spec.windowEnd());
+        log.debug("Bulk backfill (recompute) window [{} → {}]: deleted {} rows",
+                spec.windowStart(), spec.windowEnd(), deleted);
+    }
+
+    // Load the per-window data with LIVE_WARMUP_BARS bars of warmup before
+    // windowStart — matches the live single-bar path's lookback, so indicator
+    // values stay parity. Use the start_time-range variant so the bar AT
+    // exactly windowEnd is included (otherwise its end_time spills past
+    // windowEnd and findBySymbolIntervalAndRange would drop it, leaving
+    // feature_store gaps at every window boundary).
+    private List<MarketData> loadWindowData(WindowSpec spec) {
+        LocalDateTime warmupStart = spec.windowStart()
+                .minusMinutes(LIVE_WARMUP_BARS * spec.intervalMinutes());
+        List<MarketData> data = marketDataRepository.findBySymbolIntervalAndStartTimeRange(
+                spec.symbol(), spec.interval(), warmupStart, spec.windowEnd());
+        if (data != null) data.sort(Comparator.comparing(MarketData::getStartTime));
+        return data;
+    }
+
+    private Set<LocalDateTime> loadExistingStartTimes(WindowSpec spec) {
+        return featureStoreRepository
+                .findExistingStartTimesInRange(spec.symbol(), spec.interval(), spec.windowStart(), spec.windowEnd())
+                .stream()
+                .map(Timestamp::toLocalDateTime)
+                .collect(Collectors.toCollection(HashSet::new));
+    }
+
+    // Funding history up to (windowEnd + interval) — Spot symbols see empty.
+    // The +interval overshoot covers the bar at start_time = windowEnd whose
+    // end_time crosses into the next window; without it a funding event
+    // landing on the boundary would be missed and the bulk row's funding
+    // columns would diverge from the live single-bar path's findLatest()
+    // semantics (which uses <= on end_time).
+    private List<FundingRate> loadFundingSeries(WindowSpec spec) {
+        LocalDateTime fundingBoundary = spec.windowEnd().plusMinutes(spec.intervalMinutes());
+        return fundingRateRepository.findAllUpTo(spec.symbol(), fundingBoundary);
+    }
+
+    private WindowResult processCandles(WindowSpec spec, List<MarketData> data,
+                                        Set<LocalDateTime> existing, IndicatorBundle ind,
+                                        List<FundingRate> fundingSeries, ProgressTracker progress,
+                                        TransactionStatus txStatus) {
+        int firstIdx = firstIndexAtOrAfter(data, spec.windowStart());
+        int lastIdx = lastIndexAtOrBefore(data, spec.windowEnd());
+
+        CandleAccumulator acc = new CandleAccumulator();
+        List<FeatureStore> buffer = new ArrayList<>(CHUNK_SIZE);
+        CandleWriteContext cwc = new CandleWriteContext(spec, data, ind, fundingSeries, buffer, progress);
+
+        for (int idx = firstIdx; idx <= lastIdx; idx++) {
+            MarketData md = data.get(idx);
+            acc.processed++;
+            if (existing.contains(md.getStartTime())) {
+                acc.skipped++;
+            } else if (progress.isCancellationRequested()) {
+                // Roll the WHOLE window back so a recompute doesn't leave a
+                // half-replaced window and a fill-missing doesn't leave a
+                // half-filled chunk that the operator can't easily detect.
+                txStatus.setRollbackOnly();
+                log.info("Bulk backfill window [{} → {}] rolling back on cancel for {}/{}",
+                        spec.windowStart(), spec.windowEnd(), spec.symbol(), spec.interval());
+                return new WindowResult(0, 0, 0, acc.processed, true);
+            } else {
+                processOneCandle(idx, md, cwc, acc);
+            }
+        }
+        flushBufferIfAny(buffer);
+        progress.report(acc.processed);
+        return new WindowResult(acc.inserted, acc.skipped, acc.failed, acc.processed, false);
+    }
+
+    private void processOneCandle(int idx, MarketData md, CandleWriteContext cwc, CandleAccumulator acc) {
+        try {
+            FundingFeatureSnapshot funding = fundingRateService
+                    .computeFundingFeaturesFromSeries(cwc.fundingSeries(), md.getEndTime());
+            FeatureStore row = buildFeatureRowFromPrecomputed(
+                    idx, cwc.spec().symbol(), cwc.spec().interval(), cwc.data().subList(0, idx + 1), cwc.ind(), funding);
+            cwc.buffer().add(row);
+            acc.inserted++;
+            if (cwc.buffer().size() >= CHUNK_SIZE) {
+                flushBufferIfAny(cwc.buffer());
+                cwc.progress().report(acc.processed);
+            }
+        } catch (RuntimeException e) {
+            acc.failed++;
+            log.error("Bulk backfill failed at idx={} startTime={} for {}/{}: {}",
+                    idx, md.getStartTime(), cwc.spec().symbol(), cwc.spec().interval(), e.getMessage());
+        }
+    }
+
+    // Evict managed entities from the L1 cache after each chunked save.
+    // Without this, a wide window keeps every saved row in memory until
+    // commit, defeating the purpose of chunked saves.
+    private void flushBufferIfAny(List<FeatureStore> buffer) {
+        if (buffer.isEmpty()) return;
+        featureStoreRepository.saveAll(buffer);
+        featureStoreRepository.flush();
+        entityManager.clear();
+        buffer.clear();
+    }
+
+    private static int firstIndexAtOrAfter(List<MarketData> data, LocalDateTime t) {
+        for (int i = 0; i < data.size(); i++) {
+            if (!data.get(i).getStartTime().isBefore(t)) return i;
+        }
+        return data.size();
+    }
+
+    private static int lastIndexAtOrBefore(List<MarketData> data, LocalDateTime t) {
+        for (int i = data.size() - 1; i >= 0; i--) {
+            if (!data.get(i).getStartTime().isAfter(t)) return i;
+        }
+        return -1;
+    }
+
+    /** Cohesive view of one bulk window's identity + processing flags. */
+    private record WindowSpec(
+            String symbol,
+            String interval,
+            LocalDateTime windowStart,
+            LocalDateTime windowEnd,
+            long intervalMinutes,
+            boolean recompute
+    ) {}
+
+    /** Constant inputs shared across every window in one bulk run. */
+    private record WindowIterationContext(
+            String symbol, String interval, long intervalMinutes,
+            LocalDateTime to, boolean recompute,
+            TransactionTemplate windowTx, JobContext jobCtx, int totalCandidatesInt
+    ) {}
+
+    /** Outcome of one window iteration: where to continue and whether to stop. */
+    private record WindowAdvance(LocalDateTime nextStart, boolean cancelled) {}
+
+    /** Per-window invariants passed to each candle during processing. */
+    private record CandleWriteContext(
+            WindowSpec spec,
+            List<MarketData> data,
+            IndicatorBundle ind,
+            List<FundingRate> fundingSeries,
+            List<FeatureStore> buffer,
+            ProgressTracker progress
+    ) {}
+
+    /** Null-safe bridge to {@link JobContext} for progress + cancellation. */
+    private static final class ProgressTracker {
+        private final JobContext ctx;
+        private final int baseline;
+        private final int total;
+
+        ProgressTracker(JobContext ctx, int baseline, int total) {
+            this.ctx = ctx;
+            this.baseline = baseline;
+            this.total = total;
+        }
+
+        void setPhase(String phase) {
+            if (ctx != null) ctx.setPhase(phase);
+        }
+
+        boolean isCancellationRequested() {
+            return ctx != null && ctx.isCancellationRequested();
+        }
+
+        void report(int processed) {
+            if (ctx != null) ctx.setProgress(baseline + processed, total);
+        }
+    }
+
+    /** Per-window candle counters mutated through the inner loop. */
+    private static final class CandleAccumulator {
+        int inserted;
+        int skipped;
+        int failed;
+        int processed;
+    }
+
+    /** Cross-window totals mutated by {@link #bulkComputeAndStoreInRange}. */
+    private static final class BulkAccumulator {
+        int totalInserted;
+        int totalSkipped;
+        int totalFailed;
+        int totalProcessed;
+
+        void add(WindowResult res) {
+            totalInserted += res.inserted;
+            totalSkipped += res.skipped;
+            totalFailed += res.failed;
+            totalProcessed += res.processed;
+        }
+    }
+
+    /** Per-window outcome aggregated by {@link #bulkComputeAndStoreInRange}. */
+    private static final class WindowResult {
+        final int inserted;
+        final int skipped;
+        final int failed;
+        final int processed;
+        final boolean cancelled;
+
+        WindowResult(int inserted, int skipped, int failed, int processed, boolean cancelled) {
+            this.inserted = inserted;
+            this.skipped = skipped;
+            this.failed = failed;
+            this.processed = processed;
+            this.cancelled = cancelled;
+        }
+    }
+
+    /** Result tuple for {@link #bulkComputeAndStoreInRange}. */
+    public record BulkBackfillResult(int inserted, int skipped, int failed, int total) {
     }
 
     /**

@@ -4,6 +4,7 @@ import id.co.blackheart.dto.backtest.BacktestState;
 import id.co.blackheart.model.BacktestTrade;
 import id.co.blackheart.model.BacktestTradePosition;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -43,47 +44,59 @@ public class BacktestStateService {
     public BigDecimal calculateCurrentEquity(BacktestState state, BigDecimal latestPrice) {
         BigDecimal equity = safe(state.getCashBalance());
 
-        BacktestTrade activeTrade = state.getActiveTrade();
-        List<BacktestTradePosition> activePositions = state.getActiveTradePositions();
-
-        if (activeTrade == null || activePositions == null || activePositions.isEmpty()) {
+        // Multi-trade aware: sum mark-to-market across EVERY strategy's
+        // active positions, not just the legacy mirror's. With multiple
+        // strategies open under the cap, the legacy mirror would reflect
+        // only the most-recently-opened trade and silently drop the rest
+        // of the book from equity / drawdown calculations.
+        java.util.Map<String, List<BacktestTradePosition>> byStrategy =
+                state.getActiveTradePositionsByStrategy();
+        if (!CollectionUtils.isEmpty(byStrategy)) {
+            for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
+                if (perStrategy == null) continue;
+                equity = equity.add(positionsMarkToMarket(perStrategy, latestPrice));
+            }
             return equity;
         }
 
-        for (BacktestTradePosition position : activePositions) {
-            if (position == null || !"OPEN".equalsIgnoreCase(position.getStatus())) {
-                continue;
-            }
-
-            BigDecimal remainingQty = safe(position.getRemainingQty());
-            BigDecimal entryPrice = safe(position.getEntryPrice());
-
-            if (remainingQty.compareTo(ZERO) <= 0 || entryPrice.compareTo(ZERO) <= 0) {
-                continue;
-            }
-
-            BigDecimal markToMarketValue;
-            BigDecimal unrealizedPnl;
-
-            if ("LONG".equalsIgnoreCase(position.getSide())) {
-                markToMarketValue = remainingQty.multiply(latestPrice);
-                unrealizedPnl = latestPrice.subtract(entryPrice).multiply(remainingQty);
-            } else {
-                /**
-                 * Synthetic short model:
-                 * equity contribution = reserved quote notional + unrealized pnl
-                 * Clamped at zero — max loss is the collateral put up at entry;
-                 * markToMarketValue cannot go negative (position liquidated at that point).
-                 */
-                BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
-                unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
-                markToMarketValue = reservedNotional.add(unrealizedPnl).max(ZERO);
-            }
-
-            equity = equity.add(markToMarketValue);
+        // Legacy single-strategy fallback (pre-B1 code path / single
+        // strategy runs with no multi-trade entries).
+        BacktestTrade activeTrade = state.getActiveTrade();
+        List<BacktestTradePosition> activePositions = state.getActiveTradePositions();
+        if (activeTrade == null || CollectionUtils.isEmpty(activePositions)) {
+            return equity;
         }
+        return equity.add(positionsMarkToMarket(activePositions, latestPrice));
+    }
 
-        return equity;
+    private BigDecimal positionsMarkToMarket(
+            List<BacktestTradePosition> positions, BigDecimal latestPrice
+    ) {
+        BigDecimal sum = ZERO;
+        for (BacktestTradePosition position : positions) {
+            sum = sum.add(positionContribution(position, latestPrice));
+        }
+        return sum;
+    }
+
+    private BigDecimal positionContribution(BacktestTradePosition position, BigDecimal latestPrice) {
+        if (position == null || !"OPEN".equalsIgnoreCase(position.getStatus())) {
+            return ZERO;
+        }
+        BigDecimal remainingQty = safe(position.getRemainingQty());
+        BigDecimal entryPrice = safe(position.getEntryPrice());
+        if (remainingQty.compareTo(ZERO) <= 0 || entryPrice.compareTo(ZERO) <= 0) {
+            return ZERO;
+        }
+        if ("LONG".equalsIgnoreCase(position.getSide())) {
+            return remainingQty.multiply(latestPrice);
+        }
+        // Synthetic short model: equity contribution = reserved quote notional + unrealized pnl.
+        // Clamped at zero — max loss is the collateral put up at entry; markToMarketValue
+        // cannot go negative (position liquidated at that point).
+        BigDecimal reservedNotional = remainingQty.multiply(entryPrice);
+        BigDecimal unrealizedPnl = entryPrice.subtract(latestPrice).multiply(remainingQty);
+        return reservedNotional.add(unrealizedPnl).max(ZERO);
     }
 
     /**

@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.Arrays;
 import java.util.Base64;
@@ -54,7 +55,7 @@ public class EncryptionKeyInitializer {
 
     @PostConstruct
     void init() {
-        if (encryptionKeyBase64 == null || encryptionKeyBase64.isBlank()) {
+        if (!StringUtils.hasText(encryptionKeyBase64)) {
             throw new IllegalStateException(
                     "app.encryption.key is not configured — set DB_ENCRYPTION_KEY to a base64-encoded 32-byte key "
                             + "(generate with: openssl rand -base64 32)");
@@ -71,13 +72,12 @@ public class EncryptionKeyInitializer {
                                 + "Set DB_ENCRYPTION_KEY to a real base64-encoded 32-byte key before running in a production-like profile "
                                 + "(" + PRODUCTION_LIKE_PROFILES + "). Generate one with: openssl rand -base64 32");
             }
-            log.warn(
-                    "===== SECURITY WARNING =====\n"
-                            + "Starting with the INSECURE dev-only DB encryption key. Any value encrypted\n"
-                            + "with this key can be decrypted by anyone with access to this source tree.\n"
-                            + "Acceptable for local development only — set DB_ENCRYPTION_KEY before exposing\n"
-                            + "this process on any network other than localhost."
-            );
+            log.warn("""
+                    ===== SECURITY WARNING =====
+                    Starting with the INSECURE dev-only DB encryption key. Any value encrypted
+                    with this key can be decrypted by anyone with access to this source tree.
+                    Acceptable for local development only — set DB_ENCRYPTION_KEY before exposing
+                    this process on any network other than localhost.""");
             EncryptedStringConverter.installKey(DEV_ONLY_KEY_BYTES);
             return;
         }

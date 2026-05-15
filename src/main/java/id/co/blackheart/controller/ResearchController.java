@@ -5,14 +5,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.repository.BacktestRunRepository;
-import id.co.blackheart.service.research.AnalysisReport;
-import id.co.blackheart.service.research.BacktestAnalysisService;
-import id.co.blackheart.service.research.ResearchParamService;
+import id.co.blackheart.service.backtest.AnalysisReport;
+import id.co.blackheart.service.backtest.BacktestAnalysisService;
+import id.co.blackheart.service.strategy.ResearchParamService;
 import id.co.blackheart.service.research.ResearchSweepService;
 import id.co.blackheart.service.research.SweepSpec;
 import id.co.blackheart.service.research.SweepState;
 import id.co.blackheart.service.strategy.TrendPullbackStrategyService.Params;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -20,16 +21,25 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -51,6 +61,7 @@ import java.util.UUID;
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/research")
+@Profile("research")
 @RequiredArgsConstructor
 @Tag(name = "ResearchController",
      description = "Research-mode diagnostics + hot-reloadable strategy params")
@@ -79,7 +90,7 @@ public class ResearchController {
         // has no cached snapshot yet (older runs, or completed-before-analyzer),
         // compute now. Otherwise return the cached payload verbatim.
         AnalysisReport report;
-        if (recompute || run.getAnalysisSnapshot() == null || run.getAnalysisSnapshot().isBlank()) {
+        if (recompute || !StringUtils.hasText(run.getAnalysisSnapshot())) {
             report = analysisService.analyze(runId);
         } else {
             try {
@@ -135,43 +146,66 @@ public class ResearchController {
 
     // ── Research log ─────────────────────────────────────────────────────────
 
+    /** Headline-metric column names — kept as constants because each appears
+     *  in {@link #ALLOWED_LOG_SORT}, on the response row, and as the lookup
+     *  key into the analysis snapshot's {@code headline} map. */
+    private static final String COL_CREATED_AT    = "createdAt";
+    private static final String COL_TRADE_COUNT   = "tradeCount";
+    private static final String COL_WIN_RATE      = "winRate";
+    private static final String COL_PROFIT_FACTOR = "profitFactor";
+    private static final String COL_MAX_DRAWDOWN  = "maxDrawdown";
+
+    private static final Set<String> ALLOWED_LOG_SORT = Set.of(
+            COL_CREATED_AT, COL_TRADE_COUNT, COL_WIN_RATE, COL_PROFIT_FACTOR,
+            COL_MAX_DRAWDOWN, "strategyCode", "asset", "strategyVersion");
+
     /**
      * Compact progression view — one row per completed backtest with the
      * headline metrics flattened out. Lets us see version-over-version deltas
      * at a glance (v0.1 → v0.2b → v0.3 → v0.4).
+     *
+     * <p>{@code sort} follows Spring's "field,direction" convention
+     * (e.g. {@code "createdAt,desc"}, {@code "tradeCount,asc"}). The field is
+     * validated against {@link #ALLOWED_LOG_SORT}; an unknown field falls back
+     * to {@code "createdAt"}. Direction defaults to {@code DESC}.
      */
     @GetMapping("/log")
     @PreAuthorize("hasRole('ADMIN')")
-    @Operation(summary = "Research log — one row per completed run, newest first",
+    @Operation(summary = "Research log — paginated/filterable feed of completed runs, newest first",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> getResearchLog(
             @RequestHeader("Authorization") String authHeader,
             @RequestParam(name = "strategyCode", required = false) String strategyCode,
-            @RequestParam(name = "limit", defaultValue = "50") int limit) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+            @RequestParam(name = "asset", required = false) String asset,
+            @RequestParam(name = "interval", required = false) String interval,
+            @RequestParam(name = "search", required = false) String search,
+            @RequestParam(name = "sort", defaultValue = "createdAt,desc") String sort,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "50") int size) {
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
+        String code          = blankToNull(strategyCode);
+        String assetFilter   = blankToNull(asset);
+        String intervalFilter= blankToNull(interval);
+        String searchFilter  = blankToNull(search);
+        int cappedSize = Math.clamp(size, 1, 200);
+        Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize);
 
-        List<BacktestRun> runs = runRepository.findAll().stream()
-                .filter(r -> "COMPLETED".equalsIgnoreCase(r.getStatus()))
-                .filter(r -> r.getAnalysisSnapshot() != null && !r.getAnalysisSnapshot().isBlank())
-                .filter(r -> r.getUserId() == null || r.getUserId().equals(userId))
-                .filter(r -> strategyCode == null
-                        || (r.getStrategyCode() != null
-                            && r.getStrategyCode().equalsIgnoreCase(strategyCode)))
-                .sorted(Comparator.comparing(
-                        BacktestRun::getCreatedTime,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .limit(limit)
-                .toList();
+        String[] parts = sort.split(",", 2);
+        String sortColumn = ALLOWED_LOG_SORT.contains(parts[0].trim()) ? parts[0].trim() : COL_CREATED_AT;
+        String sortDir = (parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim())) ? "ASC" : "DESC";
 
-        List<Map<String, Object>> rows = new ArrayList<>(runs.size());
-        for (BacktestRun r : runs) {
-            rows.add(toLogRow(r));
-        }
+        Page<BacktestRun> runs = runRepository.findResearchLog(
+                userId, code, assetFilter, intervalFilter, searchFilter, sortColumn, sortDir, pageable);
+        Page<Map<String, Object>> rows = runs.map(this::toLogRow);
 
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(rows)
                 .build());
+    }
+
+    private static String blankToNull(String s) {
+        return StringUtils.hasText(s) ? s.trim() : null;
     }
 
     // ── Sweep driver ─────────────────────────────────────────────────────────
@@ -182,7 +216,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> createSweep(
             @RequestHeader("Authorization") String authHeader,
             @RequestBody SweepSpec spec) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.startSweep(userId, spec);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ResponseDto.builder()
                 .responseCode(HttpStatus.ACCEPTED.value() + ResponseCode.SUCCESS.getCode())
@@ -196,7 +230,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> getSweep(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.getSweep(sweepId);
         if (state == null
                 || (state.getUserId() != null && !state.getUserId().equals(userId))) {
@@ -210,15 +244,36 @@ public class ResearchController {
     }
 
     @GetMapping("/sweeps")
-    @Operation(summary = "List all sweeps the caller owns",
+    @Operation(summary = "List sweeps the caller owns — paginated, filterable, sortable",
                security = @SecurityRequirement(name = "bearerAuth"))
     public ResponseEntity<ResponseDto> listSweeps(
-            @RequestHeader("Authorization") String authHeader) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "sort", required = false) String sort,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "25") int size) {
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
+        Set<String> statusFilter = parseCsvUpper(status);
+        // Cap size to keep dashboards from accidentally loading thousands of rows
+        // through the in-memory filter (the same cap RecentPromotions uses).
+        int cappedSize = Math.clamp(size, 1, 100);
+        Pageable pageable = PageRequest.of(Math.max(0, page), cappedSize);
+        Page<SweepState> result = sweepService.listSweepsPaged(userId, statusFilter, sort, pageable);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(sweepService.listSweeps(userId))
+                .data(result)
                 .build());
+    }
+
+    /** "RUNNING,PENDING" → {RUNNING, PENDING}. Empty/null → empty set (= no filter). */
+    private static Set<String> parseCsvUpper(String csv) {
+        if (!StringUtils.hasText(csv)) return Set.of();
+        Set<String> out = new HashSet<>();
+        for (String token : csv.split(",")) {
+            String t = token.trim().toUpperCase(Locale.ROOT);
+            if (StringUtils.hasText(t)) out.add(t);
+        }
+        return out;
     }
 
     @PostMapping("/sweeps/{sweepId}/cancel")
@@ -227,7 +282,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> cancelSweep(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.getSweep(sweepId);
         if (state == null
                 || (state.getUserId() != null && !state.getUserId().equals(userId))) {
@@ -247,7 +302,7 @@ public class ResearchController {
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId,
             @RequestBody Map<String, Object> body) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         @SuppressWarnings("unchecked")
         Map<String, Object> paramSet = (Map<String, Object>) body.get("paramSet");
         BacktestRun run = sweepService.evaluateHoldout(userId, sweepId, paramSet);
@@ -266,7 +321,7 @@ public class ResearchController {
     public ResponseEntity<ResponseDto> deleteSweep(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable UUID sweepId) {
-        UUID userId = jwtService.extractUserId(authHeader.substring(7));
+        UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
         SweepState state = sweepService.getSweep(sweepId);
         if (state == null
                 || (state.getUserId() != null && !state.getUserId().equals(userId))) {
@@ -288,19 +343,19 @@ public class ResearchController {
         row.put("strategyVersion", r.getStrategyVersion());
         row.put("asset", r.getAsset());
         row.put("interval", r.getInterval());
-        row.put("createdAt", r.getCreatedTime());
+        row.put(COL_CREATED_AT, r.getCreatedTime());
 
         try {
             Map<String, Object> snap = objectMapper.readValue(
                     r.getAnalysisSnapshot(), new TypeReference<Map<String, Object>>() {});
             Object headline = snap.get("headline");
             if (headline instanceof Map<?, ?> h) {
-                row.put("tradeCount", h.get("tradeCount"));
-                row.put("winRate", h.get("winRate"));
-                row.put("profitFactor", h.get("profitFactor"));
+                row.put(COL_TRADE_COUNT, h.get(COL_TRADE_COUNT));
+                row.put(COL_WIN_RATE, h.get(COL_WIN_RATE));
+                row.put(COL_PROFIT_FACTOR, h.get(COL_PROFIT_FACTOR));
                 row.put("avgR", h.get("avgR"));
                 row.put("netPnl", h.get("netPnl"));
-                row.put("maxDrawdown", h.get("maxDrawdown"));
+                row.put(COL_MAX_DRAWDOWN, h.get(COL_MAX_DRAWDOWN));
                 row.put("maxConsecutiveLosses", h.get("maxConsecutiveLosses"));
             }
         } catch (Exception e) {

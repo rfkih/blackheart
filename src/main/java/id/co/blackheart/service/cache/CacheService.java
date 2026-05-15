@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -26,8 +29,10 @@ public class CacheService {
     private static final String TRADE_POSITIONS_KEY_PREFIX    = "tradePositions:";
     private static final String USER_ACTIVE_TRADES_KEY_PREFIX = "accountActiveTrades:";
     private static final String LATEST_PRICE_KEY_PREFIX       = "latestPrice:";
+    private static final String MISSING_PRICE_KEY_PREFIX      = "latestPrice:missing:";
 
     private static final Duration LATEST_PRICE_TTL       = Duration.ofMinutes(5);
+    private static final Duration MISSING_PRICE_TTL      = Duration.ofMinutes(1);
     private static final Duration TRADE_TTL              = Duration.ofHours(24);
     private static final Duration TRADE_POSITIONS_TTL    = Duration.ofHours(24);
     private static final Duration ACCOUNT_TRADE_SET_TTL  = Duration.ofHours(48);
@@ -35,6 +40,34 @@ public class CacheService {
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 
     private static final ZoneOffset ZONE = ZoneOffset.UTC;
+
+    // Redis hash field names — kept in one place so the write/read sites stay in sync.
+    private static final String FIELD_TRADE_ID = "tradeId";
+    private static final String FIELD_ACCOUNT_ID = "accountId";
+    private static final String FIELD_ACCOUNT_STRATEGY_ID = "accountStrategyId";
+    private static final String FIELD_STRATEGY_NAME = "strategyName";
+    private static final String FIELD_INTERVAL = "interval";
+    private static final String FIELD_EXCHANGE = "exchange";
+    private static final String FIELD_ASSET = "asset";
+    private static final String FIELD_STATUS = "status";
+    private static final String FIELD_TRADE_MODE = "tradeMode";
+    private static final String FIELD_AVG_ENTRY_PRICE = "avgEntryPrice";
+    private static final String FIELD_AVG_EXIT_PRICE = "avgExitPrice";
+    private static final String FIELD_TOTAL_ENTRY_QTY = "totalEntryQty";
+    private static final String FIELD_TOTAL_ENTRY_QUOTE_QTY = "totalEntryQuoteQty";
+    private static final String FIELD_TOTAL_REMAINING_QTY = "totalRemainingQty";
+    private static final String FIELD_REALIZED_PNL_AMOUNT = "realizedPnlAmount";
+    private static final String FIELD_REALIZED_PNL_PERCENT = "realizedPnlPercent";
+    private static final String FIELD_TOTAL_FEE_AMOUNT = "totalFeeAmount";
+    private static final String FIELD_TOTAL_FEE_CURRENCY = "totalFeeCurrency";
+    private static final String FIELD_EXIT_REASON = "exitReason";
+    private static final String FIELD_ENTRY_TREND_REGIME = "entryTrendRegime";
+    private static final String FIELD_ENTRY_ADX = "entryAdx";
+    private static final String FIELD_ENTRY_ATR = "entryAtr";
+    private static final String FIELD_ENTRY_RSI = "entryRsi";
+    private static final String FIELD_ENTRY_TIME = "entryTime";
+    private static final String FIELD_EXIT_TIME = "exitTime";
+    private static final String FIELD_UPDATED_AT = "updatedAt";
 
     private final RedisTemplate<String, Object> redisTemplate;
     private final ObjectMapper objectMapper;
@@ -45,7 +78,7 @@ public class CacheService {
     }
 
     public void saveLatestPrice(String symbol, BigDecimal price, LocalDateTime updatedAt) {
-        if (symbol == null || symbol.isBlank() || price == null) {
+        if (!StringUtils.hasText(symbol) || ObjectUtils.isEmpty(price)) {
             return;
         }
 
@@ -54,8 +87,8 @@ public class CacheService {
         Map<String, String> value = new HashMap<>();
         value.put("symbol", symbol);
         value.put("price", price.toPlainString());
-        if (updatedAt != null) {
-            value.put("updatedAt", updatedAt.format(DATE_TIME_FORMATTER));
+        if (ObjectUtils.isNotEmpty(updatedAt)) {
+            value.put(FIELD_UPDATED_AT, updatedAt.format(DATE_TIME_FORMATTER));
         }
 
         try {
@@ -70,14 +103,14 @@ public class CacheService {
     }
 
     public BigDecimal getLatestPrice(String symbol) {
-        if (symbol == null) {
+        if (ObjectUtils.isEmpty(symbol)) {
             return null;
         }
 
         String key = LATEST_PRICE_KEY_PREFIX + symbol;
         Object value = redisTemplate.opsForHash().get(key, "price");
 
-        if (value == null) {
+        if (ObjectUtils.isEmpty(value)) {
             return null;
         }
 
@@ -90,15 +123,46 @@ public class CacheService {
         }
     }
 
+    /**
+     * Negative cache for symbols Binance has no quote for (e.g. an asset
+     * without a USDT pair). Stops the portfolio read path from re-hitting
+     * Binance on every refresh for the same dud symbol. Short TTL so a
+     * newly-listed pair recovers quickly.
+     */
+    public void markPriceUnavailable(String symbol) {
+        if (!StringUtils.hasText(symbol)) {
+            return;
+        }
+        String key = MISSING_PRICE_KEY_PREFIX + symbol;
+        try {
+            redisTemplate.opsForValue().set(key, "1", MISSING_PRICE_TTL);
+        } catch (Exception e) {
+            log.warn("Failed to mark price unavailable | symbol={}", symbol, e);
+        }
+    }
+
+    public boolean isPriceUnavailable(String symbol) {
+        if (ObjectUtils.isEmpty(symbol)) {
+            return false;
+        }
+        String key = MISSING_PRICE_KEY_PREFIX + symbol;
+        try {
+            return Boolean.TRUE.equals(redisTemplate.hasKey(key));
+        } catch (Exception e) {
+            log.warn("Failed to check price unavailable | symbol={}", symbol, e);
+            return false;
+        }
+    }
+
     public LocalDateTime getLatestPriceUpdatedAt(String symbol) {
-        if (symbol == null) {
+        if (ObjectUtils.isEmpty(symbol)) {
             return null;
         }
 
         String key = LATEST_PRICE_KEY_PREFIX + symbol;
-        Object value = redisTemplate.opsForHash().get(key, "updatedAt");
+        Object value = redisTemplate.opsForHash().get(key, FIELD_UPDATED_AT);
 
-        if (value == null) {
+        if (ObjectUtils.isEmpty(value)) {
             return null;
         }
 
@@ -117,34 +181,34 @@ public class CacheService {
         String tradeKey = TRADE_KEY_PREFIX + tradeId;
 
         Map<String, Object> tradeMap = new HashMap<>();
-        tradeMap.put("tradeId",             asString(trade.getTradeId()));
-        tradeMap.put("accountId",           asString(trade.getAccountId()));
-        tradeMap.put("accountStrategyId",   asString(trade.getAccountStrategyId()));
-        tradeMap.put("strategyName",        asString(trade.getStrategyName()));
-        tradeMap.put("interval",            asString(trade.getInterval()));
-        tradeMap.put("exchange",            asString(trade.getExchange()));
-        tradeMap.put("asset",               asString(trade.getAsset()));
-        tradeMap.put("side",                asString(trade.getSide()));
-        tradeMap.put("status",              asString(trade.getStatus()));
-        tradeMap.put("tradeMode",           asString(trade.getTradeMode()));
-        tradeMap.put("avgEntryPrice",       asString(trade.getAvgEntryPrice()));
-        tradeMap.put("avgExitPrice",        asString(trade.getAvgExitPrice()));
-        tradeMap.put("totalEntryQty",       asString(trade.getTotalEntryQty()));
-        tradeMap.put("totalEntryQuoteQty",  asString(trade.getTotalEntryQuoteQty()));
-        tradeMap.put("totalRemainingQty",   asString(trade.getTotalRemainingQty()));
-        tradeMap.put("realizedPnlAmount",   asString(trade.getRealizedPnlAmount()));
-        tradeMap.put("realizedPnlPercent",  asString(trade.getRealizedPnlPercent()));
-        tradeMap.put("totalFeeAmount",      asString(trade.getTotalFeeAmount()));
-        tradeMap.put("totalFeeCurrency",    asString(trade.getTotalFeeCurrency()));
-        tradeMap.put("exitReason",          asString(trade.getExitReason()));
-        tradeMap.put("entryTrendRegime",    asString(trade.getEntryTrendRegime()));
-        tradeMap.put("entryAdx",            asString(trade.getEntryAdx()));
-        tradeMap.put("entryAtr",            asString(trade.getEntryAtr()));
-        tradeMap.put("entryRsi",            asString(trade.getEntryRsi()));
-        tradeMap.put("entryTime",           toDateTimeString(trade.getEntryTime()));
-        tradeMap.put("exitTime",            toDateTimeString(trade.getExitTime()));
-        tradeMap.put("createdTime",           toDateTimeString(trade.getCreatedTime()));
-        tradeMap.put("updatedTime",           toDateTimeString(trade.getUpdatedTime()));
+        tradeMap.put(FIELD_TRADE_ID,              asString(trade.getTradeId()));
+        tradeMap.put(FIELD_ACCOUNT_ID,            asString(trade.getAccountId()));
+        tradeMap.put(FIELD_ACCOUNT_STRATEGY_ID,   asString(trade.getAccountStrategyId()));
+        tradeMap.put(FIELD_STRATEGY_NAME,         asString(trade.getStrategyName()));
+        tradeMap.put(FIELD_INTERVAL,              asString(trade.getInterval()));
+        tradeMap.put(FIELD_EXCHANGE,              asString(trade.getExchange()));
+        tradeMap.put(FIELD_ASSET,                 asString(trade.getAsset()));
+        tradeMap.put("side",                      asString(trade.getSide()));
+        tradeMap.put(FIELD_STATUS,                asString(trade.getStatus()));
+        tradeMap.put(FIELD_TRADE_MODE,            asString(trade.getTradeMode()));
+        tradeMap.put(FIELD_AVG_ENTRY_PRICE,       asString(trade.getAvgEntryPrice()));
+        tradeMap.put(FIELD_AVG_EXIT_PRICE,        asString(trade.getAvgExitPrice()));
+        tradeMap.put(FIELD_TOTAL_ENTRY_QTY,       asString(trade.getTotalEntryQty()));
+        tradeMap.put(FIELD_TOTAL_ENTRY_QUOTE_QTY, asString(trade.getTotalEntryQuoteQty()));
+        tradeMap.put(FIELD_TOTAL_REMAINING_QTY,   asString(trade.getTotalRemainingQty()));
+        tradeMap.put(FIELD_REALIZED_PNL_AMOUNT,   asString(trade.getRealizedPnlAmount()));
+        tradeMap.put(FIELD_REALIZED_PNL_PERCENT,  asString(trade.getRealizedPnlPercent()));
+        tradeMap.put(FIELD_TOTAL_FEE_AMOUNT,      asString(trade.getTotalFeeAmount()));
+        tradeMap.put(FIELD_TOTAL_FEE_CURRENCY,    asString(trade.getTotalFeeCurrency()));
+        tradeMap.put(FIELD_EXIT_REASON,           asString(trade.getExitReason()));
+        tradeMap.put(FIELD_ENTRY_TREND_REGIME,    asString(trade.getEntryTrendRegime()));
+        tradeMap.put(FIELD_ENTRY_ADX,             asString(trade.getEntryAdx()));
+        tradeMap.put(FIELD_ENTRY_ATR,             asString(trade.getEntryAtr()));
+        tradeMap.put(FIELD_ENTRY_RSI,             asString(trade.getEntryRsi()));
+        tradeMap.put(FIELD_ENTRY_TIME,            toDateTimeString(trade.getEntryTime()));
+        tradeMap.put(FIELD_EXIT_TIME,             toDateTimeString(trade.getExitTime()));
+        tradeMap.put("createdTime",               toDateTimeString(trade.getCreatedTime()));
+        tradeMap.put("updatedTime",               toDateTimeString(trade.getUpdatedTime()));
 
         try {
             redisTemplate.executePipelined((RedisCallback<?>) connection -> {
@@ -231,34 +295,34 @@ public class CacheService {
         }
 
         Trades trade = new Trades();
-        trade.setTradeId(asUuid(d.get("tradeId"), tradeId));
-        trade.setAccountId(asUuid(d.get("accountId"), null));
-        trade.setAccountStrategyId(asUuid(d.get("accountStrategyId"), null));
-        trade.setStrategyName(asString(d.get("strategyName")));
-        trade.setInterval(asString(d.get("interval")));
-        trade.setExchange(asString(d.get("exchange")));
-        trade.setAsset(asString(d.get("asset")));
+        trade.setTradeId(asUuid(d.get(FIELD_TRADE_ID), tradeId));
+        trade.setAccountId(asUuid(d.get(FIELD_ACCOUNT_ID), null));
+        trade.setAccountStrategyId(asUuid(d.get(FIELD_ACCOUNT_STRATEGY_ID), null));
+        trade.setStrategyName(asString(d.get(FIELD_STRATEGY_NAME)));
+        trade.setInterval(asString(d.get(FIELD_INTERVAL)));
+        trade.setExchange(asString(d.get(FIELD_EXCHANGE)));
+        trade.setAsset(asString(d.get(FIELD_ASSET)));
         trade.setSide(asString(d.get("side")));
-        trade.setStatus(asString(d.get("status")));
-        trade.setTradeMode(asString(d.get("tradeMode")));
-        trade.setAvgEntryPrice(asBigDecimal(d.get("avgEntryPrice")));
-        trade.setAvgExitPrice(asBigDecimal(d.get("avgExitPrice")));
-        trade.setTotalEntryQty(asBigDecimal(d.get("totalEntryQty")));
-        trade.setTotalEntryQuoteQty(asBigDecimal(d.get("totalEntryQuoteQty")));
-        trade.setTotalRemainingQty(asBigDecimal(d.get("totalRemainingQty")));
-        trade.setRealizedPnlAmount(asBigDecimal(d.get("realizedPnlAmount")));
-        trade.setRealizedPnlPercent(asBigDecimal(d.get("realizedPnlPercent")));
-        trade.setTotalFeeAmount(asBigDecimal(d.get("totalFeeAmount")));
-        trade.setTotalFeeCurrency(asString(d.get("totalFeeCurrency")));
-        trade.setExitReason(asString(d.get("exitReason")));
-        trade.setEntryTrendRegime(asString(d.get("entryTrendRegime")));
-        trade.setEntryAdx(asBigDecimal(d.get("entryAdx")));
-        trade.setEntryAtr(asBigDecimal(d.get("entryAtr")));
-        trade.setEntryRsi(asBigDecimal(d.get("entryRsi")));
-        trade.setEntryTime(asLocalDateTime(d.get("entryTime")));
-        trade.setExitTime(asLocalDateTime(d.get("exitTime")));
+        trade.setStatus(asString(d.get(FIELD_STATUS)));
+        trade.setTradeMode(asString(d.get(FIELD_TRADE_MODE)));
+        trade.setAvgEntryPrice(asBigDecimal(d.get(FIELD_AVG_ENTRY_PRICE)));
+        trade.setAvgExitPrice(asBigDecimal(d.get(FIELD_AVG_EXIT_PRICE)));
+        trade.setTotalEntryQty(asBigDecimal(d.get(FIELD_TOTAL_ENTRY_QTY)));
+        trade.setTotalEntryQuoteQty(asBigDecimal(d.get(FIELD_TOTAL_ENTRY_QUOTE_QTY)));
+        trade.setTotalRemainingQty(asBigDecimal(d.get(FIELD_TOTAL_REMAINING_QTY)));
+        trade.setRealizedPnlAmount(asBigDecimal(d.get(FIELD_REALIZED_PNL_AMOUNT)));
+        trade.setRealizedPnlPercent(asBigDecimal(d.get(FIELD_REALIZED_PNL_PERCENT)));
+        trade.setTotalFeeAmount(asBigDecimal(d.get(FIELD_TOTAL_FEE_AMOUNT)));
+        trade.setTotalFeeCurrency(asString(d.get(FIELD_TOTAL_FEE_CURRENCY)));
+        trade.setExitReason(asString(d.get(FIELD_EXIT_REASON)));
+        trade.setEntryTrendRegime(asString(d.get(FIELD_ENTRY_TREND_REGIME)));
+        trade.setEntryAdx(asBigDecimal(d.get(FIELD_ENTRY_ADX)));
+        trade.setEntryAtr(asBigDecimal(d.get(FIELD_ENTRY_ATR)));
+        trade.setEntryRsi(asBigDecimal(d.get(FIELD_ENTRY_RSI)));
+        trade.setEntryTime(asLocalDateTime(d.get(FIELD_ENTRY_TIME)));
+        trade.setExitTime(asLocalDateTime(d.get(FIELD_EXIT_TIME)));
         trade.setCreatedTime(asLocalDateTime(d.get("createdAt")));
-        trade.setUpdatedTime(asLocalDateTime(d.get("updatedAt")));
+        trade.setUpdatedTime(asLocalDateTime(d.get(FIELD_UPDATED_AT)));
 
         return trade;
     }
@@ -267,7 +331,7 @@ public class CacheService {
         String key = TRADE_POSITIONS_KEY_PREFIX + tradeId;
         List<Object> raw = redisTemplate.opsForList().range(key, 0, -1);
 
-        if (raw == null || raw.isEmpty()) {
+        if (CollectionUtils.isEmpty(raw)) {
             return List.of();
         }
 
@@ -282,7 +346,7 @@ public class CacheService {
                     }
                 })
                 .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     // ── Account active trade set ──────────────────────────────────────────────
@@ -305,7 +369,7 @@ public class CacheService {
         String key = USER_ACTIVE_TRADES_KEY_PREFIX + accountId;
         Set<Object> members = redisTemplate.opsForSet().members(key);
 
-        if (members == null || members.isEmpty()) {
+        if (CollectionUtils.isEmpty(members)) {
             return Set.of();
         }
 
@@ -327,7 +391,7 @@ public class CacheService {
         return tradeIds.stream()
                 .map(this::getTrade)
                 .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     // ── Trade removal ─────────────────────────────────────────────────────────
@@ -339,7 +403,7 @@ public class CacheService {
      * which can silently fail if the key is partially evicted.
      */
     public void removeClosedTrade(UUID accountId, UUID tradeId) {
-        if (accountId == null || tradeId == null) {
+        if (ObjectUtils.isEmpty(accountId) || ObjectUtils.isEmpty(tradeId)) {
             log.warn("[Cache] removeClosedTrade called with null | accountId={} tradeId={}", accountId, tradeId);
             return;
         }
@@ -352,39 +416,39 @@ public class CacheService {
 
     private Map<String, Object> buildTradeMap(Trades trade) {
         Map<String, Object> m = new HashMap<>();
-        m.put("tradeId",            asString(trade.getTradeId()));
-        m.put("accountId",          asString(trade.getAccountId()));
-        m.put("accountStrategyId",  asString(trade.getAccountStrategyId()));
-        m.put("strategyName",       asString(trade.getStrategyName()));
-        m.put("interval",           asString(trade.getInterval()));
-        m.put("exchange",           asString(trade.getExchange()));
-        m.put("asset",              asString(trade.getAsset()));
-        m.put("side",               asString(trade.getSide()));
-        m.put("status",             asString(trade.getStatus()));
-        m.put("tradeMode",          asString(trade.getTradeMode()));
-        m.put("avgEntryPrice",      asString(trade.getAvgEntryPrice()));
-        m.put("avgExitPrice",       asString(trade.getAvgExitPrice()));
-        m.put("totalEntryQty",      asString(trade.getTotalEntryQty()));
-        m.put("totalEntryQuoteQty", asString(trade.getTotalEntryQuoteQty()));
-        m.put("totalRemainingQty",  asString(trade.getTotalRemainingQty()));
-        m.put("realizedPnlAmount",  asString(trade.getRealizedPnlAmount()));
-        m.put("realizedPnlPercent", asString(trade.getRealizedPnlPercent()));
-        m.put("totalFeeAmount",     asString(trade.getTotalFeeAmount()));
-        m.put("totalFeeCurrency",   asString(trade.getTotalFeeCurrency()));
-        m.put("exitReason",         asString(trade.getExitReason()));
-        m.put("entryTrendRegime",   asString(trade.getEntryTrendRegime()));
-        m.put("entryAdx",           asString(trade.getEntryAdx()));
-        m.put("entryAtr",           asString(trade.getEntryAtr()));
-        m.put("entryRsi",           asString(trade.getEntryRsi()));
-        m.put("entryTime",          toDateTimeString(trade.getEntryTime()));
-        m.put("exitTime",           toDateTimeString(trade.getExitTime()));
-        m.put("createdTime",          toDateTimeString(trade.getCreatedTime()));
-        m.put("updatedTime",          toDateTimeString(trade.getUpdatedTime()));
+        m.put(FIELD_TRADE_ID,              asString(trade.getTradeId()));
+        m.put(FIELD_ACCOUNT_ID,            asString(trade.getAccountId()));
+        m.put(FIELD_ACCOUNT_STRATEGY_ID,   asString(trade.getAccountStrategyId()));
+        m.put(FIELD_STRATEGY_NAME,         asString(trade.getStrategyName()));
+        m.put(FIELD_INTERVAL,              asString(trade.getInterval()));
+        m.put(FIELD_EXCHANGE,              asString(trade.getExchange()));
+        m.put(FIELD_ASSET,                 asString(trade.getAsset()));
+        m.put("side",                      asString(trade.getSide()));
+        m.put(FIELD_STATUS,                asString(trade.getStatus()));
+        m.put(FIELD_TRADE_MODE,            asString(trade.getTradeMode()));
+        m.put(FIELD_AVG_ENTRY_PRICE,       asString(trade.getAvgEntryPrice()));
+        m.put(FIELD_AVG_EXIT_PRICE,        asString(trade.getAvgExitPrice()));
+        m.put(FIELD_TOTAL_ENTRY_QTY,       asString(trade.getTotalEntryQty()));
+        m.put(FIELD_TOTAL_ENTRY_QUOTE_QTY, asString(trade.getTotalEntryQuoteQty()));
+        m.put(FIELD_TOTAL_REMAINING_QTY,   asString(trade.getTotalRemainingQty()));
+        m.put(FIELD_REALIZED_PNL_AMOUNT,   asString(trade.getRealizedPnlAmount()));
+        m.put(FIELD_REALIZED_PNL_PERCENT,  asString(trade.getRealizedPnlPercent()));
+        m.put(FIELD_TOTAL_FEE_AMOUNT,      asString(trade.getTotalFeeAmount()));
+        m.put(FIELD_TOTAL_FEE_CURRENCY,    asString(trade.getTotalFeeCurrency()));
+        m.put(FIELD_EXIT_REASON,           asString(trade.getExitReason()));
+        m.put(FIELD_ENTRY_TREND_REGIME,    asString(trade.getEntryTrendRegime()));
+        m.put(FIELD_ENTRY_ADX,             asString(trade.getEntryAdx()));
+        m.put(FIELD_ENTRY_ATR,             asString(trade.getEntryAtr()));
+        m.put(FIELD_ENTRY_RSI,             asString(trade.getEntryRsi()));
+        m.put(FIELD_ENTRY_TIME,            toDateTimeString(trade.getEntryTime()));
+        m.put(FIELD_EXIT_TIME,             toDateTimeString(trade.getExitTime()));
+        m.put("createdTime",               toDateTimeString(trade.getCreatedTime()));
+        m.put("updatedTime",               toDateTimeString(trade.getUpdatedTime()));
         return m;
     }
 
     private List<String> serializePositions(List<TradePosition> positions) {
-        if (positions == null || positions.isEmpty()) {
+        if (CollectionUtils.isEmpty(positions)) {
             return List.of();
         }
         List<String> result = new ArrayList<>();
@@ -400,15 +464,15 @@ public class CacheService {
     }
 
     private String asString(Object value) {
-        return value == null ? null : String.valueOf(value);
+        return ObjectUtils.isEmpty(value) ? null : String.valueOf(value);
     }
 
     private String toDateTimeString(LocalDateTime value) {
-        return value == null ? null : value.format(DATE_TIME_FORMATTER);
+        return ObjectUtils.isEmpty(value) ? null : value.format(DATE_TIME_FORMATTER);
     }
 
     private BigDecimal asBigDecimal(Object value) {
-        if (value == null) return null;
+        if (ObjectUtils.isEmpty(value)) return null;
         if (value instanceof BigDecimal bd) return bd;
         String raw = String.valueOf(value).trim();
         if (raw.isEmpty() || "null".equalsIgnoreCase(raw)) return null;
@@ -421,7 +485,7 @@ public class CacheService {
     }
 
     private UUID asUuid(Object value, UUID fallback) {
-        if (value == null) return fallback;
+        if (ObjectUtils.isEmpty(value)) return fallback;
         if (value instanceof UUID uuid) return uuid;
         try {
             return UUID.fromString(String.valueOf(value));
@@ -444,7 +508,7 @@ public class CacheService {
      * never crashes the live trading path.
      */
     private LocalDateTime asLocalDateTime(Object value) {
-        if (value == null) return null;
+        if (ObjectUtils.isEmpty(value)) return null;
         if (value instanceof LocalDateTime ldt) return ldt;
 
         if (value instanceof Long epochMillis) {
@@ -456,16 +520,22 @@ public class CacheService {
 
         try {
             return LocalDateTime.parse(raw, DATE_TIME_FORMATTER);
-        } catch (Exception ignored) { }
+        } catch (Exception ignored) {
+            // Fall through to the next parse strategy.
+        }
 
         try {
             return LocalDateTime.parse(raw);
-        } catch (Exception ignored) { }
+        } catch (Exception ignored) {
+            // Fall through to the next parse strategy.
+        }
 
         try {
             return LocalDateTime.ofInstant(
                     java.time.Instant.ofEpochMilli(Long.parseLong(raw)), ZONE);
-        } catch (Exception ignored) { }
+        } catch (Exception ignored) {
+            // Fall through to the warn-and-return-null path.
+        }
 
         // Do not throw — log the problem and return null so callers stay alive.
         log.warn("Failed to parse LocalDateTime from cache value: {}", raw);

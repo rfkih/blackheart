@@ -57,7 +57,8 @@ public enum ResponseCode {
     INVALID_CREDENTIALS("82", "Invalid Credentials"),
     ACCOUNT_DISABLED("83", "Account Disabled or Suspended"),
     UNAUTHORIZED("84", "Unauthorized - Token missing or invalid"),
-    RATE_LIMITED("85", "Too many requests - slow down");
+    RATE_LIMITED("85", "Too many requests - slow down"),
+    STRATEGY_HAS_OPEN_TRADES("86", "Strategy has open trades");
 
     private final String code;
     private final String description;

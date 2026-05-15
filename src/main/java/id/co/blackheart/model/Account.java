@@ -81,6 +81,17 @@ public class Account extends BaseEntity {
     private Integer maxConcurrentShorts;
 
     /**
+     * Total concurrent open trades across all strategies on this account
+     * — both directions combined. Null means "no total cap" and the
+     * per-direction caps ({@link #maxConcurrentLongs} /
+     * {@link #maxConcurrentShorts}) apply alone. When set, the live
+     * orchestrator gates new entries on (active+pending) {@literal <} this value
+     * before any strategy-specific check runs.
+     */
+    @Column(name = "max_concurrent_trades")
+    private Integer maxConcurrentTrades;
+
+    /**
      * Phase 2b — book vol-targeting toggle. When false (default), every
      * strategy's entry size flows through unchanged from its strategy
      * service. When true, BookVolTargetingService scales the size so the
@@ -97,5 +108,23 @@ public class Account extends BaseEntity {
      */
     @Column(name = "book_vol_target_pct", nullable = false, precision = 5, scale = 2)
     private BigDecimal bookVolTargetPct;
+
+    /**
+     * Pearson correlation threshold (0.0–1.0, V44). When the requesting strategy's
+     * 30-day daily P&L series is correlated at or above this level with any other
+     * same-side open strategy on this account, the new entry is blocked. Null
+     * disables the correlation check entirely.
+     */
+    @Column(name = "max_corr_block_threshold", precision = 5, scale = 4)
+    private BigDecimal maxCorrBlockThreshold;
+
+    /**
+     * Max percentage-point sum of {@code capitalAllocationPct} across all open
+     * same-direction strategies on this account (V44). E.g. 80 means "do not open
+     * another LONG if existing LONGs already hold ≥80% combined allocation". Null
+     * disables the concentration check.
+     */
+    @Column(name = "max_capital_concentration_pct", precision = 5, scale = 2)
+    private BigDecimal maxCapitalConcentrationPct;
 
 }

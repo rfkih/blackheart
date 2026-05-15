@@ -7,9 +7,11 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
+import org.springframework.util.StringUtils;
 
 /**
  * STOMP WebSocket controller for real-time combined 1h+4h market sentiment.
@@ -43,6 +45,7 @@ import org.springframework.stereotype.Controller;
 @Controller
 @RequiredArgsConstructor
 @Slf4j
+@Profile("!research")
 public class SentimentWebSocketController {
 
     private final SentimentPublisherService sentimentPublisherService;
@@ -52,7 +55,7 @@ public class SentimentWebSocketController {
 
     @MessageMapping("/sentiment.subscribe")
     public void subscribe(SentimentSubscribeRequest request) {
-        if (request == null || request.getSymbol() == null || request.getSymbol().isBlank()) {
+        if (request == null || !StringUtils.hasText(request.getSymbol())) {
             return;
         }
 

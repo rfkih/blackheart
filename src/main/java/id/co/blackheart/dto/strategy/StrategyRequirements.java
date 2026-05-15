@@ -20,4 +20,8 @@ public class StrategyRequirements {
      * (same-timeframe FeatureStore from the candle immediately before the current one).
      */
     private boolean requirePreviousFeatureStore;
+
+    public static StrategyRequirements defaults() {
+        return StrategyRequirements.builder().build();
+    }
 }

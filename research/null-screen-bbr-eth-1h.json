@@ -1,0 +1,13 @@
+{
+  "strategy_code": "BBR",
+  "instrument": "ETHUSDT",
+  "interval_name": "1h",
+  "n_draws": 8,
+  "seed": 55,
+  "param_ranges": [
+    {"name": "rsiOversoldMax", "type": "float", "low": "18", "high": "35"},
+    {"name": "stopAtrBuffer", "type": "float", "low": "0.3", "high": "1.0"},
+    {"name": "minRewardRiskRatio", "type": "float", "low": "1.5", "high": "3.0"}
+  ],
+  "hypothesis_id": "71aabe12-70d5-45a1-98ba-338b3006a765"
+}

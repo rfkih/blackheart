@@ -52,8 +52,18 @@ public class BacktestRun extends BaseEntity {
     private Map<String, UUID> strategyAccountStrategyIds;
 
     /**
+     * Per-strategy pinned strategy_param.param_id. When a strategy code is in
+     * this map the run resolves overrides via that exact preset row (soft-deleted
+     * rows are still resolvable here, for historical reruns). When absent the
+     * run falls back to the active preset for the matching account_strategy.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_param_ids", columnDefinition = "jsonb")
+    private Map<String, UUID> strategyParamIds;
+
+    /**
      * Stable strategy identifier used by StrategyExecutorFactory.
-     * Example: TREND_PULLBACK_SINGLE_EXIT, RAHT_V1
+     * Example: TREND_PULLBACK_SINGLE_EXIT
      */
     @Column(name = "strategy_code", length = 100, nullable = false)
     private String strategyCode;
@@ -93,6 +103,16 @@ public class BacktestRun extends BaseEntity {
 
     @Column(name = "slippage_pct", precision = 12, scale = 6)
     private BigDecimal slippagePct;
+
+    /**
+     * Flat funding rate stub (basis points per 8h Binance funding period).
+     * Applied per-position at close as
+     * {@code notional × (rate / 10000) × (hold_hours / 8)}, signed by side.
+     * Phase 0 stub for Phase 4 funding ingestion. Default {@code 0} keeps
+     * legacy backtests bit-identical with their pre-V22 P&L.
+     */
+    @Column(name = "funding_rate_bps_per_8h", precision = 12, scale = 6)
+    private BigDecimal fundingRateBpsPer8h;
 
     @Column(name = "min_notional", precision = 24, scale = 8)
     private BigDecimal minNotional;
@@ -165,6 +185,27 @@ public class BacktestRun extends BaseEntity {
 
     @Column(name = "return_pct", precision = 12, scale = 6)
     private BigDecimal returnPct;
+
+    /**
+     * V60 — Mean per-trade return rate (pnl / notional × 100). Sizing-
+     * independent companion to {@link #returnPct}; lets a strategy whose
+     * sized notional is only a sliver of capital still show its per-trade
+     * edge.
+     */
+    @Column(name = "avg_trade_return_pct", precision = 14, scale = 6)
+    private BigDecimal avgTradeReturnPct;
+
+    /**
+     * V60 — Compounded return assuming 90% of equity sized per trade, in
+     * percent. Walks trades chronologically; clamps to ruin (final
+     * multiplier 0) if any step would zero equity. Order-sensitive.
+     *
+     * <p>Width NUMERIC(28,6) — 22 integer digits — defends against
+     * compounding explosions on pathological / overfit sweep candidates
+     * (a 1000-trade backtest with +5%/trade reaches a ~10^19 multiplier).
+     */
+    @Column(name = "geometric_return_pct_at_alloc_90", precision = 28, scale = 6)
+    private BigDecimal geometricReturnPctAtAlloc90;
 
     @Column(name = "profit_factor", precision = 12, scale = 6)
     private BigDecimal profitFactor;
@@ -241,6 +282,103 @@ public class BacktestRun extends BaseEntity {
     private String appVersion;
 
     /**
+     * Phase A — max concurrent open trades across all strategies in this
+     * backtest. Null = no cap (legacy behaviour). Enforced by the backtest
+     * executor before allowing a new entry.
+     */
+    @Column(name = "max_concurrent_strategies")
+    private Integer maxConcurrentStrategies;
+
+    /**
+     * Phase A — per-strategy capital allocation override for this run only.
+     * Key = strategy code (uppercase), value = allocation % (0–100).
+     * Strategies missing from the map fall back to
+     * {@code account_strategy.capital_allocation_pct}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_allocations", columnDefinition = "jsonb")
+    private Map<String, BigDecimal> strategyAllocations;
+
+    /**
+     * V57 — per-strategy risk-pct override map. Key = uppercase strategy
+     * code, value = fractional risk per trade (0 < x ≤ 0.20). Strategies
+     * missing from the map fall back to
+     * {@code account_strategy.risk_pct}; the fractional scale matches that
+     * column (distinct from {@link #riskPerTradePct}, which is a percent
+     * scalar kept for diagnostic snapshot only).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_risk_pcts", columnDefinition = "jsonb")
+    private Map<String, BigDecimal> strategyRiskPcts;
+
+    /**
+     * V58 — per-strategy allowLong override map. Key = uppercase strategy
+     * code, value = boolean. Wizard-supplied; lets operators flip a single
+     * strategy's direction for one research run without changing the live
+     * {@code account_strategy.allow_long}. Null map / missing key falls
+     * back to the bound account_strategy's flag (V58 default).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_allow_long", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyAllowLong;
+
+    /**
+     * V58 — per-strategy allowShort override map. Same semantics as
+     * {@link #strategyAllowLong}. Null map / missing key falls back to the
+     * bound account_strategy.allow_short.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_allow_short", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyAllowShort;
+
+    /**
+     * V62 — per-strategy kill-switch gate override for this run. Map of
+     * strategy_code (uppercase) → boolean. Missing key falls back to
+     * {@code account_strategy.kill_switch_gate_enabled}. Mirrors
+     * {@link #strategyAllowLong} shape.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_kill_switch_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyKillSwitchOverrides;
+
+    /**
+     * V62 — per-strategy regime gate override. Map of strategy_code →
+     * boolean. Missing key falls back to
+     * {@code account_strategy.regime_gate_enabled} (V43).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_regime_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyRegimeOverrides;
+
+    /**
+     * V62 — per-strategy correlation gate override. Map of strategy_code →
+     * boolean. Missing key falls back to
+     * {@code account_strategy.correlation_gate_enabled}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_correlation_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyCorrelationOverrides;
+
+    /**
+     * V62 — per-strategy concurrent-cap gate override. Map of strategy_code →
+     * boolean. Missing key falls back to
+     * {@code account_strategy.concurrent_cap_gate_enabled}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_concurrent_cap_overrides", columnDefinition = "jsonb")
+    private Map<String, Boolean> strategyConcurrentCapOverrides;
+
+    /**
+     * Per-strategy interval map for multi-timeframe runs. Key = uppercase
+     * strategy code, value = interval string (e.g. "15m"). When non-null,
+     * the coordinator routes each strategy only to its own interval's bar
+     * closes. Null = all strategies share the run's primary {@link #interval}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "strategy_intervals", columnDefinition = "jsonb")
+    private Map<String, String> strategyIntervals;
+
+    /**
      * Locked-holdout marker. {@code true} means this run was the one-shot
      * unbiased evaluation that ran AFTER a sweep picked its winner; the
      * sweep itself was never allowed to touch this window during
@@ -250,6 +388,18 @@ public class BacktestRun extends BaseEntity {
     @Column(name = "is_holdout_run", nullable = false)
     @Builder.Default
     private Boolean isHoldoutRun = Boolean.FALSE;
+
+    /**
+     * Origin tag — {@code USER} for runs submitted from the wizard,
+     * {@code RESEARCHER} for runs submitted by the autonomous
+     * research-orchestrator. Used by the UI to render a RESEARCHER badge so
+     * users can tell their own work from agent-driven runs at a glance.
+     * Defaulted in the DB so legacy rows and any caller that doesn't set
+     * the field stay tagged USER.
+     */
+    @Column(name = "triggered_by", length = 20, nullable = false)
+    @Builder.Default
+    private String triggeredBy = "USER";
 
     /** When {@link #isHoldoutRun} is true, the sweep this holdout result
      *  belongs to. Null for non-holdout runs. */

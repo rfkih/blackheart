@@ -60,7 +60,30 @@ public class GlobalExceptionHandler {
         return badRequest(ResponseCode.ILLEGAL_STATE, ex.getMessage());
     }
 
+    // ── 429 Too Many Requests ────────────────────────────────────────────────
+
+    @ExceptionHandler(id.co.blackheart.exception.BacktestConcurrencyLimitException.class)
+    public ResponseEntity<ResponseDto> handleBacktestConcurrencyLimit(
+            id.co.blackheart.exception.BacktestConcurrencyLimitException ex) {
+        log.warn("Backtest concurrency limit reached: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(ResponseDto.builder()
+                .responseCode(HttpStatus.TOO_MANY_REQUESTS.value() + ResponseCode.TOO_MANY_REQUESTS.getCode())
+                .responseDesc(ResponseCode.TOO_MANY_REQUESTS.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
     // ── 409 Conflict ─────────────────────────────────────────────────────────
+
+    @ExceptionHandler(StrategyHasOpenTradesException.class)
+    public ResponseEntity<ResponseDto> handleStrategyHasOpenTrades(StrategyHasOpenTradesException ex) {
+        log.warn("Strategy has open trades: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ResponseDto.builder()
+                .responseCode(HttpStatus.CONFLICT.value() + ResponseCode.STRATEGY_HAS_OPEN_TRADES.getCode())
+                .responseDesc(ResponseCode.STRATEGY_HAS_OPEN_TRADES.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
 
     @ExceptionHandler(UserAlreadyExistsException.class)
     public ResponseEntity<ResponseDto> handleUserAlreadyExists(UserAlreadyExistsException ex) {
@@ -190,6 +213,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(ResponseDto.builder()
                 .responseCode(HttpStatus.SERVICE_UNAVAILABLE.value() + ResponseCode.NETWORK_ERROR.getCode())
                 .responseDesc(ResponseCode.NETWORK_ERROR.getDescription())
+                .errorMessage(ex.getMessage())
+                .build());
+    }
+
+    // ── 404 Not Found (Spring's NoResourceFoundException for unmapped paths) ─
+    // After Phase 1 decoupling, paths registered on one JVM but not the other
+    // would surface as NoResourceFoundException via the static-resource
+    // fallback. Map to a clean 404 instead of the catch-all 500.
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ResponseDto> handleNoResource(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex) {
+        log.warn("Path not registered on this JVM: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ResponseDto.builder()
+                .responseCode(HttpStatus.NOT_FOUND.value() + "00")
+                .responseDesc("Not Found")
                 .errorMessage(ex.getMessage())
                 .build());
     }

@@ -63,7 +63,16 @@ public class BacktestRunResponse {
 
     private BigDecimal maxDrawdownPct;
 
+    /** Mean per-trade return rate (pnl / notional × 100). Sizing-independent. */
+    private BigDecimal avgTradeReturnPct;
+
+    /** Compounded return assuming 90% of equity sized per trade, in percent. */
+    private BigDecimal geometricReturnPctAtAlloc90;
+
     private LocalDateTime createdTime;
 
     private LocalDateTime updatedTime;
+
+    /** Origin tag — USER (wizard) or RESEARCHER (autonomous orchestrator). */
+    private String triggeredBy;
 }

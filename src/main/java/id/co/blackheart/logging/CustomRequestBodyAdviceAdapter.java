@@ -1,9 +1,7 @@
 package id.co.blackheart.logging;
 
-import id.co.blackheart.config.RuntimeHintsConfig;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpInputMessage;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -13,7 +11,6 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestBodyAdviceAd
 import java.lang.reflect.Type;
 
 @RestControllerAdvice
-@ImportRuntimeHints(value = {RuntimeHintsConfig.class})
 @RequiredArgsConstructor
 public class CustomRequestBodyAdviceAdapter extends RequestBodyAdviceAdapter {
 

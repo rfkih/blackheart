@@ -1,0 +1,183 @@
+package id.co.blackheart.service.marketdata.job.handler;
+
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import id.co.blackheart.model.FundingRate;
+import id.co.blackheart.model.HistoricalBackfillJob;
+import id.co.blackheart.model.JobType;
+import id.co.blackheart.repository.FundingRateRepository;
+import id.co.blackheart.service.marketdata.FundingRateBackfillService;
+import id.co.blackheart.service.marketdata.HistoricalDataService;
+import id.co.blackheart.service.marketdata.job.HistoricalJobHandler;
+import id.co.blackheart.service.marketdata.job.JobContext;
+import id.co.blackheart.service.marketdata.job.JobParamUtils;
+import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+
+import java.time.LocalDateTime;
+import java.util.Optional;
+
+/**
+ * Handler for {@link JobType#COVERAGE_REPAIR} — the "fill what's missing"
+ * backfill that the unified UI submits when the operator checks
+ * "Backfill missing market_data candles" or "Backfill missing feature_store
+ * rows" on the coverage report.
+ *
+ * <p>Two modes — both idempotent (skip rows that already exist):
+ * <ul>
+ *   <li>{@code mode=warmup} — fetch the last 5,000 candles + 300-bar warmup
+ *       from Binance and repair missing market_data + feature_store rows.
+ *       For interval=4h, fans out to 1h/15m/5m companions automatically
+ *       (preserved behavior of the legacy {@code /backfill} endpoint).</li>
+ *   <li>{@code mode=range} — fetch missing market_data candles from Binance
+ *       for {@code [from, to]}, then fill any missing feature_store rows in
+ *       the same window. Both steps are idempotent.</li>
+ * </ul>
+ *
+ * <p>Mid-run progress is single-shot — the underlying services don't accept
+ * a progress callback yet. The handler emits phase boundaries
+ * ({@code "market_data"}, {@code "feature_store"}) and a final 1/1 tick on
+ * completion.
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class CoverageRepairHandler implements HistoricalJobHandler {
+
+    private static final String MODE_WARMUP = "warmup";
+    private static final String MODE_RANGE = "range";
+
+    private final HistoricalDataService historicalDataService;
+    private final TechnicalIndicatorService technicalIndicatorService;
+    private final FundingRateBackfillService fundingRateBackfillService;
+    private final FundingRateRepository fundingRateRepository;
+
+    /**
+     * Lookback added to the funding-history fetch start so the rolling 7-day
+     * window has at least one full window of leading data on the boundary
+     * row. Without this, the leftmost feature_store rows in the new range
+     * would compute funding_rate_7d_avg / z over a partial window.
+     */
+    private static final int FUNDING_LEADING_WINDOW_DAYS = 8;
+
+    @Override
+    public JobType jobType() {
+        return JobType.COVERAGE_REPAIR;
+    }
+
+    @Override
+    public void execute(HistoricalBackfillJob job, JobContext ctx) {
+        if (!StringUtils.hasText(job.getSymbol())
+                || !StringUtils.hasText(job.getInterval())) {
+            throw new IllegalArgumentException("COVERAGE_REPAIR requires symbol and interval");
+        }
+
+        String mode = JobParamUtils.getString(job.getParams(), "mode", MODE_WARMUP);
+        ObjectNode result = JsonNodeFactory.instance.objectNode();
+        result.put("symbol", job.getSymbol());
+        result.put("interval", job.getInterval());
+        result.put("mode", mode);
+
+        switch (mode) {
+            case MODE_WARMUP -> runWarmup(job, ctx, result);
+            case MODE_RANGE -> runRange(job, ctx, result);
+            default -> throw new IllegalArgumentException(
+                    "Unknown mode=" + mode + " (must be \"warmup\" or \"range\")");
+        }
+
+        ctx.setProgress(1, 1);
+        ctx.setResult(result);
+    }
+
+    /**
+     * Note on cancellation: warmup wraps {@code backfillLastCandlesAndFeatures}
+     * which is a single synchronous call (Binance fetch + repair feature_store).
+     * Cancel is honored only at the post-execute re-read by the runner — by
+     * which point the work is done (idempotently). The UI surfaces this via
+     * the cancel-button tooltip so the operator isn't surprised.
+     */
+    private void runWarmup(HistoricalBackfillJob job, JobContext ctx, ObjectNode result) {
+        ctx.setPhase("warmup:market_data+feature_store");
+        log.info("COVERAGE_REPAIR warmup | jobId={} symbol={} interval={}",
+                job.getJobId(), job.getSymbol(), job.getInterval());
+        historicalDataService.backfillLastCandlesAndFeatures(job.getSymbol(), job.getInterval());
+        result.put("message", "Warmup completed (last 5000 candles + 300 warmup; companion intervals fanned out for 4h)");
+    }
+
+    private void runRange(HistoricalBackfillJob job, JobContext ctx, ObjectNode result) {
+        LocalDateTime from = JobParamUtils.parseLocalDateTime(job.getParams(), "from");
+        LocalDateTime to = JobParamUtils.parseLocalDateTime(job.getParams(), "to");
+        if (from == null || to == null) {
+            throw new IllegalArgumentException(
+                    "COVERAGE_REPAIR mode=range requires params.from and params.to");
+        }
+        if (!to.isAfter(from)) {
+            throw new IllegalArgumentException(
+                    "params.to must be strictly after params.from: from=" + from + " to=" + to);
+        }
+
+        log.info("COVERAGE_REPAIR range | jobId={} symbol={} interval={} from={} to={}",
+                job.getJobId(), job.getSymbol(), job.getInterval(), from, to);
+
+        // Phase 1: fetch missing candles from Binance into market_data.
+        ctx.setPhase("range:market_data");
+        historicalDataService.backfillMissingMarketDataByRange(
+                job.getSymbol(), job.getInterval(), from, to);
+
+        // Phase 1.5: ensure funding_rate_history covers the range BEFORE we
+        // compute features. Without this, ranges older than the existing
+        // funding history (or symbols added after the 8h scheduler started)
+        // produce feature_store rows with NULL funding columns and the
+        // operator has to remember to run a second job. Idempotent — does
+        // nothing when the existing history already covers the window.
+        // Soft-fails for spot-only symbols where fapi has no data.
+        ctx.setPhase("range:funding_rate_history");
+        ensureFundingHistoryCovers(job, from, result);
+
+        // Phase 2: repair feature_store for the range using the bulk path so
+        // the UI sees per-chunk progress + cooperative cancel.
+        ctx.setPhase("range:feature_store");
+        TechnicalIndicatorService.BulkBackfillResult res =
+                technicalIndicatorService.bulkComputeAndStoreInRange(
+                        job.getSymbol(), job.getInterval(), from, to, false, ctx);
+        result.put("from", from.toString());
+        result.put("to", to.toString());
+        result.put("recordsInserted", res.inserted());
+        result.put("recordsSkipped", res.skipped());
+        result.put("recordsFailed", res.failed());
+        result.put("totalCandidates", res.total());
+    }
+
+    private void ensureFundingHistoryCovers(HistoricalBackfillJob job,
+                                            LocalDateTime rangeFrom,
+                                            ObjectNode result) {
+        LocalDateTime fundingFrom = rangeFrom.minusDays(FUNDING_LEADING_WINDOW_DAYS);
+        try {
+            Optional<FundingRate> earliest =
+                    fundingRateRepository.findFirstBySymbolOrderByFundingTimeAsc(job.getSymbol());
+            if (earliest.isPresent() && !earliest.get().getFundingTime().isAfter(fundingFrom)) {
+                log.info("funding_rate_history already covers {} for symbol={} — skipping fetch (jobId={})",
+                        fundingFrom, job.getSymbol(), job.getJobId());
+                result.put("fundingBackfillSkipped", true);
+                return;
+            }
+            FundingRateBackfillService.BackfillResult fr =
+                    fundingRateBackfillService.backfillHistorical(job.getSymbol(), fundingFrom);
+            log.info("funding_rate_history backfill | jobId={} symbol={} from={} pages={} fetched={} inserted={}",
+                    job.getJobId(), job.getSymbol(), fundingFrom, fr.pages(), fr.fetched(), fr.inserted());
+            result.put("fundingBackfillFetched", fr.fetched());
+            result.put("fundingBackfillInserted", fr.inserted());
+            result.put("fundingBackfillTruncated", fr.truncated());
+        } catch (Exception e) {
+            // Spot-only symbols will fail here (no perp endpoint). Don't fail
+            // the whole job — feature_store compute downstream will leave
+            // funding columns NULL for those symbols, which is correct.
+            log.warn("funding_rate_history backfill failed for symbol={} — funding columns may be NULL: {}",
+                    job.getSymbol(), e.getMessage());
+            result.put("fundingBackfillError", e.getMessage());
+        }
+    }
+}

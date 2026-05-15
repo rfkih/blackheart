@@ -2,11 +2,14 @@ package id.co.blackheart.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.util.Map;
 
 /**
  * Payload for {@code POST /api/v1/strategy-definitions} — admin-only.
@@ -54,4 +57,33 @@ public class CreateStrategyDefinitionRequest {
      */
     @Size(max = 20, message = "Status is too long")
     private String status;
+
+    /**
+     * Engine handler. {@code "LEGACY_JAVA"} (default) routes to a hand-coded
+     * Java executor; any other value names a registered archetype that the
+     * StrategyEngine will evaluate from {@link #specJsonb}.
+     */
+    @Size(max = 64, message = "Archetype is too long")
+    private String archetype;
+
+    @Positive(message = "archetypeVersion must be positive")
+    private Integer archetypeVersion;
+
+    /**
+     * Full strategy specification — only meaningful for non-{@code LEGACY_JAVA}
+     * archetypes. Free-form for now; structural validation arrives with the
+     * StrategyEngine in M2.
+     */
+    private Map<String, Object> specJsonb;
+
+    @Positive(message = "specSchemaVersion must be positive")
+    private Integer specSchemaVersion;
+
+    /** V40 — definition-scope kill-switch. Defaults to {@code false} (disabled
+     *  until explicitly enabled). Set to {@code true} to enable on creation. */
+    private Boolean enabled;
+
+    /** V40 — definition-scope paper flag. Defaults to {@code true} (all new
+     *  definitions are simulated/paper until explicitly set to false). */
+    private Boolean simulated;
 }

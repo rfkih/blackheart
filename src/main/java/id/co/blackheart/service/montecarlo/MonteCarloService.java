@@ -11,6 +11,7 @@ import id.co.blackheart.repository.MonteCarloRunRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -47,17 +48,17 @@ public class MonteCarloService {
 
         List<BacktestTrade> trades = backtestTradeRepository.findByBacktestRunIdAndStatus(request.getBacktestRunId(), "CLOSED");
 
-        if (trades == null || trades.size() < MIN_TRADES) {
+        if (ObjectUtils.isEmpty(trades) || trades.size() < MIN_TRADES) {
             throw new IllegalStateException(
                     "At least " + MIN_TRADES + " closed trades are required. Found: "
-                    + (trades == null ? 0 : trades.size()));
+                    + (ObjectUtils.isEmpty(trades) ? 0 : trades.size()));
         }
 
-        BigDecimal initialCapital = request.getInitialCapital() != null
+        BigDecimal initialCapital = ObjectUtils.isNotEmpty(request.getInitialCapital())
                 ? request.getInitialCapital()
                 : backtestRun.getInitialCapital();
 
-        long effectiveSeed = request.getRandomSeed() != null
+        long effectiveSeed = ObjectUtils.isNotEmpty(request.getRandomSeed())
                 ? request.getRandomSeed()
                 : System.nanoTime();
 
@@ -118,10 +119,10 @@ public class MonteCarloService {
                     .medianFinalEquity(response.getMedianFinalEquity())
                     .minFinalEquity(response.getMinFinalEquity())
                     .maxFinalEquity(response.getMaxFinalEquity())
-                    .p5FinalEquity(pct != null ? pct.get("P5") : null)
-                    .p25FinalEquity(pct != null ? pct.get("P25") : null)
-                    .p75FinalEquity(pct != null ? pct.get("P75") : null)
-                    .p95FinalEquity(pct != null ? pct.get("P95") : null)
+                    .p5FinalEquity(ObjectUtils.isNotEmpty(pct) ? pct.get("P5") : null)
+                    .p25FinalEquity(ObjectUtils.isNotEmpty(pct) ? pct.get("P25") : null)
+                    .p75FinalEquity(ObjectUtils.isNotEmpty(pct) ? pct.get("P75") : null)
+                    .p95FinalEquity(ObjectUtils.isNotEmpty(pct) ? pct.get("P95") : null)
                     .meanTotalReturnPct(response.getMeanTotalReturnPct())
                     .medianTotalReturnPct(response.getMedianTotalReturnPct())
                     .meanMaxDrawdownPct(response.getMeanMaxDrawdownPct())
@@ -143,13 +144,13 @@ public class MonteCarloService {
     }
 
     private void validateRequest(MonteCarloRequest request) {
-        if (request == null) {
+        if (ObjectUtils.isEmpty(request)) {
             throw new IllegalArgumentException("Request cannot be null");
         }
-        if (request.getBacktestRunId() == null) {
+        if (ObjectUtils.isEmpty(request.getBacktestRunId())) {
             throw new IllegalArgumentException("backtestRunId cannot be null");
         }
-        if (request.getSimulationMode() == null) {
+        if (ObjectUtils.isEmpty(request.getSimulationMode())) {
             throw new IllegalArgumentException("simulationMode cannot be null");
         }
 
@@ -160,20 +161,20 @@ public class MonteCarloService {
         }
 
         BigDecimal ruin = request.getRuinThresholdPct();
-        if (ruin == null || ruin.compareTo(BigDecimal.ZERO) <= 0 || ruin.compareTo(new BigDecimal("100")) >= 0) {
+        if (ObjectUtils.isEmpty(ruin) || ruin.compareTo(BigDecimal.ZERO) <= 0 || ruin.compareTo(new BigDecimal("100")) >= 0) {
             throw new IllegalArgumentException("ruinThresholdPct must be between 0 and 100 exclusive");
         }
 
         BigDecimal dd = request.getMaxAcceptableDrawdownPct();
-        if (dd == null || dd.compareTo(BigDecimal.ZERO) <= 0 || dd.compareTo(new BigDecimal("100")) >= 0) {
+        if (ObjectUtils.isEmpty(dd) || dd.compareTo(BigDecimal.ZERO) <= 0 || dd.compareTo(new BigDecimal("100")) >= 0) {
             throw new IllegalArgumentException("maxAcceptableDrawdownPct must be between 0 and 100 exclusive");
         }
 
-        if (request.getInitialCapital() != null && request.getInitialCapital().compareTo(BigDecimal.ZERO) <= 0) {
+        if (ObjectUtils.isNotEmpty(request.getInitialCapital()) && request.getInitialCapital().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("initialCapital must be positive if provided");
         }
 
-        if (request.getHorizonTrades() != null && request.getHorizonTrades() < 1) {
+        if (ObjectUtils.isNotEmpty(request.getHorizonTrades()) && request.getHorizonTrades() < 1) {
             throw new IllegalArgumentException("horizonTrades must be at least 1 if provided");
         }
     }

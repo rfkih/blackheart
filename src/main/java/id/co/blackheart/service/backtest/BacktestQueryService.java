@@ -4,18 +4,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.response.*;
 import id.co.blackheart.model.*;
 import id.co.blackheart.repository.*;
+import id.co.blackheart.util.DateTimeUtil;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.ZoneOffset;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -41,8 +40,13 @@ public class BacktestQueryService {
             "totalTrades", "winRate", "status", "symbol", "strategyCode"
     );
 
-    public Map<String, Object> listRuns(
-            UUID userId,
+    /**
+     * Filter / pagination / sort bundle for {@link #listRuns}. Bundled into a
+     * single argument so the service signature stays under the parameter
+     * ceiling — the controller still accepts each value as its own
+     * {@code @RequestParam}.
+     */
+    public record ListRunsQuery(
             int page,
             int size,
             String status,
@@ -52,33 +56,39 @@ public class BacktestQueryService {
             LocalDateTime fromDate,
             LocalDateTime toDate,
             String sortBy,
-            String sortDir
-    ) {
-        int effectiveSize = size > 0 ? size : 20;
-        int offset = Math.max(0, page) * effectiveSize;
+            String sortDir,
+            String triggeredBy
+    ) {}
 
-        String effectiveSort = (sortBy != null && SORTABLE_COLUMNS.contains(sortBy))
-                ? sortBy
+    public Map<String, Object> listRuns(UUID userId, ListRunsQuery q) {
+        int effectiveSize = q.size() > 0 ? q.size() : 20;
+        int offset = Math.max(0, q.page()) * effectiveSize;
+
+        String effectiveSort = (q.sortBy() != null && SORTABLE_COLUMNS.contains(q.sortBy()))
+                ? q.sortBy()
                 : "createdAt";
-        String effectiveDir = "ASC".equalsIgnoreCase(sortDir) ? "ASC" : "DESC";
+        String effectiveDir = "ASC".equalsIgnoreCase(q.sortDir()) ? "ASC" : "DESC";
 
         // Normalise blank strings to null so the CAST(:param AS TEXT) IS NULL
         // guard in the repository query activates correctly. Spring's binder
         // delivers empty strings when the client sends `?status=` — those
         // should disable the filter, not match rows where status = ''.
-        String statusFilter = blankToNull(status);
-        String strategyFilter = blankToNull(strategyCode);
-        String symbolFilter = blankToNull(symbol);
-        String intervalFilter = blankToNull(intervalName);
+        String statusFilter = blankToNull(q.status());
+        // Escape ILIKE wildcards so a user-supplied "%" doesn't match all rows.
+        String strategyFilter = escapeLike(blankToNull(q.strategyCode()));
+        String symbolFilter = escapeLike(blankToNull(q.symbol()));
+        String intervalFilter = blankToNull(q.intervalName());
+        String triggeredByFilter = blankToNull(q.triggeredBy());
 
         List<BacktestRun> runs = backtestRunRepository.findFiltered(
                 userId,
+                triggeredByFilter,
                 statusFilter,
                 strategyFilter,
                 symbolFilter,
                 intervalFilter,
-                fromDate,
-                toDate,
+                q.fromDate(),
+                q.toDate(),
                 effectiveSort,
                 effectiveDir,
                 effectiveSize,
@@ -86,12 +96,13 @@ public class BacktestQueryService {
         );
         long total = backtestRunRepository.countFiltered(
                 userId,
+                triggeredByFilter,
                 statusFilter,
                 strategyFilter,
                 symbolFilter,
                 intervalFilter,
-                fromDate,
-                toDate
+                q.fromDate(),
+                q.toDate()
         );
 
         // Include metrics on the list — the frontend run table renders Return,
@@ -99,10 +110,10 @@ public class BacktestQueryService {
         // failure rather than the intended "still RUNNING" state.
         List<BacktestRunDetailResponse> content = runs.stream()
                 .map(r -> toDetail(r, true))
-                .collect(Collectors.toList());
+                .toList();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("content", content);
-        result.put("page", page);
+        result.put("page", q.page());
         result.put("size", effectiveSize);
         result.put("total", total);
         result.put("sortBy", effectiveSort);
@@ -111,7 +122,13 @@ public class BacktestQueryService {
     }
 
     private static String blankToNull(String v) {
-        return (v == null || v.isBlank()) ? null : v.trim();
+        return StringUtils.hasText(v) ? v.trim() : null;
+    }
+
+    /** Escape ILIKE metacharacters so user input can't turn a prefix filter into a wildcard scan. */
+    private static String escapeLike(String v) {
+        if (v == null) return null;
+        return v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     /**
@@ -138,22 +155,22 @@ public class BacktestQueryService {
         requireOwnedRun(userId, id);
         return equityPointRepository.findByBacktestRunIdOrderByEquityDateAsc(id).stream()
                 .map(this::toEquityPoint)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     public List<BacktestTradeDetailResponse> getTrades(UUID userId, UUID id) {
         requireOwnedRun(userId, id);
         List<BacktestTrade> trades = backtestTradeRepository.findAllByBacktestRunId(id);
         return trades.stream()
-                .map(t -> toTradeDetail(t))
-                .collect(Collectors.toList());
+                .map(this::toTradeDetail)
+                .toList();
     }
 
     public List<MarketDataResponse> getCandles(UUID userId, UUID id) {
         BacktestRun run = requireOwnedRun(userId, id);
         List<MarketData> candles = marketDataRepository.findBySymbolIntervalAndRange(
                 run.getAsset(), run.getInterval(), run.getStartTime(), run.getEndTime());
-        return candles.stream().map(this::toMarketData).collect(Collectors.toList());
+        return candles.stream().map(this::toMarketData).toList();
     }
 
     private BacktestRun requireOwnedRun(UUID userId, UUID id) {
@@ -182,6 +199,8 @@ public class BacktestQueryService {
                     .totalTrades(r.getTotalTrades())
                     .winningTrades(r.getTotalWins())
                     .losingTrades(r.getTotalLosses())
+                    .avgTradeReturnPct(r.getAvgTradeReturnPct())
+                    .geometricReturnPctAtAlloc90(r.getGeometricReturnPctAtAlloc90())
                     .build();
         }
 
@@ -216,12 +235,30 @@ public class BacktestQueryService {
                 .paramSnapshot(paramSnapshot)
                 .gitCommitSha(r.getGitCommitSha())
                 .appVersion(r.getAppVersion())
+                .triggeredBy(r.getTriggeredBy())
+                .allowLong(r.getAllowLong())
+                .allowShort(r.getAllowShort())
+                .maxConcurrentStrategies(r.getMaxConcurrentStrategies())
+                .strategyAllocations(r.getStrategyAllocations())
+                .strategyRiskPcts(r.getStrategyRiskPcts())
+                .strategyAllowLong(r.getStrategyAllowLong())
+                .strategyAllowShort(r.getStrategyAllowShort())
+                // V62 — round-trip the gate override maps so "Re-run with these
+                // params" in the frontend reproduces the wizard state. Without
+                // these the detail endpoint silently drops the maps and the
+                // wizard's re-run path falls back to "no overrides."
+                .strategyKillSwitchOverrides(r.getStrategyKillSwitchOverrides())
+                .strategyRegimeOverrides(r.getStrategyRegimeOverrides())
+                .strategyCorrelationOverrides(r.getStrategyCorrelationOverrides())
+                .strategyConcurrentCapOverrides(r.getStrategyConcurrentCapOverrides())
+                .strategyIntervals(r.getStrategyIntervals())
+                .fundingRateBpsPer8h(r.getFundingRateBpsPer8h())
                 .metrics(metrics)
                 .build();
     }
 
     private BacktestEquityPointResponse toEquityPoint(BacktestEquityPoint ep) {
-        long ts = ep.getEquityDate().atTime(LocalTime.MIDNIGHT).toInstant(ZoneOffset.UTC).toEpochMilli();
+        long ts = DateTimeUtil.toEpochMillisUtc(ep.getEquityDate().atTime(LocalTime.MIDNIGHT));
         BigDecimal drawdown = ep.getTotalEquity() != null && ep.getDrawdownPercent() != null
                 ? ep.getTotalEquity().multiply(ep.getDrawdownPercent()).divide(BigDecimal.valueOf(100))
                 : BigDecimal.ZERO;
@@ -250,11 +287,14 @@ public class BacktestQueryService {
                         .exitReason(p.getExitReason())
                         .realizedPnl(p.getRealizedPnlAmount())
                         .build())
-                .collect(Collectors.toList());
+                .toList();
 
         return BacktestTradeDetailResponse.builder()
                 .id(t.getBacktestTradeId())
                 .backtestRunId(t.getBacktestRunId())
+                .strategyCode(t.getStrategyCode())
+                .strategyName(t.getStrategyName())
+                .interval(t.getInterval())
                 .direction(t.getSide())
                 .entryTime(toEpochMs(t.getEntryTime()))
                 .entryPrice(t.getAvgEntryPrice())
@@ -294,6 +334,6 @@ public class BacktestQueryService {
 
     private Long toEpochMs(LocalDateTime ldt) {
         if (ldt == null) return null;
-        return ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
+        return DateTimeUtil.toEpochMillisUtc(ldt);
     }
 }

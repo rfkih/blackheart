@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import id.co.blackheart.dto.request.PredictionRequest;
 import id.co.blackheart.dto.request.TrainRequest;
 import id.co.blackheart.dto.response.PredictionResponse;
+import id.co.blackheart.util.TradeConstant;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,7 +38,7 @@ public class DeepLearningClientService {
 
         PredictionRequest predictionRequest = new PredictionRequest();
         predictionRequest.setInterval("15m");
-        predictionRequest.setSymbol("BTCUSDT");
+        predictionRequest.setSymbol(TradeConstant.SYMBOL_BTCUSDT);
         predictionRequest.setStock(false);
 
         HttpEntity<PredictionRequest> requestEntity = new HttpEntity<>(predictionRequest, headers);
@@ -57,7 +58,7 @@ public class DeepLearningClientService {
     public Mono<PredictionResponse> sendPredictionRequestReactive() {
         PredictionRequest request = new PredictionRequest();
         request.setInterval("15m");
-        request.setSymbol("BTCUSDT");
+        request.setSymbol(TradeConstant.SYMBOL_BTCUSDT);
         request.setStock(false);
 
         return webClientBuilder.build()
@@ -81,7 +82,7 @@ public class DeepLearningClientService {
 
         try {
             TrainRequest trainRequest = new TrainRequest();
-            trainRequest.setSymbol("BTCUSDT");
+            trainRequest.setSymbol(TradeConstant.SYMBOL_BTCUSDT);
             trainRequest.setInterval("15m");
             trainRequest.setThresholdDown(-4);
             trainRequest.setThresholdUp(4);
@@ -111,7 +112,7 @@ public class DeepLearningClientService {
             return responseService;
         } catch (IOException e) {
             log.warn("Error decoding response: {}", e.getMessage());
-            throw new RuntimeException("Failed to decode asset details", e);
+            throw new IllegalStateException("Failed to decode asset details", e);
         }
     }
 }

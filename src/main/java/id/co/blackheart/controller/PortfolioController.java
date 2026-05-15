@@ -3,6 +3,7 @@ package id.co.blackheart.controller;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.portfolio.PortfolioBalanceService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -31,6 +32,6 @@ public class PortfolioController {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

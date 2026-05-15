@@ -1,0 +1,21 @@
+{
+  "entry_type": "HYPOTHESIS",
+  "strategy_code": "MMR",
+  "interval_name": "4h",
+  "instrument": "ETHUSDT",
+  "title": "MMR ETHUSDT 4h: Natural 4h bar size provides adequate hold time for mean-reversion",
+  "content": "Prior MMR ETH 1h null-screen (hyp 5557851f) showed NO_EDGE due to maxBarsHeld=12 forcing exit at 12h. Extended-maxBarsHeld null-screen (hyp 958735fb) is testing 1h with maxBarsHeld=24-96. This hypothesis tests a structurally different approach: at the 4h timeframe, each bar = 4 hours. Default maxBarsHeld=12 on 4h bars = 48 hours of hold time. ETH mean-reversion from EMA200-extreme to EMA50 typically completes in 24-96h. MECHANISM: The 4h timeframe naturally provides the hold duration that the 1h timeframe requires parameter extension to achieve. Because 4h bars also filter out intraday noise (ETH 1h has higher noise-to-signal), the 4h surface may show superior Sharpe at the same mean-reversion holding period. AXES: extremeAtrMult[1.5-3.0] x stopAtrBuffer[0.6-1.8] x rsiOversoldMax[20-35] (3D). This uses the default maxBarsHeld=12 (=48h on 4h bars). Portfolio fit: mean-reversion is mechanistically opposite to VBO (breakout-expansion) — expected near-zero or negative Spearman correlation. Null-screen approach: EDGE_PRESENT criterion P75(PF)>=1.2 AND share(PF>=1.2)>=0.25.",
+  "status": "ACTIVE",
+  "structured_data": {
+    "kind": "hypothesis",
+    "archetype": "MMR_4h_natural_hold",
+    "axes": ["extremeAtrMult", "stopAtrBuffer", "rsiOversoldMax"],
+    "param_ranges": [
+      {"name": "extremeAtrMult", "type": "float", "low": "1.5", "high": "3.0"},
+      {"name": "stopAtrBuffer", "type": "float", "low": "0.6", "high": "1.8"},
+      {"name": "rsiOversoldMax", "type": "float", "low": "20", "high": "35"}
+    ],
+    "motivation": "4h bar size naturally provides 48h of hold time at default maxBarsHeld=12, adequate for ETH mean-reversion completion",
+    "prior_hypothesis_ids": ["5557851f-5960-47af-9067-42121187453e", "958735fb-465d-4e1e-9957-4d8ed52856fb"]
+  }
+}

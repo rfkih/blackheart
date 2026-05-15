@@ -1,228 +1,122 @@
 # Blackheart — Algorithmic Trading Platform
 
-## Overview
-Java-based algo trading platform; live trading and backtesting on Binance.
+Java/Spring Boot algo trading on Binance: live trading + backtesting.
 
-## Tech Stack
-- **Language/Framework**: Java 21, Spring Boot 3.2.3, Gradle
-- **Data**: PostgreSQL (primary), Redis (cache/pub-sub), Kafka (event streaming)
-- **Exchange**: Binance REST + WebSocket
-- **TA**: TA4j
-- **Real-time**: WebSocket/STOMP (live P&L streaming)
-- **Auth**: JWT Bearer, Spring Security
-- **Other**: Lombok, Jackson, Docker, Hibernate 6
+> **Future-state**: see `docs/PARAMETRIC_ENGINE_BLUEPRINT.md`. Hand-written Java strategies (LSR, VCB, VBO) are the proven legacy baseline — explicitly preserved.
 
-## Architecture
-Two parallel execution paths share a common strategy interface.
+## Where to find more (read on demand — not loaded by default)
 
-### Live Trading Flow
-```
-Binance WebSocket → FeatureStore (pre-computed TA indicators)
-→ LiveOrchestratorCoordinatorService (multi-strategy fan-out / ownership routing)
-→ LiveTradingCoordinatorService → DefaultStrategyContextEnrichmentService
-→ StrategyExecutor → Decision
-→ LiveTradingDecisionExecutorService → BinanceClientService → DB
-→ LiveTradeListenerService (stop/TP monitoring) → LivePnlPublisherService → WebSocket clients
-```
-
-### Backtest Flow
-```
-BacktestService → BacktestCoordinatorService → MarketData/FeatureStore (DB)
-→ StrategyExecutor → BacktestTradeExecutorService (simulates fills/fees/slippage)
-→ BacktestMetricsService → BacktestPersistenceService → BacktestEquityPointRecorder
-```
-
-### Multi-Strategy Orchestration
-**Live** (`LiveOrchestratorCoordinatorService`) — accounts with 2+ active strategies on same interval:
-- Entry phase: evaluates strategies in ascending `priorityOrder`; first entry signal wins.
-- Active trade phase: only the strategy whose `accountStrategyId` matches the open trade is executed.
-
-**Backtest** (`BacktestCoordinatorService`) — supports comma-separated `strategyCode` (e.g. `"LSR_V2,VCB"`):
-- Same fan-out / ownership logic as live.
-- Per-strategy params resolved via `strategyAccountStrategyIds` map; falls back to global `accountStrategyId`.
-
-## Key Modules
-| Module | Location | Key Classes |
-|---|---|---|
-| Strategy execution | `service/strategy/` | `StrategyExecutor`, `StrategyExecutorFactory`, `DefaultStrategyContextEnrichmentService`, `StrategyHelper` |
-| Strategy impls | `service/strategy/` | `LsrStrategyService`, `VcbStrategyService`, `ExecutionTestService` |
-| Strategy params | `service/strategy/` | `LsrStrategyParamService`, `VcbStrategyParamService`, `VboStrategyParamService`, `AccountStrategyService` |
-| Live trading | `service/live/` | `LiveOrchestratorCoordinatorService`, `LiveTradingCoordinatorService`, `LiveTradingDecisionExecutorService`, `LiveTradeListenerService`, `LivePositionSnapshotMapper` |
-| Backtest | `service/backtest/` | `BacktestCoordinatorService`, `BacktestTradeExecutorService`, `BacktestMetricsService`, `BacktestPersistenceService`, `BacktestStateService`, `BacktestEquityPointRecorder` |
-| Trade mgmt | `service/trade/` | `TradeOpenService`, `TradeCloseService`, `TradeStateSyncService` |
-| Market data | `service/marketdata/`, `stream/` | `BinanceWebSocketClient`, `MarketDataService`, `HistoricalDataService` |
-| Clients | `client/` | `BinanceClientService`, `TokocryptoClientService`, `DeepLearningClientService` |
-| Portfolio | `service/portfolio/` | `PortfolioService` |
-| User / Auth | `service/user/` | `UserService`, `JwtService` |
-
-## Key Models
-| Model | Purpose |
+| Topic | File |
 |---|---|
-| `User` | Platform user (email/password login, JWT) |
-| `Account` | Exchange API account; `userId` FK to `User` |
-| `AccountStrategy` | Links account → strategy; interval, capital allocation, priority, allow-long/short flags. Soft-delete via `is_deleted` + `deleted_at` (preserves FK targets for historical trades/P&L) |
-| `LsrStrategyParam` | Per-account-strategy LSR overrides; JSONB `param_overrides`, `@Version` optimistic lock |
-| `VcbStrategyParam` | Per-account-strategy VCB overrides; same structure as LSR |
-| `VboStrategyParam` | Per-account-strategy VBO overrides; same structure as LSR / VCB |
-| `Trades` | Parent trade record (status: OPEN / PARTIALLY_CLOSED / CLOSED) |
-| `TradePosition` | Child leg: SINGLE, TP1, TP2, RUNNER |
-| `MarketData` | OHLCV candlestick data |
-| `FeatureStore` | Pre-computed indicators (EMA, ADX, RSI, MACD, ATR, BB, KC, Donchian, relVol, ER, signedER, etc.) |
-| `BacktestRun` | Backtest config + result metadata; `strategyAccountStrategyIds` JSONB for per-strategy param mapping |
-| `BacktestTrade` / `BacktestTradePosition` | Simulated trade records |
-| `BacktestEquityPoint` | Per-candle equity curve snapshots |
+| Topology, modules, models, controllers, design patterns | `docs/agent-context/ARCHITECTURE.md` |
+| Flyway history (V14–V40), promotion pipeline state machine | `docs/agent-context/MIGRATIONS.md` |
+| Build / run / test / research-ops recipes | `docs/agent-context/COMMANDS.md` |
+| Working rules, parity invariants, point-in-time discipline, full strategy table | `docs/agent-context/WORKING_RULES.md` |
+| **Strategy / engine catalog** (LSR/VCB/VBO/TPR + spec-driven engines) | `docs/agent-context/STRATEGIES.md` |
+| **JobType handler catalog** (BACKFILL_*, PATCH_*, RECOMPUTE_*, COVERAGE_*) | `docs/agent-context/JOBS.md` |
+| **Key tables / schema reference** (feature_store, market_data, funding_*, research_*) | `docs/agent-context/SCHEMA.md` |
+| Two-JVM deployment runbook | `research/DEPLOYMENT.md` |
+| Cross-host Tailscale-mesh deployment (VPS ↔ home research) | `docs/agent-context/DEPLOYMENT_TAILSCALE.md` |
+| Postgres migration runbook (home Docker → VPS Docker) | `docs/agent-context/DEPLOYMENT_DB_MIGRATION.md` |
+| DB role separation | `research/DB_USER_SEPARATION.md` |
+| Spec language (Phase 2) | `research/specs/SCHEMA.md` |
+| Parametric engine blueprint (M1+) | `docs/PARAMETRIC_ENGINE_BLUEPRINT.md` |
+| Research orchestrator (FastAPI agent contract) | `../research-orchestrator/CLAUDE.md` |
 
-## Active Strategies
-| Code | Class | Description |
-|---|---|---|
-| `LSR` / `LSR_V2` | `LsrStrategyService` | Long/Short reversal; fully parameterized via `LsrParams` |
-| `VCB` | `VcbStrategyService` | Volatility Compression Breakout v2.1; fully parameterized via `VcbParams` |
-| `VBO` | `VolatilityBreakoutStrategyService` | Volatility Breakout (BB-width compression → expansion); fully parameterized via `VboParams` |
-| `TREND_PULLBACK_SINGLE_EXIT` | (existing) | Trend-following w/ pullback entries, fixed 1.5:1 R:R |
-| `RAHT_V1` | `RahtV1` | RahtV1 strategy |
-| `TSMOM_V1` | `TsMomV1` | Time-series momentum |
-| `TEST` | `ExecutionTestService` | Execution testing only |
+## Tech stack
+Java 21, Spring Boot 3.3.5, Gradle, Hibernate 6, PostgreSQL, Redis, Kafka, Flyway, TA4j, JWT, Binance REST+WS.
 
-## Account Strategy Lifecycle
-- **Create**: `POST /api/v1/account-strategies` — verifies user owns the target account and that `strategyCode` resolves via `StrategyDefinitionRepository`. New rows default to `enabled=false`, `currentStatus="STOPPED"`, `is_deleted=false`. Users explicitly toggle `enabled` on to go live.
-- **Soft-delete**: `DELETE /api/v1/account-strategies/:id` — sets `is_deleted=true`, `enabled=false`, `deleted_at=now()`. Blocked in-service if `TradesRepository.countOpenByAccountStrategyId > 0` (throws `IllegalStateException` with count). Historical trades / P&L continue to resolve the strategy because the row is preserved.
-- **Liveness flag is `enabled`, not `currentStatus`**: `current_status` is a legacy column that **no service writes**. Every row holds its seed value (`"STOPPED"`). All active-strategy queries filter `enabled = true AND is_deleted = false`; never rely on `current_status`. The frontend status badge is derived from `enabled`.
-- **Read paths that filter `is_deleted`**: every query in `AccountStrategyRepository` (live orchestration, scheduler, UI list). Trade / P&L joins must **NOT** filter `is_deleted` — historical attribution depends on resolving deleted strategies by id.
+## Topology (V14+)
+Two JVMs share Postgres. Trading JVM (8080) owns Binance + live; Research JVM (8081) owns backtest + research. Trading JVM never participates in research; research crashes can't disturb live. Migrations live in Trading JVM. See `ARCHITECTURE.md`.
 
-## Per-Strategy Parameter System (LSR + VCB + VBO)
-LSR, VCB, and VBO support per-`accountStrategyId` overrides in PostgreSQL:
-- **Storage**: `lsr_strategy_param` / `vcb_strategy_param` / `vbo_strategy_param` — JSONB `param_overrides`, `@JdbcTypeCode(SqlTypes.JSON)` (Hibernate 6), `@Version` optimistic locking.
-- **Param objects**: `LsrParams` / `VcbParams` / `VboParams` — value objects, `@Builder.Default` fields, `defaults()` factory, `merge(Map)` overlay. `VboParams` additionally exposes `applyOverrides(Map)` for in-place mutation, and its merge handles boolean gate flags (`requireKcSqueeze`, `requireDonchianBreak`, `requireTrendAlignment`).
-- **Cache**: Redis, `GenericJackson2JsonRedisSerializer`; key prefix `lsr:params:` / `vcb:params:` / `vbo:params:`; TTL 1h. Evicted **after transaction commit** via `TransactionSynchronizationManager.afterCommit()`.
-- **Concurrent insert safety**: `putParams` / `patchParams` catch `DataIntegrityViolationException` and retry with UPDATE.
-- **REST**: `/api/v1/lsr-params/{accountStrategyId}`, `/api/v1/vcb-params/{accountStrategyId}`, `/api/v1/vbo-params/{accountStrategyId}` — GET, PUT, PATCH, DELETE + GET `/defaults`.
-- **Backtest integration**: `BacktestRun.strategyAccountStrategyIds` (JSONB `Map<String, UUID>`) maps strategy code → accountStrategyId; falls back to global `accountStrategyId`.
+## Active strategies — current status
+- **Production (untouchable):** LSR, VCB, VBO — each ~+20%/yr live.
+- **Research:** TPR (not yet profitable).
+- **Discarded:** DCT (10%/yr no margin), BBR (NO_EDGE), CMR (never traded).
+- **Profitability bar:** 10%/yr net after fees+slippage. Below that = scrap or shelve.
+- See `WORKING_RULES.md` for the full table + discard reasons.
 
-## Context Enrichment (Live vs Backtest)
-`DefaultStrategyContextEnrichmentService` enriches `BaseStrategyContext` → `EnrichedStrategyContext`:
-- **Bias candle (live)**: last **completed** bias candle via `end_time < now()` — never the current forming candle.
-- **previousFeatureStore (live)**: fetched via `findPreviousBySymbolIntervalAndStartTime` when `requirements.isRequirePreviousFeatureStore()` is true. **Critical for compression-breakout strategies** (VCB gate 2 checks previous bar compression).
-- **Backtest**: bias candle and previousFeatureStore are set manually by `BacktestCoordinatorService` after enrichment; enrichment service skips live-only DB queries when `executionMetadata.source == "backtest"`.
+## Data plane
+- **Backtest/research:** BTCUSDT + ETHUSDT plumbed end-to-end (Phase 3 shipped 2026-05-01), 4 intervals (5m/15m/1h/4h), ~17 months min.
+- **Live:** BTCUSDT only (`BinanceWebSocketClient` single-bean). Multi-symbol live needs trading-JVM restart.
+- **Other symbols (SOL, BNB, …):** NOT plumbed. Backfill first via `MarketDataService` / `HistoricalDataService`.
 
-## Design Patterns
-- **Strategy** — pluggable `StrategyExecutor` impls
-- **Factory** — `StrategyExecutorFactory` as strategy registry
-- **Coordinator** — orchestrates multi-service flows
-- **Context Object** — `EnrichedStrategyContext` carries all strategy inputs
-- **Feature Pre-computation** — `FeatureStore` caches indicators for fast backtest queries
-- **Multi-leg Exits** — `TradePosition` supports TP1/TP2/RUNNER
-- **Param Override** — JSONB overrides merged over hardcoded defaults; null-safe cache-aside with post-commit eviction
+## Current head
+- **Flyway:** V62 (toggleable risk gates). Recent: V55–V58 risk-based sizing + per-strategy overrides, V59 active-per-user index, V60 sizing-independent return metrics on `backtest_run`, V61 flips research-agent rows to 90% capital-allocation sizing, V62 adds per-strategy gate toggles (`kill_switch_gate_enabled` / `correlation_gate_enabled` / `concurrent_cap_gate_enabled`) and `backtest_run.strategy_*_overrides` JSONB overrides — backfill FALSE (live behaviour now matches backtest = no gates) so operator opts back in per strategy. See `MIGRATIONS.md` for catalog.
 
-## API Endpoints
-| Controller | Base Path | Purpose |
-|---|---|---|
-| `UserController` | `/api/v1/users` | Register, login, profile (GET/PATCH `/me`) |
-| `AccountStrategyController` | `/api/v1/account-strategies` | List/get strategies by user (excludes soft-deleted); `POST` create; `DELETE /:id` soft-delete (blocked if OPEN/PARTIALLY_CLOSED trades exist) |
-| `LsrStrategyParamController` | `/api/v1/lsr-params` | LSR param CRUD |
-| `VcbStrategyParamController` | `/api/v1/vcb-params` | VCB param CRUD |
-| `VboStrategyParamController` | `/api/v1/vbo-params` | VBO param CRUD |
-| `BacktestController` | `/api/v1/backtest` | Submit and query backtests |
-| `TradeController` | `/api/v1/trades` | Trade management |
-| `TradeQueryController` | `/api/v1/trades` | Trade queries |
-| `TradePnlQueryController` | `/api/v1/pnl` | P&L queries |
-| `PortfolioController` | `/api/v1/portfolio` | Portfolio balances. `GET ?accountId=<uuid>` scopes to a single owned account (verifies ownership, throws `AccessDeniedException` otherwise). Omit `accountId` to aggregate across every account the user owns: free/locked summed per asset, USDT recomputed once on the merged total so spot price is not double-applied. |
-| `PortofolioController` | `/api/v1/portofolio` (also `/v1/portofolio` alias) | **Admin-only** legacy reload endpoint (`GET /reload`). Note the spelling — typo preserved for backward compat. Not the same as `PortfolioController`. |
-| `MarketQueryController` | `/api/v1/market` | Market data queries |
-| `SchedulerController` | `/api/v1/scheduler` | Scheduler management. `IP_MONITOR` job calls `IpMonitorService.checkAndNotifyIfChanged()` on its tick. |
-| `MonteCarloController` | `/api/v1/montecarlo` | Monte Carlo simulation |
-| `ResearchController` | `/api/v1/research` | **Mixed access** (no class-level `@PreAuthorize`). Sweeps endpoints (`POST/GET/DELETE /sweeps`, `POST /sweeps/:id/cancel`) and read-only `GET /tpr/params` are user-accessible — every sweep is created with the caller's `userId` and the get/cancel/delete handlers reject when `state.getUserId()` differs from the JWT subject. Admin-only via method-level `@PreAuthorize("hasRole('ADMIN')")`: `GET /backtest/:id/analysis` (no per-run ownership check), `PUT /tpr/params`, `POST /tpr/params/reset`, `GET /log`. Add new sweep-adjacent endpoints **without** `@PreAuthorize` and rely on the service-layer ownership check; add new global/mutating endpoints **with** `@PreAuthorize("hasRole('ADMIN')")`. |
-| `ServerInfoController` | `/api/v1/server` | Server diagnostics. `GET /ip` calls ipify live (used by the broker-setup card). `GET /ip/status` returns the latest persisted `ServerIpLog` row — `{ currentIp, previousIp, event, recordedAt }` — written by the `IP_MONITOR` scheduler. The frontend `IpWhitelistBanner` polls this and warns the user when `event == "CHANGED"`. Don't make `/ip/status` call ipify; the whole point is to keep it cheap to poll. |
+## Stat-rigor gate (V11+, economic threshold V60+)
+Tick returns `verdict=PASS` only when **all**: n_trades≥100, PF 95% CI lower>1.0, DSR≥0.95, statistical_verdict=SIGNIFICANT_EDGE, **and** annualized geometric_return_pct_at_alloc_90 ≥ 10.0 (compounded at 90% sizing, 365-day year). The +20bps slippage net check was retired — slippage_haircut_pnl is still computed and logged for audit, but the economic gate is now the 10%/yr annualized compound threshold. SIGNIFICANT_EDGE without the geom threshold → ITERATE (edge is real but doesn't justify promotion). SIGNIFICANT_EDGE with the threshold parks queue + emits `next_action` for `/walk-forward`; only graduation-eligible after `stability_verdict=ROBUST`.
 
-## Security
-- JWT Bearer auth; `JwtService` issues and validates tokens.
-- Public: `/healthcheck`, `/ws`, `/ws/**`, `/api/v1/users/register`, `/api/v1/users/login`.
-- All other endpoints require `Authorization: Bearer <token>`.
-- `jwtService.extractUserId(token)` — resolves caller's UUID for ownership checks.
+## Working rules (headline — full text in `WORKING_RULES.md`)
+- **Targeted minimal changes** over refactors. Don't rename DTOs/columns or change public APIs unless asked.
+- **Trading-logic safety:** preserve live↔backtest parity; respect Binance lot/precision/min-notional/balance.
+- **Code change format:** root cause → solution → files → risks → diff → test plan.
+- **Persistence:** `@JdbcTypeCode(SqlTypes.JSON)` for JSONB (NOT `AttributeConverter`); evict Redis cache via `afterCommit()`.
+- **Migrations are immutable once applied.** New schema = new V<N>.
+- **Update catalogs in the same PR as the code change** — see WORKING_RULES.md "Catalog maintenance". If you add/rename/delete a strategy class, JobType, handler, or important table, update `STRATEGIES.md` / `JOBS.md` / `SCHEMA.md` accordingly. The catalogs exist to save the next agent's tokens; stale entries cost more than no entries.
+- **Sonar hygiene (S1192 / S3776 / S1541):** before introducing a string literal, grep for it; if it already appears in 2+ files, promote to `id.co.blackheart.util.AppConstant` (or the matching domain constant class) instead of inlining. Class-local literals stay as `private static final`. Keep methods under Sonar's complexity ceilings — cognitive complexity ≤ 15, cyclomatic complexity ≤ 10, method length ≤ 100 lines. If a method would breach, decompose into named helpers in the same class rather than disabling the rule. Full text in `WORKING_RULES.md` § "Sonar hygiene".
+- **If uncertain:** ask whether the user wants minimal patch or refactor.
 
-## External Services
-- **Binance** — primary exchange (REST + WebSocket)
-- **Tokocrypto** — secondary exchange
-- **FastAPI** (port 8000) — ML/DL predictions
-- **Node.js** (port 3000) — additional service
+## DRY consolidation standard
+Apply DRY only when it genuinely simplifies. Code that *looks* similar but encodes different intent must stay separate.
 
-## Working Rules
+**Consolidate when:**
+- Bodies are bit-identical and have **no engine/strategy-specific state** (constants, ARCHETYPE, Tuning fields). Pure functions of their arguments.
+- Duplication appears in **3+ places** AND the helper has an obvious home (existing util class, or a new one in the same package).
+- The extracted helper preserves **exact null/zero/exception semantics** of the originals — no defensive guards added "while we're here."
+- Existing utilities (e.g. `DateTimeUtil`) already cover the case — adopt them instead of inlining.
 
-### General
-- Prefer minimal, targeted changes over large refactors.
-- Do not change public API contracts unless explicitly requested.
-- Do not rename entities, DTO fields, or DB columns unless explicitly requested.
-- If schema changes are required, always provide migration SQL.
-- Preserve backward compatibility whenever possible.
+**Do NOT consolidate:**
+- Strategy execution logic — even visually identical `managePosition`, `baseBuilder`, `hold`, `veto` blocks differ by per-engine constants/log prefixes/signal types. Hidden behavior change risk violates the "Don't introduce hidden behavior changes in strategy execution" hard rule.
+- Protected strategies LSR/VCB/VBO — never refactor across them, even if they share shapes.
+- `BigDecimal` scale/round calls — the explicit scale and `RoundingMode` *is* the meaning at each callsite.
+- `orElseThrow` / `EntityNotFoundException` chains — idiomatic; each error message is contextual.
+- Wrapper methods that just delegate to a helper without adding behavior — collapse the wrapper instead of "DRYing" the delegation.
+- DTO↔Entity mappings unless the field set, null handling, *and* downstream consumers are identical.
 
-### Trading Logic Safety
-- Do not simplify execution, fill, fee, or P&L logic without explaining consequences.
-- Always preserve consistency between live and backtest unless divergence is intentional and documented.
-- Respect Binance constraints: lot size, precision, min notional, available balance.
-- When changing stop loss, TP, trailing stop, or runner logic, explain: what changed, why, impact on trade lifecycle, impact on backtest parity.
+**Process when consolidating:**
+1. Read **all** candidate copies in full and confirm bit-identity (constants, exception types, comparison semantics).
+2. Place the helper in the package that owns the concept (e.g. engine helpers in `engine/`, time conversions in `util/`).
+3. Match originals exactly — do not "improve" while extracting.
+4. Remove now-unused imports.
+5. Recompile (`./gradlew compileJava --rerun-tasks` if a JVM holds the JAR and `clean` fails).
 
-### Live / Backtest Parity Rules
-- `DefaultStrategyContextEnrichmentService` skips live DB queries when `source == "backtest"` — do not break this guard.
-- `previousFeatureStore` must be populated for strategies declaring `requirePreviousFeatureStore = true`; live loads from DB, backtest sets it manually.
-- Live bias candle must use `findLatestCompletedBySymbolAndInterval` (completed), not `findLatestBySymbolAndInterval` (may return forming candle).
+**Existing canonical helpers — prefer over inlining:**
+- `DateTimeUtil.toEpochMillisUtc(LocalDateTime)` — UTC `LocalDateTime` → epoch millis.
+- `DateTimeUtil.toEpochSecondsUtc(LocalDateTime)` — same, seconds.
+- `EngineContextHelpers` (in `id.co.blackheart.engine`) — `isMarketVetoed`, `resolveAtr`, `resolveRegimeScore`, `resolveJumpRisk`, `resolveRiskMultiplier` for spec-driven engines (DCB/MMR/MRO/TPB). New engines must reuse these, not re-inline them.
+- `GateVerdict` (in `id.co.blackheart.service.risk`) — shared `record(boolean allowed, String reason)` with `allow()` / `deny(String)` factories. All risk sub-guards (`RegimeGuardService`, `CorrelationGuardService`, and any future guard) must return this type — never re-define an inner verdict record with the same shape.
+- `StrategyDecision` (in `id.co.blackheart.dto.strategy`) — canonical decision DTO for all strategy outputs (live + backtest). `TradeDecision` was deleted as dead code; do not resurrect it.
 
-### Point-in-Time Discipline (audited 2026-04-26)
-- Strategy execution gates on `BinanceWebSocketClient.isProcessable` which requires the Binance `k.x` closed-candle flag — entry decisions never see a forming bar.
-- Bias-timeframe enrichment uses `findLatestCompletedBySymbolAndInterval(boundary=now)` with `start_time < now` — completed-only.
-- `FeatureStoreRepository.findLatestBySymbolAndInterval` (no completed filter) is **decision-unsafe** and only used by `SentimentPublisherService` (informational broadcast). The Javadoc on that method now warns explicitly against decision-path use; honor it. Add a completed-filter variant if a new caller emerges.
-- When wiring a new strategy or feature read on the live path, the rule is: anything that influences an entry/exit price level OR a sizing decision must read completed-only data. Anything informational (UI, alerts) can use the latest-including-forming variant.
-- Live entry sizing fields in `LiveTradingDecisionExecutorService`: `executeOpenLong` reads `decision.getNotionalSize()` (USDT, checked against the USDT portfolio balance); `executeOpenShort` reads `decision.getPositionSize()` (BTC qty, checked against the BTC portfolio balance). Strategies must set the correct field in the correct currency or the executor silently falls back to its own sizing. For SHORT, use `StrategyHelper.calculateShortPositionSize` (BTC), **not** `calculateEntryNotional(SIDE_SHORT)` which returns USDT and will always fail the BTC balance guard.
-- `buildPositionSnapshot` in `LiveTradingCoordinatorService` returns `hasOpenPosition=false` when no OPEN `TradePosition` rows exist, regardless of parent `Trades` status.
+## Do Not — hard list
+- Don't rewrite architecture unless requested.
+- Don't replace TA4j-based logic without justification.
+- Don't bypass risk checks, fee handling, or fill simulation.
+- Don't introduce hidden behavior changes in strategy execution.
+- Don't make broad package moves or rename classes unnecessarily.
+- Don't use `@Convert(converter = JsonMapConverter.class)` for JSONB — use `@JdbcTypeCode(SqlTypes.JSON)`.
+- Don't evict Redis cache inside `@Transactional` — use `afterCommit()` via `TransactionSynchronizationManager`.
+- **Don't modify scope of `LiveTradingDecisionExecutorService`'s `simulated` check.** Diverts only `OPEN_LONG`/`OPEN_SHORT`; expanding to CLOSE_*/UPDATE strands real positions on demote. (Phase 1 audit Bug 1.) V40 broadened the *trigger* to `definition.simulated OR accountStrategy.simulated` but kept the OPEN_*-only scope intact — preserve that.
+- **Don't remove `@Profile("!research")` from `BlackheartApplication`** or `@Profile("research")` from `BlackheartResearchApplication`. Both required to prevent JpaRepositories collision.
+- **Don't remove `tr -d '[:space:]'`** from `research-tick.sh` psql captures — strips Windows CR; without it backtest submission fails HTTP 500 (`JsonParseException: Illegal CTRL-CHAR code 13`).
+- **Don't bypass `deploy-strategy.sh`'s 4-hour cap** by overriding `STRATEGY_GEN_MIN_INTERVAL_SECONDS`. Prevents restart thrashing on trading JVM.
+- **Don't touch protected production strategies** (LSR/VCB/VBO) without explicit user instruction. Their default params, defaults() factory, applyOverrides(), and entry/exit logic are frozen.
 
-### Code Change Format
-When implementing changes, respond with:
-1. Root cause or objective
-2. Proposed solution
-3. Files/classes affected
-4. Risks and edge cases
-5. Code changes
-6. Test checklist
+## Research orchestrator (FastAPI, V28+, port 8082)
+Loopback-only Python service in `research-orchestrator/`. The agent-facing front door — replaces bash `research-tick.sh` / `walk-forward.sh` / `queue-strategy.sh`. Full contract via `GET /agent/playbook`. See `../research-orchestrator/CLAUDE.md`.
 
-### Database / Persistence
-- Avoid unnecessary writes in hot paths.
-- Use `@JdbcTypeCode(SqlTypes.JSON)` for JSONB columns in Hibernate 6 — NOT `AttributeConverter<Map, String>`.
-- Backtest persistence must stay efficient; do not add heavy writes inside the execution loop unless required.
-- Prefer daily equity persistence over excessive per-candle persistence unless explicitly requested.
+## Autonomous research loop (agent contract — headline)
+quant-researcher operates **independently**. Standing goal: find next profitable strategy ≥10%/yr after fees+slippage, walk-forward `ROBUST`. Operator does NOT hand hypotheses.
 
-### Logging / Observability
-- Clear logs for strategy decisions, order execution, fills, stop updates, reconciliation issues.
-- No noisy logs in high-frequency paths unless necessary.
+**Agent decides:** what to research, sweep design, when to escalate (SIGNIFICANT_EDGE → walk-forward), when to abandon (NO_EDGE/MARGINAL → journal + move on), journaling discipline (pre-register, then verdict, then escalate-or-abandon).
 
-### Architecture Discipline
-- Keep strategy logic inside strategy modules.
-- Keep orchestration inside coordinator services.
-- Keep exchange-specific behavior inside client/services — not mixed into strategy logic.
-- Do not move business logic into controllers.
-- Strategy param services (`LsrStrategyParamService`, `VcbStrategyParamService`) follow a fixed pattern — apply the same pattern when adding new parameterized strategies.
+**Agent does NOT decide:** promotion to real capital (ROBUST = gate, not trigger); statistical thresholds (V11 fixed: n≥100, PF 95% CI lower>1.0, +20bps net positive, PSR≥0.95); methodology constants; anything outside `research-orchestrator/` and `research/specs/`; protected strategies.
 
-### If Uncertain
-- Ask whether user wants a minimal patch or a structural refactor.
-- For risky changes, explain first before editing.
+**Cadence:** CronCreate every N hours (default 6); each fire = one `/tick` if queue depth, else fresh hypothesis enqueue.
 
-## Common Commands
-- Build: `./gradlew build`
-- Test: `./gradlew test`
-- Run app: `./gradlew bootRun`
-- Run specific test: `./gradlew test --tests "com.example.YourTest"`
+**Anti-overfitting:** pre-register before sweep; HLZ-scaled DSR for multi-testing (V11+); never re-run identical grid hoping for different verdict; holdout = most recent N%, never tuned on.
 
-## Domain Invariants
-- `Trades` is the parent trade record.
-- `TradePosition` represents child legs: SINGLE, TP1, TP2, RUNNER.
-- Parent/child trade consistency must be preserved after every open/close/update flow.
-- `FeatureStore` is the preferred source of precomputed indicators for strategies and backtests.
-- Live and backtest paths share strategy logic through the common strategy interface.
-- A `PARTIALLY_CLOSED` parent `Trades` with no OPEN `TradePosition` children is not a tradable position — do not route strategy into position management for it.
-- Per-strategy params always fall back to `defaults()` when no override row exists or `accountStrategyId` is null.
+**Stop and ask:** unplumbed data; ROBUST graduation candidate; methodology change; touching protected strategy.
 
-## Do Not
-- Do not rewrite architecture unless explicitly requested.
-- Do not replace TA4j-based logic without justification.
-- Do not bypass risk checks, fee handling, or fill simulation.
-- Do not introduce hidden behavior changes in strategy execution.
-- Do not make broad package moves or rename classes unnecessarily.
-- Do not use `@Convert(converter = JsonMapConverter.class)` for JSONB — use `@JdbcTypeCode(SqlTypes.JSON)`.
-- Do not evict Redis cache inside a `@Transactional` method — use `afterCommit()` via `TransactionSynchronizationManager`.
+## External services
+Binance primary, Tokocrypto secondary. FastAPI :8000 ML/DL. Node.js :3000.

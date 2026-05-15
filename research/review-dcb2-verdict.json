@@ -1,0 +1,38 @@
+{
+  "target_id": "plan:DCB2:77d2263ab24de74c52715dc8195fb079e244308e2fbb68c50a00bb31250171bf:d9c66724-5f4b-4393-b234-fbe9fece20cc",
+  "target_kind": "plan",
+  "verdict": "REJECTED",
+  "strategy_code": "DCB2",
+  "summary_reason": "Blocker failed: pre_registration. The review request was submitted for hypothesis d9c66724 (2D: stopAtrMult x breakEvenR) but the plan file RESEARCH_PLAN_2026-05-07b.md was updated to reference hypothesis 75bf7fcd-ee36-4d3a-acca-b4ceedff7471 (3D: stopAtrMult x breakEvenR x tpR). The review request's axis_names=['stopAtrMult','breakEvenR'] do not match the plan's 3 axes. Re-submit review with correct hypothesis_id=75bf7fcd and axis_names=['stopAtrMult','breakEvenR','tpR'].",
+  "summary_n_blocker_fails": 1,
+  "summary_n_warning_fails": 0,
+  "findings": [
+    {
+      "check_name": "pre_registration",
+      "severity": "blocker",
+      "passed": false,
+      "finding": "Review request specifies hypothesis_id=d9c66724 with axis_names=['stopAtrMult','breakEvenR'] (2D sweep, 9 cells). However, the plan file RESEARCH_PLAN_2026-05-07b.md references hypothesis 75bf7fcd-ee36-4d3a-acca-b4ceedff7471 in its header and specifies a 3D sweep (stopAtrMult x breakEvenR x tpR, 27 cells). The review target and the plan are mismatched — the review cannot be completed against an outdated hypothesis. Action required: re-submit review request with hypothesis_id=75bf7fcd and axis_names=['stopAtrMult','breakEvenR','tpR'].",
+      "details": {
+        "review_hypothesis_id": "d9c66724-5f4b-4393-b234-fbe9fece20cc",
+        "plan_hypothesis_id": "75bf7fcd-ee36-4d3a-acca-b4ceedff7471",
+        "review_axes": ["stopAtrMult", "breakEvenR"],
+        "plan_axes": ["stopAtrMult", "breakEvenR", "tpR"],
+        "resolution": "Re-submit review with correct 3D hypothesis"
+      }
+    },
+    {
+      "check_name": "mechanism_named",
+      "severity": "warning",
+      "passed": true,
+      "finding": "Mechanism marker found in hypothesis 75bf7fcd: 'tighter stops + earlier break-even shift reduce outcome variance'. Causal story present.",
+      "details": {"markers_found": ["reduce"]}
+    },
+    {
+      "check_name": "axis_not_recently_failed",
+      "severity": "warning",
+      "passed": true,
+      "finding": "Axis combo [stopAtrMult, breakEvenR, tpR] not previously exercised on DCB2 ETHUSDT. Prior sweep cf5f3d38 used [rvolMin, adxEntryMin, tpR] — different axis set.",
+      "details": {}
+    }
+  ]
+}

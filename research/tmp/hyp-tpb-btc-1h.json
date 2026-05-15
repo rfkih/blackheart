@@ -1,0 +1,31 @@
+{
+  "entry_type": "HYPOTHESIS",
+  "strategy_code": "TPB",
+  "title": "TPB BTCUSDT 1h: First valid test after schema fix (tp1R + pullbackTouchAtr)",
+  "content": "TrendPullbackEngine (archetype=trend_pullback) has never been tested with correct parameter names. Prior sessions showed degenerate behavior because the schema mapped tpR->tp1R and pullbackAtrTolerance->pullbackTouchAtr - the engine silently ignored old names and ran at hardcoded defaults. Schema fix shipped 2026-05-07. This hypothesis: the TPB entry mechanism (EMA50>EMA200 stack, pullback to EMA20 within pullbackTouchAtr*ATR, reclaim candle with composite signal score >= 0.55) has a profitable signal on BTCUSDT 1h with the CORRECT parameters now being honored. Expected n=30-80 trades at 1h given the 4h bias filter (EMA stack check on 4h timeframe). V11 gates required: n>=100, CI_lower>1.0, +20bps positive, PSR>=0.95, walk-forward ROBUST.",
+  "structured_data": {
+    "instrument": "BTCUSDT",
+    "interval": "1h",
+    "archetype": "trend_pullback",
+    "schema_fix": "tp1R (was tpR), pullbackTouchAtr (was pullbackAtrTolerance)",
+    "axes": ["adxEntryMin", "stopAtrBuffer", "tp1R"],
+    "null_screen_params": {
+      "adxEntryMin_low": 20,
+      "adxEntryMin_high": 35,
+      "stopAtrBuffer_low": 0.4,
+      "stopAtrBuffer_high": 0.8,
+      "tp1R_low": 1.5,
+      "tp1R_high": 3.0
+    },
+    "expected_n_range": "30-80 per draw (4h bias filter limits 1h entries)",
+    "mechanism": "EMA50>EMA200 trend stack, pullback to EMA20 within ATR tolerance, reclaim candle quality gate, composite score>=0.55",
+    "anti_correlation_argument": "TPB fires on PULLBACK (price returning to EMA20 after overshooting), VBO fires on BREAKOUT EXPANSION - structurally opposite conditions. Expected Spearman corr < 0.30.",
+    "prior_null_screen_verdict": "DEGENERATE_EDGE on 1h (schema broken: params ignored, frequency=2-15 draws). THIS is the first test with schema fix.",
+    "risk": "4h bias filter may still cause frequency starvation. If n<20 per draw: pivot immediately to TPB BTCUSDT 4h (no cross-timeframe conflict at native 4h)",
+    "funding_rate_backup": "FCARRY archetype is now unblocked (2026-05-09 backfill fix). If TPB fails: test FCARRY BTC 1h with correct funding data.",
+    "session_date": "2026-05-09",
+    "plan_file": "research/RESEARCH_PLAN_2026-05-09.md"
+  },
+  "status": "ACTIVE",
+  "created_by": "quant-researcher"
+}

@@ -4,6 +4,7 @@ package id.co.blackheart.controller;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.portfolio.PortfolioService;
 import id.co.blackheart.util.ResponseCode;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,17 +21,14 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 // the rest of the controllers in this project.
 @RequestMapping(value = {"/api/v1/portofolio", "/v1/portofolio"})
 @Slf4j
+@RequiredArgsConstructor
 @Tag(name = "PortofolioController", description = "Controller for Portofolio")
 @PreAuthorize("hasRole('ADMIN')")
 public class PortofolioController {
 
     private static final String RELOAD_SUCCESS = "Update Portofolio Success";
 
-    private PortfolioService portofolioService;
-
-    public PortofolioController(PortfolioService portofolioService) {
-        this.portofolioService = portofolioService;
-    }
+    private final PortfolioService portofolioService;
 
     @GetMapping("/reload")
     public ResponseEntity<ResponseDto> portofolioUpdate() {

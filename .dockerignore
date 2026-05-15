@@ -1,0 +1,18 @@
+.git/
+.gradle/
+.idea/
+*.iml
+logs/
+*.log
+.DS_Store
+node_modules/
+docs/agent-context/
+.claude/
+
+# We ship only the boot JAR from build/libs/. Everything else under build/ is
+# build cache, test reports, etc. - exclude to keep the build context tiny.
+build/
+!build/libs/
+build/libs/*-plain.jar
+# allow trading + research JARs into context (manage.ps1 builds them)
+!build/libs/blackheart-*.jar

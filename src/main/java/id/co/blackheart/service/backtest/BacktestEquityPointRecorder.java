@@ -6,6 +6,7 @@ import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTradePosition;
 import id.co.blackheart.model.MarketData;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -13,12 +14,13 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
 public class BacktestEquityPointRecorder {
 
-    public void record(
+    public void recordPoint(
             BacktestState state,
             BacktestRun backtestRun,
             MarketData monitorCandle
@@ -100,16 +102,33 @@ public class BacktestEquityPointRecorder {
         return backtestRun.getAccountStrategyId();
     }
 
+    /**
+     * Sum open positions across ALL active strategies in the multi-trade
+     * map, not just the legacy single-slot mirror. Falls back to the
+     * legacy slot when no multi-trade entries exist (single-strategy
+     * runs / pre-B1 path) so the count is correct in both regimes.
+     */
     private int countOpenPositions(BacktestState state) {
-        List<BacktestTradePosition> positions = state.getActiveTradePositions();
-        if (positions == null || positions.isEmpty()) {
-            return 0;
+        Map<String, List<BacktestTradePosition>> byStrategy = state.getActiveTradePositionsByStrategy();
+        if (!CollectionUtils.isEmpty(byStrategy)) {
+            int count = 0;
+            for (List<BacktestTradePosition> perStrategy : byStrategy.values()) {
+                count += countOpenIn(perStrategy);
+            }
+            return count;
         }
+        return countOpenIn(state.getActiveTradePositions());
+    }
 
-        return (int) positions.stream()
-                .filter(position -> position != null)
-                .filter(position -> "OPEN".equalsIgnoreCase(position.getStatus()))
-                .count();
+    private int countOpenIn(List<BacktestTradePosition> positions) {
+        if (positions == null) return 0;
+        int count = 0;
+        for (BacktestTradePosition position : positions) {
+            if (position != null && "OPEN".equalsIgnoreCase(position.getStatus())) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private BigDecimal safe(BigDecimal value) {

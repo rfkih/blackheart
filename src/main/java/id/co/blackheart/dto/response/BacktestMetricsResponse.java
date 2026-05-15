@@ -23,4 +23,10 @@ public class BacktestMetricsResponse {
     private Integer totalTrades;
     private Integer winningTrades;
     private Integer losingTrades;
+    /** V60 — mean per-trade return rate (pnl / notional × 100). Sizing-
+     *  independent companion to {@link #totalReturnPct}. */
+    private BigDecimal avgTradeReturnPct;
+    /** V60 — compounded return assuming 90% of equity sized per trade, in
+     *  percent. Clamps to ruin (multiplier 0) on any -100%+ step. */
+    private BigDecimal geometricReturnPctAtAlloc90;
 }

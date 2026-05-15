@@ -27,6 +27,14 @@ public final class TradeConstant {
 
     public static final String TARGET_ALL = "ALL";
 
+    /**
+     * Default trading-pair symbol used by call sites that have not yet been
+     * parameterised on a per-account symbol. Lift to a config property when
+     * multi-symbol live trading lands; until then this is the single source
+     * of truth so we don't grep "BTCUSDT" through six packages.
+     */
+    public static final String SYMBOL_BTCUSDT = "BTCUSDT";
+
 
     @Getter
     public enum TradeType {

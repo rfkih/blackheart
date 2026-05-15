@@ -1,0 +1,10 @@
+{
+  "target_kind": "plan",
+  "plan": {
+    "strategy_code": "DCB2",
+    "axis_names": ["stopAtrMult", "breakEvenR", "tpR"],
+    "hypothesis_id": "75bf7fcd-ee36-4d3a-acca-b4ceedff7471",
+    "plan_path": "research/RESEARCH_PLAN_2026-05-07b.md",
+    "notes": "DCB2 ETH 1h 3D exit structure sweep. Prior sweep cf5f3d38 found adxEntryMin=26 gives PF=1.13 but CI_lower=0.845 at n=294. Hypothesis: tighter stop + earlier BE + tpR variation reduces variance enough to push CI_lower > 1.0. Fixed: adxEntryMin=26, rvolMin=1.10. 27-cell 3x3x3 grid."
+  }
+}

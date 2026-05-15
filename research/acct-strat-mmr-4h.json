@@ -1,0 +1,16 @@
+{
+  "strategyDefinitionId": "a046eedf-32ee-4dd2-8072-228d68a29783",
+  "symbol": "BTCUSDT",
+  "interval": "4h",
+  "presetName": "research_mmr_btc_4h",
+  "enabled": false,
+  "simulated": true,
+  "allowLong": true,
+  "allowShort": true,
+  "maxOpenPositions": 1,
+  "capitalAllocationPct": 5.0,
+  "priorityOrder": 1,
+  "ddKillThresholdPct": 25.0,
+  "useRiskBasedSizing": true,
+  "riskPct": 0.02
+}

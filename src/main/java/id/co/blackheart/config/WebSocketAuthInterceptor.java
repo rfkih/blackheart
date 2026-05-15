@@ -7,12 +7,15 @@ import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.service.user.JwtService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.lang.Nullable;
+import org.springframework.util.StringUtils;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -57,7 +60,8 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
     private final BacktestRunRepository backtestRunRepository;
 
     @Override
-    public Message<?> preSend(Message<?> message, MessageChannel channel) {
+    @SuppressWarnings("java:S2638")
+    public @Nullable Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
         if (accessor == null) return message;
 
@@ -74,96 +78,100 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
     private void handleConnect(StompHeaderAccessor accessor) {
         String token = extractToken(accessor);
-        if (token == null) {
+        if (ObjectUtils.isEmpty(token)) {
             throw new IllegalArgumentException("STOMP CONNECT rejected — missing Authorization header");
         }
-        String email;
         try {
-            email = jwtService.extractEmail(token);
-            if (email == null || !jwtService.isTokenValid(token, email)) {
+            String email = jwtService.extractEmail(token);
+            if (ObjectUtils.isEmpty(email) || !jwtService.isTokenValid(token, email)) {
                 throw new IllegalArgumentException("STOMP CONNECT rejected — invalid token");
             }
+            UUID userId = jwtService.extractUserId(token);
+            String role = jwtService.extractRole(token);
+            StompPrincipal principal = new StompPrincipal(email, userId, role);
+            Authentication auth = new UsernamePasswordAuthenticationToken(
+                    principal,
+                    null,
+                    List.of(new SimpleGrantedAuthority("ROLE_" + role))
+            );
+            accessor.setUser(principal);
+            accessor.setLeaveMutable(true);
+            // Stash the Authentication for any downstream @MessageMapping that
+            // prefers a Spring Authentication over the raw Principal.
+            accessor.setHeader("authentication", auth);
+        } catch (IllegalArgumentException e) {
+            throw e;
         } catch (Exception e) {
-//            log.warn("STOMP CONNECT token validation failed: {}", e.getMessage());
+            log.warn("STOMP CONNECT token validation failed: {}", e.getMessage());
             throw new IllegalArgumentException("STOMP CONNECT rejected — invalid token");
         }
-
-        UUID userId = jwtService.extractUserId(token);
-        String role = jwtService.extractRole(token);
-        StompPrincipal principal = new StompPrincipal(email, userId, role);
-        Authentication auth = new UsernamePasswordAuthenticationToken(
-                principal,
-                null,
-                List.of(new SimpleGrantedAuthority("ROLE_" + role))
-        );
-        accessor.setUser(principal);
-        accessor.setLeaveMutable(true);
-        // Stash the Authentication for any downstream @MessageMapping that
-        // prefers a Spring Authentication over the raw Principal.
-        accessor.setHeader("authentication", auth);
     }
 
     private void handleSubscribe(StompHeaderAccessor accessor) {
         StompPrincipal principal = (accessor.getUser() instanceof StompPrincipal p) ? p : null;
-        if (principal == null) {
+        if (ObjectUtils.isEmpty(principal)) {
             log.warn("STOMP SUBSCRIBE rejected — no authenticated principal on session");
             throw new AccessDeniedException("STOMP SUBSCRIBE rejected — unauthenticated");
         }
 
         String destination = accessor.getDestination();
-        if (destination == null) {
+        if (ObjectUtils.isEmpty(destination)) {
             return;
         }
 
         if (destination.startsWith(PNL_TOPIC_PREFIX)) {
-            String tail = destination.substring(PNL_TOPIC_PREFIX.length());
-            if (tail.isEmpty()) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing accountId");
-            }
-            UUID accountId;
-            try {
-                accountId = UUID.fromString(tail);
-            } catch (IllegalArgumentException e) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid accountId");
-            }
-
-            Optional<Account> account = accountRepository.findByAccountId(accountId);
-            if (account.isEmpty()
-                    || account.get().getUserId() == null
-                    || !account.get().getUserId().equals(principal.getUserId())) {
-                // Log with the attempting user's id — useful for detection of enumeration.
-                log.warn(
-                        "STOMP SUBSCRIBE rejected — account not owned by caller | destination={} callerUserId={}",
-                        destination, principal.getUserId()
-                );
-                throw new AccessDeniedException("Not authorized for this topic");
-            }
+            authorizeForPnlTopic(destination, principal);
             return;
         }
-
         if (destination.startsWith(BACKTEST_TOPIC_PREFIX)) {
-            String tail = destination.substring(BACKTEST_TOPIC_PREFIX.length());
-            if (tail.isEmpty()) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing backtestRunId");
-            }
-            UUID runId;
-            try {
-                runId = UUID.fromString(tail);
-            } catch (IllegalArgumentException e) {
-                throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid backtestRunId");
-            }
-            Optional<BacktestRun> run = backtestRunRepository.findByIdAndUserId(runId, principal.getUserId());
-            if (run.isEmpty()) {
-                log.warn(
-                        "STOMP SUBSCRIBE rejected — backtest run not owned by caller | destination={} callerUserId={}",
-                        destination, principal.getUserId()
-                );
-                throw new AccessDeniedException("Not authorized for this topic");
-            }
-            return;
+            authorizeForBacktestTopic(destination, principal);
         }
         // /user/** destinations are routed privately by Spring per-session; no gate here.
         // Anything else (public market-data topics etc.) is allowed for authenticated sessions.
+    }
+
+    private void authorizeForPnlTopic(String destination, StompPrincipal principal) {
+        String tail = destination.substring(PNL_TOPIC_PREFIX.length());
+        if (!StringUtils.hasText(tail)) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing accountId");
+        }
+        UUID accountId;
+        try {
+            accountId = UUID.fromString(tail);
+        } catch (IllegalArgumentException e) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid accountId");
+        }
+        Optional<Account> account = accountRepository.findByAccountId(accountId);
+        if (account.isEmpty()
+                || ObjectUtils.isEmpty(account.get().getUserId())
+                || !account.get().getUserId().equals(principal.getUserId())) {
+            log.warn(
+                    "STOMP SUBSCRIBE rejected — account not owned by caller | destination={} callerUserId={}",
+                    destination, principal.getUserId()
+            );
+            throw new AccessDeniedException("Not authorized for this topic");
+        }
+    }
+
+    private void authorizeForBacktestTopic(String destination, StompPrincipal principal) {
+        String tail = destination.substring(BACKTEST_TOPIC_PREFIX.length());
+        if (!StringUtils.hasText(tail)) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — missing backtestRunId");
+        }
+        UUID runId;
+        try {
+            runId = UUID.fromString(tail);
+        } catch (IllegalArgumentException e) {
+            throw new AccessDeniedException("STOMP SUBSCRIBE rejected — invalid backtestRunId");
+        }
+        Optional<BacktestRun> run = backtestRunRepository.findByIdAndUserId(runId, principal.getUserId());
+        if (run.isEmpty()) {
+            log.warn(
+                    "STOMP SUBSCRIBE rejected — backtest run not owned by caller | destination={} callerUserId={}",
+                    destination, principal.getUserId()
+            );
+            throw new AccessDeniedException("Not authorized for this topic");
+        }
     }
 
     private String extractToken(StompHeaderAccessor accessor) {

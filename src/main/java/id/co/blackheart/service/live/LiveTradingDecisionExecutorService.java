@@ -8,15 +8,23 @@ import id.co.blackheart.model.Account;
 import id.co.blackheart.model.Portfolio;
 import id.co.blackheart.model.TradePosition;
 import id.co.blackheart.model.Trades;
+import id.co.blackheart.repository.StrategyDefinitionRepository;
 import id.co.blackheart.repository.TradePositionRepository;
 import id.co.blackheart.service.portfolio.PortfolioService;
+import id.co.blackheart.service.promotion.StrategyPromotionService;
 import id.co.blackheart.service.risk.BookVolTargetingService;
+import id.co.blackheart.service.risk.KellySizingService;
 import id.co.blackheart.service.risk.RiskGuardService;
 import id.co.blackheart.service.strategy.StrategyDecisionInvariants;
+import id.co.blackheart.service.trade.TradeExecutionLogService;
 import id.co.blackheart.service.trade.TradeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+
+import id.co.blackheart.util.SymbolUtils;
+import org.apache.commons.lang3.ObjectUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -44,21 +52,34 @@ public class LiveTradingDecisionExecutorService {
     private final PortfolioService portfolioService;
     private final TradeService tradeService;
     private final RiskGuardService riskGuardService;
+    private final KellySizingService kellySizingService;
     private final BookVolTargetingService bookVolTargetingService;
+    private final StrategyPromotionService strategyPromotionService;
+    private final StrategyDefinitionRepository strategyDefinitionRepository;
+    private final TradeExecutionLogService tradeExecutionLogService;
 
     public void execute(
             Trades activeTrade,
             EnrichedStrategyContext context,
             StrategyDecision decision
     ) throws JsonProcessingException {
-        if (decision == null || decision.getDecisionType() == null || context == null) {
+        if (ObjectUtils.isEmpty(decision) || ObjectUtils.isEmpty(decision.getDecisionType()) || ObjectUtils.isEmpty(context)) {
             return;
         }
 
-        // Log-only guard. Catches contract violations like the LSR/VCB SHORT
-        // sizing bug at the boundary between strategy and executor — without
-        // blocking the live loop while we build confidence in the validator.
-        BigDecimal entryRef = context.getMarketData() != null
+        logInvariantViolations(decision, context);
+
+        if (!applyEntryGates(decision, context)) return;          // RiskGuard / Kelly / vol-target
+        if (handlePaperTradeShortCircuit(decision, context)) return;
+
+        dispatchDecision(activeTrade, context, decision);
+    }
+
+    /** Log-only guard — catches contract violations at the strategy/executor
+     *  boundary (e.g. the LSR/VCB SHORT sizing bug) without blocking the
+     *  live loop while we build confidence in the validator. */
+    private void logInvariantViolations(StrategyDecision decision, EnrichedStrategyContext context) {
+        BigDecimal entryRef = ObjectUtils.isNotEmpty(context.getMarketData())
                 ? context.getMarketData().getClosePrice()
                 : null;
         List<String> violations = StrategyDecisionInvariants.validate(decision, entryRef);
@@ -66,40 +87,106 @@ public class LiveTradingDecisionExecutorService {
             log.warn("[StrategyInvariant] {} {} violations: {}",
                     decision.getStrategyCode(), decision.getDecisionType(), violations);
         }
+    }
 
-        // Risk guard: rolling-DD kill switch + per-account concurrency cap.
-        // Only gates new entries; CLOSE_*/UPDATE_* always pass through so
-        // we can still get out of existing positions even when tripped.
-        if (decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
-                || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT) {
-            UUID accountStrategyId = decision.getAccountStrategyId();
-            if (accountStrategyId == null && context.getAccountStrategy() != null) {
-                accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
-            }
-            if (accountStrategyId != null) {
-                String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
-                        ? SIDE_LONG : SIDE_SHORT;
-                RiskGuardService.GuardVerdict verdict = riskGuardService.canOpen(accountStrategyId, side);
-                if (!verdict.allowed()) {
-                    log.warn("[RiskGuard] BLOCKED {} | strategy={} reason={}",
-                            decision.getDecisionType(), decision.getStrategyCode(), verdict.reason());
-                    return;
-                }
+    /**
+     * Risk guard + Kelly + vol-targeting, applied only to OPEN_LONG /
+     * OPEN_SHORT. Returns false when the entry was BLOCKED — caller short-
+     * circuits. {@code CLOSE_*} / {@code UPDATE_*} always pass through so
+     * we can still close existing positions even when the kill switch is
+     * tripped.
+     */
+    private boolean applyEntryGates(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (!isOpenAction(decision)) return true;
 
-                // Phase 2c — capture decision intent BEFORE vol-targeting
-                // mutates. The trade row will store these so realized P&L
-                // can be decomposed into signal-alpha / exec-drift /
-                // sizing-residual at close.
-                captureIntent(side, decision, context);
+        UUID accountStrategyId = resolveAccountStrategyId(decision, context);
+        if (ObjectUtils.isEmpty(accountStrategyId)) return true;
 
-                // Phase 2b — book vol-targeting. Scales the strategy's
-                // computed size so realized vol hits target and correlated
-                // bets shrink. Off by default per Account; when off the
-                // service returns the size unchanged.
-                applyVolTargeting(accountStrategyId, side, decision);
-            }
+        String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                ? SIDE_LONG : SIDE_SHORT;
+        RiskGuardService.GuardVerdict verdict = riskGuardService.canOpen(
+                accountStrategyId, side, context.getFeatureStore());
+        if (!verdict.allowed()) {
+            log.warn("[RiskGuard] BLOCKED {} | strategy={} reason={}",
+                    decision.getDecisionType(), decision.getStrategyCode(), verdict.reason());
+            logExecutorRejection(context, decision, side,
+                    "RiskGuard: " + verdict.reason());
+            return false;
         }
 
+        // Capture intent BEFORE vol-targeting mutates, so realized P&L can
+        // later be decomposed into signal-alpha / exec-drift / sizing-residual.
+        captureIntent(side, decision, context);
+        // UUID alongside entity so Kelly can fall back to a DB lookup when
+        // context.getAccountStrategy() is null.
+        applyKellySizing(context.getAccountStrategy(), accountStrategyId, side, decision);
+        applyVolTargeting(accountStrategyId, side, decision);
+        return true;
+    }
+
+    /**
+     * Paper/simulated gate. If either scope says simulated
+     * (definition.simulated OR account_strategy.simulated) the decision is
+     * recorded into paper_trade_run and we short-circuit before real-order
+     * code — paper wins on any disagreement.
+     *
+     * <p><b>CRITICAL:</b> only OPEN_LONG / OPEN_SHORT are diverted. CLOSE_*
+     * and UPDATE_POSITION_MANAGEMENT MUST always fall through to real
+     * execution. If an emergency demote stranded a live position, its close
+     * signal would be recorded as a paper trade and the real position would
+     * never close. An operator demoting a promoted strategy with open
+     * positions blocks new entries immediately; existing legs wind down via
+     * the strategy's own exit logic. Use TradeController to force-flatten
+     * faster.
+     *
+     * @return true when the decision was diverted (caller short-circuits).
+     */
+    private boolean handlePaperTradeShortCircuit(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (!isOpenAction(decision) || ObjectUtils.isEmpty(context.getAccountStrategy())) return false;
+
+        boolean accountSimulated = Boolean.TRUE.equals(context.getAccountStrategy().getSimulated());
+        var defOpt = strategyDefinitionRepository.findByStrategyCode(decision.getStrategyCode());
+        boolean definitionDisabled = defOpt
+                .map(d -> Boolean.FALSE.equals(d.getEnabled()))
+                .orElse(false);
+        boolean definitionSimulated = defOpt
+                .map(d -> Boolean.TRUE.equals(d.getSimulated()))
+                .orElse(false);
+
+        String side = decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                ? SIDE_LONG : SIDE_SHORT;
+
+        // Kill-switch: definition disabled → drop entry silently (no paper
+        // trade either). CLOSE_*/UPDATE bypass this block entirely.
+        if (definitionDisabled) {
+            log.info("[KillSwitch] {} {} — definition disabled, dropping entry signal",
+                    decision.getStrategyCode(), decision.getDecisionType());
+            logExecutorRejection(context, decision, side,
+                    "Definition disabled (kill-switch): " + decision.getStrategyCode());
+            return true;
+        }
+        if (accountSimulated || definitionSimulated) {
+            UUID accountStrategyId = context.getAccountStrategy().getAccountStrategyId();
+            log.info("[PaperTrade] {} {} — simulated (def={}, acct={}), recording without placing order",
+                    decision.getStrategyCode(), decision.getDecisionType(),
+                    definitionSimulated, accountSimulated);
+            strategyPromotionService.recordPaperTrade(accountStrategyId, decision, context);
+            // V66 — also surface the divert in trade_execution_log so the
+            // operator has a single auditable feed for every entry attempt,
+            // regardless of whether it lands real or paper. The
+            // paper_trade_run table still holds the full decision and context
+            // snapshot for forensics, while this row just notes the attempt
+            // was diverted to paper.
+            logExecutorRejection(context, decision, side,
+                    "Diverted to paper (def.simulated=" + definitionSimulated
+                            + ", acct.simulated=" + accountSimulated + ")");
+            return true;
+        }
+        return false;
+    }
+
+    private void dispatchDecision(Trades activeTrade, EnrichedStrategyContext context, StrategyDecision decision)
+            throws JsonProcessingException {
         switch (decision.getDecisionType()) {
             case OPEN_LONG -> executeOpenLong(context, decision);
             case OPEN_SHORT -> executeOpenShort(context, decision);
@@ -111,23 +198,34 @@ public class LiveTradingDecisionExecutorService {
         }
     }
 
+    private static boolean isOpenAction(StrategyDecision decision) {
+        return decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_LONG
+                || decision.getDecisionType() == id.co.blackheart.util.TradeConstant.DecisionType.OPEN_SHORT;
+    }
+
+    private static UUID resolveAccountStrategyId(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (ObjectUtils.isNotEmpty(decision.getAccountStrategyId())) return decision.getAccountStrategyId();
+        return ObjectUtils.isNotEmpty(context.getAccountStrategy())
+                ? context.getAccountStrategy().getAccountStrategyId()
+                : null;
+    }
+
     public void executeListenerClosePosition(
             Account account,
             TradePosition activeTradePosition,
             String asset,
             ListenerDecision listenerDecision
     ) throws JsonProcessingException {
-        if (activeTradePosition == null || listenerDecision == null || !listenerDecision.isTriggered()) {
+        if (ObjectUtils.isEmpty(activeTradePosition) || ObjectUtils.isEmpty(listenerDecision) || !listenerDecision.isTriggered()) {
             return;
         }
 
-        activeTradePosition.setExitReason(listenerDecision.getExitReason());
-        tradePositionRepository.save(activeTradePosition);
+        String exitReason = listenerDecision.getExitReason();
 
         if (SIDE_LONG.equalsIgnoreCase(activeTradePosition.getSide())) {
-            tradeService.binanceCloseLongPositionMarketOrder(account, activeTradePosition, asset);
+            tradeService.binanceCloseLongPositionMarketOrder(account, activeTradePosition, asset, exitReason);
         } else if (SIDE_SHORT.equalsIgnoreCase(activeTradePosition.getSide())) {
-            tradeService.binanceCloseShortPositionMarketOrder(account, activeTradePosition, asset);
+            tradeService.binanceCloseShortPositionMarketOrder(account, activeTradePosition, asset, exitReason);
         } else {
             log.warn(
                     "Unknown side for listener close | tradePositionId={} side={}",
@@ -139,17 +237,16 @@ public class LiveTradingDecisionExecutorService {
 
     public void executeManualClosePosition(Account account, UUID tradePositionId) throws JsonProcessingException {
         TradePosition tradePosition = tradePositionRepository.findByTradePositionId(tradePositionId).orElse(null);
-        if (tradePosition == null || !STATUS_OPEN.equalsIgnoreCase(tradePosition.getStatus())) {
+        if (ObjectUtils.isEmpty(tradePosition) || !STATUS_OPEN.equalsIgnoreCase(tradePosition.getStatus())) {
             return;
         }
 
-        tradePosition.setExitReason(EXIT_REASON_MANUAL_CLOSE);
-        tradePositionRepository.save(tradePosition);
-
         if (SIDE_LONG.equalsIgnoreCase(tradePosition.getSide())) {
-            tradeService.binanceCloseLongPositionMarketOrder(account, tradePosition, tradePosition.getAsset());
+            tradeService.binanceCloseLongPositionMarketOrder(
+                    account, tradePosition, tradePosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else if (SIDE_SHORT.equalsIgnoreCase(tradePosition.getSide())) {
-            tradeService.binanceCloseShortPositionMarketOrder(account, tradePosition, tradePosition.getAsset());
+            tradeService.binanceCloseShortPositionMarketOrder(
+                    account, tradePosition, tradePosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else {
             log.warn(
                     "Unknown side for manual close | tradePositionId={} side={}",
@@ -165,22 +262,18 @@ public class LiveTradingDecisionExecutorService {
             String asset,
             ListenerDecision listenerDecision
     ) throws JsonProcessingException {
-        if (activeTradePositions == null || activeTradePositions.isEmpty()
-                || listenerDecision == null || !listenerDecision.isTriggered()) {
+        if (CollectionUtils.isEmpty(activeTradePositions)
+                || ObjectUtils.isEmpty(listenerDecision) || !listenerDecision.isTriggered()) {
             return;
         }
 
         TradePosition firstPosition = activeTradePositions.getFirst();
-
-        for (TradePosition tradePosition : activeTradePositions) {
-            tradePosition.setExitReason(listenerDecision.getExitReason());
-        }
-        tradePositionRepository.saveAll(activeTradePositions);
+        String exitReason = listenerDecision.getExitReason();
 
         if (SIDE_LONG.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseLongPositionsMarketOrder(account, activeTradePositions, asset);
+            tradeService.binanceCloseLongPositionsMarketOrder(account, activeTradePositions, asset, exitReason);
         } else if (SIDE_SHORT.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseShortPositionsMarketOrder(account, activeTradePositions, asset);
+            tradeService.binanceCloseShortPositionsMarketOrder(account, activeTradePositions, asset, exitReason);
         } else {
             log.warn(
                     "Unknown side for grouped listener close | tradeId={} side={}",
@@ -198,15 +291,12 @@ public class LiveTradingDecisionExecutorService {
 
         TradePosition firstPosition = openPositions.getFirst();
 
-        for (TradePosition tradePosition : openPositions) {
-            tradePosition.setExitReason(EXIT_REASON_MANUAL_CLOSE);
-        }
-        tradePositionRepository.saveAll(openPositions);
-
         if (SIDE_LONG.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseLongPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseLongPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else if (SIDE_SHORT.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseShortPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseShortPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), EXIT_REASON_MANUAL_CLOSE);
         } else {
             log.warn(
                     "Unknown side for manual trade close | tradeId={} side={}",
@@ -221,25 +311,31 @@ public class LiveTradingDecisionExecutorService {
             StrategyDecision decision
     ) throws JsonProcessingException {
         Account account = context.getAccount();
+        String quoteAsset = SymbolUtils.quoteAsset(context.getAsset());
 
-        Portfolio usdtPortfolio = portfolioService.updateAndGetAssetBalance("USDT", account);
-        BigDecimal balance = usdtPortfolio == null ? BigDecimal.ZERO : safe(usdtPortfolio.getBalance());
+        Portfolio quotePortfolio = portfolioService.updateAndGetAssetBalance(quoteAsset, account);
+        BigDecimal balance = ObjectUtils.isEmpty(quotePortfolio) ? BigDecimal.ZERO : safe(quotePortfolio.getBalance());
 
-        BigDecimal tradeAmount = decision.getNotionalSize() != null
+        BigDecimal tradeAmount = ObjectUtils.isNotEmpty(decision.getNotionalSize())
                 ? decision.getNotionalSize()
-                : calculateLongTradeAmount(balance, account, context.getAccountStrategy());
+                : calculateLongTradeAmount(balance, context.getAccountStrategy());
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid LONG trade amount. tradeAmount={}", tradeAmount);
+            logExecutorRejection(context, decision, SIDE_LONG,
+                    "Invalid LONG trade amount: " + tradeAmount);
             return;
         }
 
         if (balance.compareTo(tradeAmount) < 0) {
             log.info(
-                    "Insufficient USDT balance for LONG entry | balance={} required={}",
+                    "Insufficient {} balance for LONG entry | balance={} required={}",
+                    quoteAsset,
                     balance,
                     tradeAmount
             );
+            logExecutorRejection(context, decision, SIDE_LONG,
+                    "Insufficient " + quoteAsset + " balance: " + balance + " < " + tradeAmount);
             return;
         }
 
@@ -249,6 +345,8 @@ public class LiveTradingDecisionExecutorService {
         }
 
         log.warn("Unsupported exchange for LONG entry: {}", account.getExchange());
+        logExecutorRejection(context, decision, SIDE_LONG,
+                "Unsupported exchange for LONG entry: " + account.getExchange());
     }
 
     private void executeOpenShort(
@@ -256,30 +354,37 @@ public class LiveTradingDecisionExecutorService {
             StrategyDecision decision
     ) throws JsonProcessingException {
         Account account = context.getAccount();
+        String baseAsset = SymbolUtils.baseAsset(context.getAsset());
 
-        Portfolio btcPortfolio = portfolioService.updateAndGetAssetBalance("BTC", account);
-        BigDecimal balance = btcPortfolio == null ? BigDecimal.ZERO : safe(btcPortfolio.getBalance());
+        Portfolio basePortfolio = portfolioService.updateAndGetAssetBalance(baseAsset, account);
+        BigDecimal balance = ObjectUtils.isEmpty(basePortfolio) ? BigDecimal.ZERO : safe(basePortfolio.getBalance());
 
-        BigDecimal tradeAmount = decision.getPositionSize() != null
+        BigDecimal tradeAmount = ObjectUtils.isNotEmpty(decision.getPositionSize())
                 ? decision.getPositionSize()
-                : calculateShortTradeAmount(balance, account, context.getAccountStrategy());
+                : calculateShortTradeAmount(balance, context.getAccountStrategy());
 
         if (tradeAmount.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Invalid SHORT trade amount. tradeAmount={}", tradeAmount);
+            logExecutorRejection(context, decision, SIDE_SHORT,
+                    "Invalid SHORT trade amount: " + tradeAmount);
             return;
         }
 
         if (balance.compareTo(tradeAmount) < 0) {
             log.info(
-                    "Insufficient BTC balance for SHORT entry | balance={} required={}",
+                    "Insufficient {} balance for SHORT entry | balance={} required={}",
+                    baseAsset,
                     balance,
                     tradeAmount
             );
+            logExecutorRejection(context, decision, SIDE_SHORT,
+                    "Insufficient " + baseAsset + " balance: " + balance + " < " + tradeAmount);
             return;
         }
 
         log.info(
-                "SHORT entry sizing | btcBalance={} riskAmount={} tradeBaseQty={}",
+                "SHORT entry sizing | baseAsset={} balance={} riskAmount={} tradeBaseQty={}",
+                baseAsset,
                 balance,
                 account.getRiskAmount(),
                 tradeAmount
@@ -291,10 +396,49 @@ public class LiveTradingDecisionExecutorService {
         }
 
         log.warn("Unsupported exchange for SHORT entry: {}", account.getExchange());
+        logExecutorRejection(context, decision, SIDE_SHORT,
+                "Unsupported exchange for SHORT entry: " + account.getExchange());
+    }
+
+    /**
+     * V66 — record every executor-side rejection that prevents an OPEN_* from
+     * reaching {@code tradeService.binanceOpenLongMarketOrder}/Short.
+     * Pre-V66, these paths only emitted a log line; the operator had no audit
+     * row in {@code trade_execution_log} to tell them why a strategy didn't
+     * fire. Best-effort — the log service swallows its own write failures.
+     */
+    private void logExecutorRejection(
+            EnrichedStrategyContext context,
+            StrategyDecision decision,
+            String side,
+            String reason
+    ) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getAccount())) return;
+        String strategyName = resolveStrategyNameForLog(decision, context);
+        String entryReason = ObjectUtils.isNotEmpty(decision) ? decision.getReason() : null;
+        tradeExecutionLogService.logOpenFailure(
+                context.getAccount(),
+                context.getAsset(),
+                strategyName,
+                side,
+                entryReason,
+                null,
+                reason
+        );
+    }
+
+    private String resolveStrategyNameForLog(StrategyDecision decision, EnrichedStrategyContext context) {
+        if (ObjectUtils.isNotEmpty(decision) && ObjectUtils.isNotEmpty(decision.getStrategyCode())) {
+            return decision.getStrategyCode();
+        }
+        if (ObjectUtils.isNotEmpty(context.getAccountStrategy())) {
+            return context.getAccountStrategy().getStrategyCode();
+        }
+        return null;
     }
 
     private void executeUpdatePositionManagement(Trades activeTrade, StrategyDecision decision) {
-        if (activeTrade == null || decision == null) {
+        if (ObjectUtils.isEmpty(activeTrade) || ObjectUtils.isEmpty(decision)) {
             return;
         }
 
@@ -302,7 +446,7 @@ public class LiveTradingDecisionExecutorService {
     }
 
     private void executeCloseTrade(Trades activeTrade, Account account, String exitReason) throws JsonProcessingException {
-        if (activeTrade == null || account == null) {
+        if (ObjectUtils.isEmpty(activeTrade) || ObjectUtils.isEmpty(account)) {
             return;
         }
 
@@ -314,16 +458,14 @@ public class LiveTradingDecisionExecutorService {
         }
 
         TradePosition firstPosition = openPositions.getFirst();
-
-        for (TradePosition tradePosition : openPositions) {
-            tradePosition.setExitReason(exitReason != null ? exitReason : EXIT_REASON_STRATEGY_EXIT);
-        }
-        tradePositionRepository.saveAll(openPositions);
+        String resolvedExitReason = ObjectUtils.isNotEmpty(exitReason) ? exitReason : EXIT_REASON_STRATEGY_EXIT;
 
         if (SIDE_LONG.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseLongPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseLongPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), resolvedExitReason);
         } else if (SIDE_SHORT.equalsIgnoreCase(firstPosition.getSide())) {
-            tradeService.binanceCloseShortPositionsMarketOrder(account, openPositions, firstPosition.getAsset());
+            tradeService.binanceCloseShortPositionsMarketOrder(
+                    account, openPositions, firstPosition.getAsset(), resolvedExitReason);
         } else {
             log.warn(
                     "Unknown side for close trade | tradeId={} side={}",
@@ -334,26 +476,60 @@ public class LiveTradingDecisionExecutorService {
     }
 
     private BigDecimal safe(BigDecimal value) {
-        return value == null ? BigDecimal.ZERO : value;
+        return ObjectUtils.isEmpty(value) ? BigDecimal.ZERO : value;
     }
 
     /**
-     * Phase 2c — stash decision intent on the decision so TradeOpenService
-     * can persist it. Called BEFORE {@link #applyVolTargeting} so the size
-     * captured here is the strategy's pre-targeting intent, not the scaled
-     * result. Idempotent — strategies that already set intended* are left
-     * alone (which lets future strategy implementations override the proxy).
+     * Stash decision intent on the decision so TradeOpenService can persist it.
+     * Called BEFORE {@link #applyVolTargeting} so the size captured here is the
+     * strategy's pre-targeting intent, not the scaled result. Idempotent —
+     * strategies that already set intended* are left alone.
      */
     private void captureIntent(String side, StrategyDecision decision, EnrichedStrategyContext context) {
-        if (decision.getIntendedSize() == null) {
+        if (ObjectUtils.isEmpty(decision.getIntendedSize())) {
             BigDecimal currentSize = SIDE_LONG.equalsIgnoreCase(side)
                     ? decision.getNotionalSize()
                     : decision.getPositionSize();
             decision.setIntendedSize(currentSize);
         }
-        if (decision.getIntendedEntryPrice() == null
-                && context.getMarketData() != null) {
+        if (ObjectUtils.isEmpty(decision.getIntendedEntryPrice())
+                && ObjectUtils.isNotEmpty(context.getMarketData())) {
             decision.setIntendedEntryPrice(context.getMarketData().getClosePrice());
+        }
+    }
+
+    /**
+     * Apply PSR-discounted half-Kelly multiplier to the entry size in-place.
+     * LONG scales {@code notionalSize}; SHORT scales {@code positionSize}.
+     * Returns without mutating when Kelly is disabled or returns 1.0 (no-op).
+     *
+     * <p>Prefers the already-loaded {@code accountStrategy} (no DB hit). Falls
+     * back to a {@code accountStrategyId}-based lookup when the entity is
+     * null — without this fallback Kelly silently no-ops on any code path
+     * that populates {@code decision.accountStrategyId} but leaves
+     * {@code context.accountStrategy} unloaded.
+     */
+    private void applyKellySizing(id.co.blackheart.model.AccountStrategy accountStrategy,
+                                  UUID accountStrategyId,
+                                  String side, StrategyDecision decision) {
+        BigDecimal baseSize = SIDE_LONG.equalsIgnoreCase(side)
+                ? decision.getNotionalSize()
+                : decision.getPositionSize();
+        if (ObjectUtils.isEmpty(baseSize) || baseSize.signum() <= 0) return;
+
+        BigDecimal multiplier = ObjectUtils.isNotEmpty(accountStrategy)
+                ? kellySizingService.computeKellyMultiplier(accountStrategy)
+                : kellySizingService.computeKellyMultiplier(accountStrategyId);
+        if (multiplier.compareTo(BigDecimal.ONE) == 0) return;
+
+        BigDecimal scaled = baseSize.multiply(multiplier).setScale(8, RoundingMode.HALF_UP);
+        log.info("[Kelly] {} {} | base={} → scaled={} (multiplier={})",
+                decision.getStrategyCode(), side, baseSize, scaled,
+                multiplier.setScale(4, RoundingMode.HALF_UP));
+        if (SIDE_LONG.equalsIgnoreCase(side)) {
+            decision.setNotionalSize(scaled);
+        } else {
+            decision.setPositionSize(scaled);
         }
     }
 
@@ -368,11 +544,11 @@ public class LiveTradingDecisionExecutorService {
         BigDecimal baseSize = SIDE_LONG.equalsIgnoreCase(side)
                 ? decision.getNotionalSize()
                 : decision.getPositionSize();
-        if (baseSize == null || baseSize.signum() <= 0) return;
+        if (ObjectUtils.isEmpty(baseSize) || baseSize.signum() <= 0) return;
 
         BookVolTargetingService.SizingScale result =
                 bookVolTargetingService.scale(accountStrategyId, side, baseSize);
-        if (result.scaledSize() == null
+        if (ObjectUtils.isEmpty(result.scaledSize())
                 || result.scaledSize().compareTo(baseSize) == 0) {
             return;
         }
@@ -395,9 +571,9 @@ public class LiveTradingDecisionExecutorService {
      * trade amount". MIN_USDT_NOTIONAL floor keeps Binance min-order rules
      * happy on small allocations.
      */
-    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance, Account account,
+    private BigDecimal calculateLongTradeAmount(BigDecimal usdtBalance,
                                                 id.co.blackheart.model.AccountStrategy accountStrategy) {
-        if (usdtBalance == null) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(usdtBalance)) return BigDecimal.ZERO;
         BigDecimal alloc = allocFraction(accountStrategy);
         if (alloc.signum() <= 0) return BigDecimal.ZERO;
 
@@ -405,9 +581,9 @@ public class LiveTradingDecisionExecutorService {
         return tradeAmount.compareTo(MIN_USDT_NOTIONAL) < 0 ? MIN_USDT_NOTIONAL : tradeAmount;
     }
 
-    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance, Account account,
+    private BigDecimal calculateShortTradeAmount(BigDecimal btcBalance,
                                                  id.co.blackheart.model.AccountStrategy accountStrategy) {
-        if (btcBalance == null) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(btcBalance)) return BigDecimal.ZERO;
         BigDecimal alloc = allocFraction(accountStrategy);
         if (alloc.signum() <= 0) return BigDecimal.ZERO;
 
@@ -423,9 +599,9 @@ public class LiveTradingDecisionExecutorService {
      * legacy / partial rows.
      */
     private static BigDecimal allocFraction(id.co.blackheart.model.AccountStrategy as) {
-        if (as == null) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(as)) return BigDecimal.ZERO;
         BigDecimal alloc = as.getCapitalAllocationPct();
-        if (alloc == null || alloc.signum() <= 0) return BigDecimal.ZERO;
+        if (ObjectUtils.isEmpty(alloc) || alloc.signum() <= 0) return BigDecimal.ZERO;
         BigDecimal capped = alloc.min(new BigDecimal("100"));
         return capped.divide(new BigDecimal("100"), 6, RoundingMode.HALF_UP);
     }

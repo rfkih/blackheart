@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -22,6 +23,10 @@ public class AccountStrategy extends BaseEntity {
     @Id
     @Column(name = "account_strategy_id", nullable = false, updatable = false)
     private UUID accountStrategyId;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 
     @Column(name = "account_id", nullable = false)
     private UUID accountId;
@@ -59,14 +64,32 @@ public class AccountStrategy extends BaseEntity {
     @Column(name = "priority_order", nullable = false)
     private Integer priorityOrder;
 
-    @Column(name = "current_status", nullable = false, length = 30)
-    private String currentStatus;
-
     @Column(name = "is_deleted", nullable = false)
     private Boolean isDeleted;
 
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
+
+    /**
+     * Promotion-pipeline guard (V15+). When TRUE, the live executor records
+     * decisions into {@code paper_trade_run} instead of placing real orders
+     * with {@code BinanceClientService}. Default FALSE so pre-V15 strategies
+     * keep current behavior.
+     *
+     * <p>State semantics:
+     * <ul>
+     *   <li>{@code enabled=false}                                 → not running (RESEARCH)</li>
+     *   <li>{@code enabled=true, simulated=true}                  → live signals, paper orders (PAPER_TRADE)</li>
+     *   <li>{@code enabled=true, simulated=false}                 → real capital (PROMOTED/ACTIVE)</li>
+     * </ul>
+     *
+     * <p>Flip via {@code POST /api/v1/strategy/{id}/promote} — the controller
+     * writes a {@code strategy_promotion_log} row in the same transaction so
+     * every change is auditable.
+     */
+    @Column(name = "simulated", nullable = false)
+    @Builder.Default
+    private Boolean simulated = Boolean.FALSE;
 
     /**
      * Drawdown kill-switch — when the strategy's rolling 30-day drawdown
@@ -93,5 +116,113 @@ public class AccountStrategy extends BaseEntity {
     /** Human-readable trip reason (e.g. "30-day DD 32.4% exceeded threshold 25%"). */
     @Column(name = "kill_switch_reason", columnDefinition = "TEXT")
     private String killSwitchReason;
+
+    /**
+     * Regime-aware entry gate (V43). When {@code true}, entries are blocked
+     * unless the current bar's {@code trend_regime} / {@code volatility_regime}
+     * are in the allowed sets below. Default {@code false} preserves all
+     * pre-V43 behaviour. V62+ — the gate runs symmetrically in live and
+     * backtest via {@link id.co.blackheart.service.risk.StrategyGateService}.
+     */
+    @Column(name = "regime_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean regimeGateEnabled = Boolean.FALSE;
+
+    /**
+     * Kill-switch entry gate (V62). When {@code true}, new entries are blocked
+     * whenever {@link #isKillSwitchTripped} is {@code true}. When {@code false}
+     * the trip flag is still recorded by the executor for visibility but does
+     * not block trading. Default {@code false} (backfilled).
+     */
+    @Column(name = "kill_switch_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean killSwitchGateEnabled = Boolean.FALSE;
+
+    /**
+     * Correlation / concentration entry gate (V62). When {@code true},
+     * {@link id.co.blackheart.service.risk.CorrelationGuardService} caps
+     * correlated same-side stacking via the account-level thresholds. When
+     * {@code false} the guard is skipped entirely. Default {@code false}
+     * (backfilled).
+     */
+    @Column(name = "correlation_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean correlationGateEnabled = Boolean.FALSE;
+
+    /**
+     * Account-level concurrent-position cap gate (V62). When {@code true},
+     * entry attempts are gated by {@code accounts.max_concurrent_longs /
+     * max_concurrent_shorts / max_concurrent_trades}. When {@code false} the
+     * caps are not applied. Default {@code false} (backfilled).
+     */
+    @Column(name = "concurrent_cap_gate_enabled", nullable = false)
+    @Builder.Default
+    private Boolean concurrentCapGateEnabled = Boolean.FALSE;
+
+    /** Comma-separated {@code trend_regime} values allowed for new entries (e.g. "BULL,NEUTRAL"). Null = any. */
+    @Column(name = "allowed_trend_regimes", length = 100)
+    private String allowedTrendRegimes;
+
+    /** Comma-separated {@code volatility_regime} values allowed for new entries (e.g. "NORMAL,LOW"). Null = any. */
+    @Column(name = "allowed_volatility_regimes", length = 100)
+    private String allowedVolatilityRegimes;
+
+    /**
+     * Kelly/bankroll sizing (V45). When {@code true}, {@link KellySizingService}
+     * applies a PSR-discounted half-Kelly multiplier to the entry size before
+     * vol-targeting. Default {@code false} preserves all pre-V45 behaviour.
+     */
+    @Column(name = "kelly_sizing_enabled", nullable = false)
+    @Builder.Default
+    private Boolean kellySizingEnabled = Boolean.FALSE;
+
+    /**
+     * Hard cap on the Kelly fraction regardless of what the formula computes.
+     * Default 0.25 (25% of intended size) protects against over-leverage on
+     * noisy backtests. Operator can raise per-strategy via admin UI.
+     */
+    @Column(name = "kelly_max_fraction", nullable = false, precision = 5, scale = 4)
+    @Builder.Default
+    private BigDecimal kellyMaxFraction = new BigDecimal("0.2500");
+
+    /**
+     * Tenant-visibility flag (V54). PRIVATE means the row is only listed to
+     * the owning user; PUBLIC means it is also listed to every other user so
+     * they can clone the preset into their own account. Backtest, edit,
+     * enable, and delete still require ownership regardless of visibility —
+     * PUBLIC is read-and-clone, never write-through.
+     *
+     * <p>The research-agent account seeds its rows as PUBLIC so the autonomous
+     * loop's strategy catalogue is browsable platform-wide; user-created rows
+     * default to PRIVATE.
+     */
+    @Column(name = "visibility", nullable = false, length = 16)
+    @Builder.Default
+    private String visibility = "PRIVATE";
+
+    /**
+     * Per-strategy risk-based-sizing toggle (V55). When TRUE, LONG entries on
+     * legacy strategies (LSR/VCB/VBO/FundingCarry) route through
+     * {@link id.co.blackheart.service.strategy.StrategyHelper#calculateLongEntryNotional}
+     * which sizes off {@code riskPct} and uses {@code capitalAllocationPct} as
+     * a notional cap. When FALSE, legacy strategies size directly off
+     * {@code capitalAllocationPct} as before (preserving pre-V55 behaviour).
+     *
+     * <p>Default FALSE so existing rows keep current sizing behaviour after
+     * migration; new rows created via the API default TRUE so the platform
+     * pushes operators onto the unified risk model going forward.
+     */
+    @Column(name = "use_risk_based_sizing", nullable = false)
+    @Builder.Default
+    private Boolean useRiskBasedSizing = Boolean.FALSE;
+
+    /**
+     * Per-trade risk as a fraction of cash balance, e.g. 0.0500 = 5%. Used
+     * only when {@code useRiskBasedSizing = TRUE}. The DB constraint enforces
+     * (0, 0.20]; the controller layer validates the same range on input.
+     */
+    @Column(name = "risk_pct", nullable = false, precision = 5, scale = 4)
+    @Builder.Default
+    private BigDecimal riskPct = new BigDecimal("0.0500");
 
 }

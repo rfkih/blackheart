@@ -1,6 +1,7 @@
 package id.co.blackheart.repository;
 
 import id.co.blackheart.model.Trades;
+import id.co.blackheart.projection.TradeAnomalyProjection;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -94,6 +95,17 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
             """, nativeQuery = true)
     long countOpenByAccountStrategyId(@Param("accountStrategyId") UUID accountStrategyId);
 
+    /**
+     * Open + partially-closed trades for a single account. Used by the
+     * account-delete flow to refuse removal of an account with live exposure.
+     */
+    @Query(value = """
+            SELECT COUNT(*) FROM trades t
+            WHERE t.account_id = :accountId
+              AND t.status IN ('OPEN', 'PARTIALLY_CLOSED')
+            """, nativeQuery = true)
+    long countOpenByAccountId(@Param("accountId") UUID accountId);
+
     @Query(value = "SELECT COUNT(*) FROM trades WHERE account_id IN (:accountIds) AND status = :status", nativeQuery = true)
     long countByAccountIdsAndStatus(
             @Param("accountIds") List<UUID> accountIds,
@@ -121,6 +133,13 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
             ORDER BY t.entry_time DESC
             """, nativeQuery = true)
     List<Trades> findOpenByAccountIds(@Param("accountIds") List<UUID> accountIds);
+
+    @Query(value = """
+            SELECT * FROM trades t
+            WHERE t.status IN ('OPEN', 'PARTIALLY_CLOSED')
+            ORDER BY t.entry_time DESC
+            """, nativeQuery = true)
+    List<Trades> findAllOpen();
 
     /**
      * All closed trades for one account with exit_time ≤ cutoff, sorted ASCENDING.
@@ -194,6 +213,49 @@ public interface TradesRepository extends JpaRepository<Trades, UUID> {
     List<Trades> findRecentWithIntent(
             @Param("asset") String asset,
             @Param("limitVal") int limitVal
+    );
+
+    /**
+     * Trade-state anomalies for the admin reconciliation panel. Returns one row
+     * per non-CLOSED parent trade together with its open-leg count, so the
+     * service layer can classify each as:
+     *
+     * <ul>
+     *   <li>{@code OPEN_NO_CHILDREN}      — parent OPEN, zero rows in
+     *       trade_positions for the trade. Almost certainly a botched open.</li>
+     *   <li>{@code OPEN_NO_OPEN_CHILDREN} — parent OPEN but every child CLOSED.
+     *       The listener never flipped the parent — capital is "free" on the
+     *       exchange but the row still blocks new entries via the per-strategy
+     *       active-trade gate.</li>
+     *   <li>{@code PARTIAL_NO_OPEN_CHILDREN} — PARTIALLY_CLOSED parent with no
+     *       OPEN legs. Per CLAUDE.md domain invariant: not a tradable position;
+     *       parent should be CLOSED.</li>
+     * </ul>
+     *
+     * Open-trade count is small (single-digit in steady state) so the per-row
+     * subquery is fine; if this ever explodes, replace with a join + GROUP BY.
+     */
+    @Query(value = """
+            SELECT
+                t.trade_id              AS tradeId,
+                t.account_id            AS accountId,
+                t.account_strategy_id   AS accountStrategyId,
+                t.asset                 AS asset,
+                t.interval              AS interval,
+                t.side                  AS side,
+                t.status                AS status,
+                t.entry_time            AS entryTime,
+                (SELECT COUNT(*) FROM trade_positions tp
+                  WHERE tp.trade_id = t.trade_id)                          AS totalLegs,
+                (SELECT COUNT(*) FROM trade_positions tp
+                  WHERE tp.trade_id = t.trade_id AND tp.status = 'OPEN')   AS openLegs
+            FROM trades t
+            WHERE t.account_id IN (:accountIds)
+              AND t.status IN ('OPEN', 'PARTIALLY_CLOSED')
+            ORDER BY t.entry_time DESC
+            """, nativeQuery = true)
+    List<TradeAnomalyProjection> findAnomaliesByAccountIds(
+            @Param("accountIds") List<UUID> accountIds
     );
 
 }

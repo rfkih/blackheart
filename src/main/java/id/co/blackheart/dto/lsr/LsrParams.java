@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.util.CollectionUtils;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -112,7 +113,7 @@ public class LsrParams implements Serializable {
      */
     public static LsrParams merge(Map<String, Object> overrides) {
         LsrParams p = defaults();
-        if (overrides == null || overrides.isEmpty()) return p;
+        if (CollectionUtils.isEmpty(overrides)) return p;
 
         // Regime
         bd(overrides, "adxTrendingMin").ifPresent(p::setAdxTrendingMin);
@@ -194,6 +195,8 @@ public class LsrParams implements Serializable {
                 return Optional.of(BigDecimal.valueOf(n.doubleValue()));
             }
             default -> {
+                // Fall through to the String-parsing block below so any other
+                // type (typically String from JSON deserialization) is handled.
             }
         }
         try {
@@ -216,6 +219,8 @@ public class LsrParams implements Serializable {
                 return Optional.of(n.intValue());
             }
             default -> {
+                // Fall through to the String-parsing block below so any other
+                // type (typically String from JSON deserialization) is handled.
             }
         }
         try {

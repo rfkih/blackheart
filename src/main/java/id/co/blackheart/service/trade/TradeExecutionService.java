@@ -30,7 +30,7 @@ public class TradeExecutionService {
             return response;
         } catch (Exception e) {
             log.error("[binanceMarketOrder] Request failed: {}", e.getMessage(), e);
-            throw new RuntimeException(e);
+            throw new IllegalStateException(e);
         }
     }
 
@@ -38,18 +38,18 @@ public class TradeExecutionService {
     public BinanceOrderDetailResponse getOrderDetailBinance(BinanceOrderDetailRequest orderDetailRequest) {
         try {
             BinanceOrderDetailResponse response = binanceClientService.orderDetailBinance(orderDetailRequest);
-            log.info("orderDetailBinance : {}", response);
+            log.debug("orderDetailBinance : {}", response);
 
             if (response == null) {
-                log.warn("⚠No data received for ID Detail : {}", orderDetailRequest.getOrderId());
-                throw new RuntimeException("No data received for ID Detail: " + orderDetailRequest.getOrderId());
+                log.warn("No data received for ID Detail : {}", orderDetailRequest.getOrderId());
+                throw new IllegalStateException(
+                        "No data received for ID Detail: " + orderDetailRequest.getOrderId());
             }
 
             return response;
-        } catch (RuntimeException e) {
-            throw e;
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            log.error("[getOrderDetailBinance] Request failed: {}", e.getMessage(), e);
+            throw new IllegalStateException(e);
         }
     }
 

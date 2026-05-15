@@ -1,0 +1,111 @@
+# Blackheart trading service — systemd unit (Linux production reference).
+#
+# This is the live-trading process. It opens the Binance WebSocket, runs the
+# live coordinator chain, and routes real orders to the exchange. Treat it as
+# the most sensitive process on the host: any restart costs missed signals,
+# reconnect storms hit Binance, and live positions go briefly unmanaged.
+#
+# Install:
+#   sudo cp deploy/systemd/blackheart-trading.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable blackheart-trading
+#   sudo systemctl start blackheart-trading
+#
+# Verify:
+#   sudo systemctl status blackheart-trading
+#   journalctl -u blackheart-trading -f
+#
+# Update binary (assumes new JAR at /opt/blackheart/blackheart-trading-NEW.jar):
+#   sudo systemctl stop blackheart-trading
+#   sudo ln -sf blackheart-trading-NEW.jar /opt/blackheart/blackheart-trading.jar
+#   sudo systemctl start blackheart-trading
+#
+# DO NOT use `systemctl restart` for binary upgrades — restart kills and
+# relaunches in one step; if the new JAR fails to boot, the old process is
+# already gone. Stop, swap, start so you can fall back.
+
+[Unit]
+Description=Blackheart trading service (live trading on Binance)
+Documentation=https://github.com/yourorg/blackheart/blob/main/research/DEPLOYMENT.md
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=blackheart
+Group=blackheart
+WorkingDirectory=/opt/blackheart
+
+# JVM heap. Live trading is hot path — give it generous memory. Match Xms
+# to Xmx so the JVM allocates everything up-front rather than growing under
+# load (growth pauses can miss a signal candle).
+Environment=JAVA_OPTS=-Xms2g -Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=50
+
+# Database credentials. Use the trading_user role created by V14, NEVER
+# postgres. Password from a systemd EnvironmentFile that is mode 600 and
+# excluded from version control.
+EnvironmentFile=/etc/blackheart/trading.env
+
+# JWT secret — generated via id.co.blackheart.util.JwtSecretGenerator,
+# pinned per environment, never committed.
+# (Loaded from EnvironmentFile above.)
+
+ExecStart=/usr/bin/java $JAVA_OPTS -jar /opt/blackheart/blackheart-trading.jar \
+    --spring.profiles.active=prod \
+    --server.port=8080
+
+# ── Resource isolation ────────────────────────────────────────────────────
+# Hard caps. Trading process gets generous limits but cannot exceed them.
+# Numbers tuned for a single-tenant 4-core / 8GB host; scale up linearly.
+CPUQuota=300%
+MemoryMax=3G
+TasksMax=512
+
+# Disk I/O priority — real-time class so a noisy neighbour can't starve
+# DB writes during trade close. Class 1 = real-time, prio 4 = mid.
+IOSchedulingClass=realtime
+IOSchedulingPriority=4
+
+# Process priority. Nice -5 = above normal (negative = higher).
+Nice=-5
+
+# ── Lifecycle policy ──────────────────────────────────────────────────────
+# Restart on failure but cap at 3 attempts in 5 minutes. If the trading
+# JVM is crashing repeatedly, *stop trying* and page operator — restart
+# loops waste Binance API budget on reconnect storms.
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitIntervalSec=300
+
+# Graceful shutdown window. Coordinator needs ~20s to close in-flight
+# trades cleanly; SIGKILL after that.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# ── Hardening ─────────────────────────────────────────────────────────────
+# Defense in depth. None of these are load-bearing for security but they
+# raise the cost of compromise.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/blackheart/logs /opt/blackheart/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=false  # we use IOSchedulingClass=realtime
+LockPersonality=true
+
+# ── Standard output ───────────────────────────────────────────────────────
+# Go to journal; rotate via journald.conf. For per-day rotation use the
+# logrotate config in deploy/logrotate/.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blackheart-trading
+
+[Install]
+WantedBy=multi-user.target

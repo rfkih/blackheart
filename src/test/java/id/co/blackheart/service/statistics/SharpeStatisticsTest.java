@@ -117,10 +117,9 @@ class SharpeStatisticsTest {
 
     @Test
     void dsrPenalisesMultipleTrialsVersusSingleTrialPsr() {
-        // Run a fake sweep: 500 combos with Sharpes ~N(0, 0.15). Top observed
-        // Sharpe is the max of those. PSR vs zero would say "great strategy";
-        // DSR should call the same number near 0.5 ("undetectable after
-        // accounting for selection bias").
+        // Fake sweep of 500 Gaussian Sharpes. PSR vs zero on the top
+        // observed value would call it a great strategy; DSR should land
+        // near 0.5 because selection bias eats most of the apparent edge.
         double[] sharpes = generateGaussian(500, 0.0, 0.15, 9L);
         double topSharpe = max(sharpes);
 

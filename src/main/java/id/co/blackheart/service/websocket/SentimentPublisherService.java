@@ -5,6 +5,7 @@ import id.co.blackheart.model.FeatureStore;
 import id.co.blackheart.repository.FeatureStoreRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -13,6 +14,7 @@ import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import org.apache.commons.lang3.ObjectUtils;
 
 /**
  * Publishes combined 1h+4h sentiment updates to {@code /topic/sentiment/{symbol}}.
@@ -22,14 +24,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>Two DB queries per symbol per cycle (one per interval) regardless of subscriber count.</li>
  *   <li>Sentiment is only recomputed when the 1h <em>or</em> 4h {@link FeatureStore}
  *       {@code startTime} advances. Between candle closes the cached response is returned
- *       instantly — no scoring CPU, no object allocation.</li>
+ *       instantly â€” no scoring CPU, no object allocation.</li>
  *   <li>WebSocket broadcast only fires when data actually changed.</li>
  *   <li>{@link #getOrComputeLatest} returns the cached response with no DB access
- *       when the cache is warm — used by the subscribe handler for immediate snapshots.</li>
+ *       when the cache is warm â€” used by the subscribe handler for immediate snapshots.</li>
  * </ul>
  */
 @Slf4j
 @Service
+@Profile("!research")
 @RequiredArgsConstructor
 public class SentimentPublisherService {
 
@@ -44,13 +47,13 @@ public class SentimentPublisherService {
     /** Symbols with at least one active subscriber. */
     private final Set<String> activeSubscriptions = ConcurrentHashMap.newKeySet();
 
-    /** symbol → last published SentimentResponse */
+    /** symbol â†’ last published SentimentResponse */
     private final Map<String, SentimentResponse> responseCache = new ConcurrentHashMap<>();
 
-    /** symbol → last seen 1h FeatureStore startTime */
+    /** symbol â†’ last seen 1h FeatureStore startTime */
     private final Map<String, LocalDateTime> lastFeatureTime1h = new ConcurrentHashMap<>();
 
-    /** symbol → last seen 4h FeatureStore startTime */
+    /** symbol â†’ last seen 4h FeatureStore startTime */
     private final Map<String, LocalDateTime> lastFeatureTime4h = new ConcurrentHashMap<>();
 
 
@@ -127,7 +130,7 @@ public class SentimentPublisherService {
         }
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private SentimentResponse computeAndCache(String symbol) {
         try {

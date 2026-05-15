@@ -4,6 +4,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -42,7 +43,7 @@ public class BuildInfoService {
     @PostConstruct
     public void init() {
         gitCommitSha = resolveGitCommitSha();
-        appVersion = configuredVersion != null && !configuredVersion.isBlank()
+        appVersion = StringUtils.hasText(configuredVersion)
                 ? configuredVersion
                 : UNKNOWN;
         log.info("[BuildInfo] gitCommitSha={} appVersion={}", gitCommitSha, appVersion);
@@ -58,7 +59,7 @@ public class BuildInfoService {
 
     private String resolveGitCommitSha() {
         String envSha = System.getenv("GIT_COMMIT");
-        if (envSha != null && !envSha.isBlank()) {
+        if (StringUtils.hasText(envSha)) {
             return envSha.trim();
         }
 
@@ -74,7 +75,7 @@ public class BuildInfoService {
                     log.debug("[BuildInfo] git rev-parse timed out");
                     return UNKNOWN;
                 }
-                if (process.exitValue() == 0 && line != null && !line.isBlank()) {
+                if (process.exitValue() == 0 && StringUtils.hasText(line)) {
                     return line.trim();
                 }
             }

@@ -11,18 +11,18 @@ import id.co.blackheart.repository.TradesRepository;
 import id.co.blackheart.service.cache.CacheService;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.trade.TradeAttributionService;
+import id.co.blackheart.util.DateTimeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -45,11 +45,11 @@ public class UnifiedTradeService {
             return Collections.emptyList();
         }
 
-        int effectiveSize = size > 0 ? Math.min(size, MAX_LIMIT) : (limit > 0 ? Math.min(limit, MAX_LIMIT) : DEFAULT_LIMIT);
+        int effectiveSize = resolveEffectiveSize(size, limit);
         int offset = page * effectiveSize;
 
         List<Trades> trades;
-        if (status != null && !status.isBlank()) {
+        if (StringUtils.hasText(status)) {
             trades = tradesRepository.findByAccountIdsAndStatus(accountIds, status.toUpperCase(), effectiveSize, offset);
         } else {
             trades = tradesRepository.findByAccountIds(accountIds, effectiveSize, offset);
@@ -57,7 +57,18 @@ public class UnifiedTradeService {
 
         return trades.stream()
                 .map(t -> toTradeResponse(t, false))
-                .collect(Collectors.toList());
+                .toList();
+    }
+
+    /** Resolve the effective page size from the explicit {@code size} param,
+     *  falling back to the legacy {@code limit} param when {@code size} is
+     *  unset, then to {@link #DEFAULT_LIMIT}. Both inputs are clamped at
+     *  {@link #MAX_LIMIT}. Pulled out so the parent ternary chain doesn't
+     *  nest (Sonar S3358). */
+    private static int resolveEffectiveSize(int size, int limit) {
+        if (size > 0) return Math.min(size, MAX_LIMIT);
+        if (limit > 0) return Math.min(limit, MAX_LIMIT);
+        return DEFAULT_LIMIT;
     }
 
     public TradeResponse getTradeById(UUID userId, UUID tradeId) {
@@ -99,7 +110,7 @@ public class UnifiedTradeService {
         }
         return accountRepository.findByUserId(userId).stream()
                 .map(Account::getAccountId)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private TradeResponse toTradeResponse(Trades t, boolean includePositions) {
@@ -161,7 +172,7 @@ public class UnifiedTradeService {
                 .feeUsdt(t.getTotalFeeAmount())
                 .markPrice(markPrice)
                 .unrealizedPnlPct(unrealizedPnlPct)
-                .positions(positions.stream().map(this::toPositionResponse).collect(Collectors.toList()))
+                .positions(positions.stream().map(this::toPositionResponse).toList())
                 .build();
     }
 
@@ -200,6 +211,6 @@ public class UnifiedTradeService {
 
     private Long toEpochMs(LocalDateTime ldt) {
         if (ldt == null) return null;
-        return ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
+        return DateTimeUtil.toEpochMillisUtc(ldt);
     }
 }

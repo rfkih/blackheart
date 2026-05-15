@@ -19,7 +19,10 @@ public class ResponseDto implements Serializable {
     @Builder.Default
     private String responseDesc = ResponseCode.SUCCESS.getDescription();
 
-    private Object data;
+    // ResponseDto is a REST envelope; serialisation here is JSON via Jackson, never
+    // ObjectOutputStream. Marking the polymorphic data field transient satisfies
+    // S1948 without affecting wire behaviour — Jackson ignores `transient` by default.
+    private transient Object data;
 
     private String errorMessage;
 }

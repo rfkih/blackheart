@@ -1,20 +1,19 @@
-# ---- Stage 1: Build ---------------------------------------------------------
-FROM gradle:8.7.0-jdk21-alpine AS build
-WORKDIR /application
+# Lean runtime image. JARs are built by the host via gradlew (manage.ps1 does
+# this for you) and copied in. Building Gradle inside the container was flaky
+# on slow networks - the wrapper kept stalling on services.gradle.org.
+#
+# Compose drives this with JAR_FILE so the same Dockerfile produces both the
+# trading and research images:
+#   blackheart           -> JAR_FILE=build/libs/blackheart-trading-0.0.1-SNAPSHOT.jar
+#   blackheart-research  -> JAR_FILE=build/libs/blackheart-research-0.0.1-SNAPSHOT.jar
+ARG JAR_FILE=build/libs/blackheart-0.0.1-SNAPSHOT.jar
 
-# If you use Kotlin DSL, keep these lines.
-COPY build.gradle.kts settings.gradle.kts ./
-COPY src ./src
-# Build only the Spring Boot jar (fewer artifacts than 'gradle build')
-RUN gradle bootJar -x test
-
-# ---- Stage 2: Runtime -------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21-jre
+ARG JAR_FILE
 WORKDIR /app
+COPY ${JAR_FILE} /app/app.jar
 
-# Copy the boot jar (only one is produced by 'bootJar')
-COPY --from=build /application/build/libs/*.jar /app/app.jar
-
-ENV JAVA_OPTS=""
 EXPOSE 8080
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
+
+# ENTRYPOINT via shell so $JAVA_OPTS / $SERVER_PORT expand at start time.
+ENTRYPOINT ["sh","-c","exec java $JAVA_OPTS -jar /app/app.jar --server.port=${SERVER_PORT:-8080}"]

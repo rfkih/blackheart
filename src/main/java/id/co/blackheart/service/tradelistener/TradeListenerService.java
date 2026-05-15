@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import org.apache.commons.lang3.ObjectUtils;
 
 @Slf4j
 @Service
@@ -20,7 +21,7 @@ public class TradeListenerService {
     private static final String EXIT_TRAILING_STOP = "TRAILING_STOP";
 
     public ListenerDecision evaluate(ListenerContext context) {
-        if (context == null || context.getPositionSnapshot() == null || context.getLatestPrice() == null) {
+        if (ObjectUtils.isEmpty(context) || ObjectUtils.isEmpty(context.getPositionSnapshot()) || ObjectUtils.isEmpty(context.getLatestPrice())) {
             return ListenerDecision.none();
         }
 
@@ -59,8 +60,8 @@ public class TradeListenerService {
 
         // Same-bar conflict: both adverse stop and TP were touched on the same candle.
         // Use bar direction to infer which was hit first.
-        // Bullish bar (close > open) → price moved up first → TP hit first for LONG.
-        // Bearish bar or unknown direction → SL/trailing hit first (conservative).
+        // Bullish bar (close > open) â†’ price moved up first â†’ TP hit first for LONG.
+        // Bearish bar or unknown direction â†’ SL/trailing hit first (conservative).
         if (adverseHit && takeProfitHit && candleOpen != null) {
             boolean bullishBar = latestPrice.compareTo(candleOpen) > 0;
             if (bullishBar) {
@@ -114,8 +115,8 @@ public class TradeListenerService {
 
         boolean adverseHit = trailingHit || stopHit;
 
-        // Same-bar conflict: bearish bar (close < open) → price moved down first → TP hit first for SHORT.
-        // Bullish bar or unknown direction → SL/trailing hit first (conservative).
+        // Same-bar conflict: bearish bar (close < open) â†’ price moved down first â†’ TP hit first for SHORT.
+        // Bullish bar or unknown direction â†’ SL/trailing hit first (conservative).
         if (adverseHit && takeProfitHit && candleOpen != null) {
             boolean bearishBar = latestPrice.compareTo(candleOpen) < 0;
             if (bearishBar) {

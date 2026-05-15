@@ -12,10 +12,14 @@ import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.service.marketquery.CurrencyRateService;
 import id.co.blackheart.service.marketquery.MarketQueryService;
 import id.co.blackheart.service.risk.SlippageCalibrationService;
+import id.co.blackheart.util.DateTimeUtil;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -23,8 +27,8 @@ import java.math.RoundingMode;
 import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.util.List;
-import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/market")
 @RequiredArgsConstructor
@@ -100,7 +104,7 @@ public class MarketQueryController {
                         .volume(m.getVolume())
                         .closeTime(toEpochMs(m.getEndTime()))
                         .build())
-                .collect(Collectors.toList());
+                .toList();
 
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -137,7 +141,7 @@ public class MarketQueryController {
             // /indicators stays aligned with GET /api/v1/market on first mount.
             List<MarketData> recent = marketDataRepository.findLatestCandles(
                     symbol.toUpperCase(), interval, limit);
-            if (recent.isEmpty()) {
+            if (CollectionUtils.isEmpty(recent)) {
                 rows = List.of();
             } else {
                 // findLatestCandles returns newest-first; flip the bounds.
@@ -150,7 +154,7 @@ public class MarketQueryController {
 
         List<IndicatorDataResponse> result = rows.stream()
                 .map(this::toIndicatorResponse)
-                .collect(Collectors.toList());
+                .toList();
 
         return ResponseEntity.ok().body(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -191,7 +195,7 @@ public class MarketQueryController {
     }
 
     private LocalDateTime parseDateTime(String s) {
-        if (s == null || s.isBlank()) {
+        if (!StringUtils.hasText(s)) {
             throw new IllegalArgumentException("Date string is empty");
         }
 
@@ -209,17 +213,21 @@ public class MarketQueryController {
 
         try {
             return LocalDateTime.parse(s);
-        } catch (DateTimeParseException ignored) {}
+        } catch (DateTimeParseException e) {
+            log.warn("Invalid date-time format in request parameter: {}", e.getMessage());
+        }
 
         try {
             return LocalDate.parse(s).atStartOfDay();
-        } catch (DateTimeParseException ignored) {}
+        } catch (DateTimeParseException e) {
+            log.warn("Invalid date-time format in request parameter: {}", e.getMessage());
+        }
 
         throw new IllegalArgumentException("Unsupported date format: " + s);
     }
 
     private Long toEpochMs(LocalDateTime ldt) {
         if (ldt == null) return null;
-        return ldt.toInstant(ZoneOffset.UTC).toEpochMilli();
+        return DateTimeUtil.toEpochMillisUtc(ldt);
     }
 }

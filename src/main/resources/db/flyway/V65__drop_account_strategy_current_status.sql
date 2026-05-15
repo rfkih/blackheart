@@ -1,0 +1,29 @@
+-- V65 — Drop the dead account_strategy.current_status column.
+--
+-- Why:
+--   `current_status` was set to 'STOPPED' on every row creation (and again on
+--   clone + revive) and NEVER written with any other value by any service.
+--   The frontend dashboard derives its LIVE/STOPPED badge from `enabled`,
+--   not from this column — see Blackridge mapAccountStrategy:
+--     status: (s.enabled ? 'LIVE' : 'STOPPED')
+--   So every row in production reads `current_status='STOPPED'` even when
+--   the row is actively running, which has been a recurring source of
+--   operator confusion ("the DB says STOPPED but the dashboard says LIVE").
+--   It is dead schema; dropping it removes the ambiguity at the source.
+--
+-- Companion changes in the same PR:
+--   - AccountStrategy.java                — entity field removed
+--   - AccountStrategyResponse.java        — wire field removed
+--   - AccountStrategyService.java         — create() no longer sets it
+--                                           toResponse() no longer reads it
+--   - AccountStrategyCloneService.java    — clone + revive paths cleaned;
+--                                           RevivedSnapshot audit record loses
+--                                           the now-meaningless field
+--
+-- Order:
+--   Runs AFTER V64. V64's TEST-strategy seed includes
+--   current_status='STOPPED' in its INSERT column list, which succeeds because
+--   the column still exists at V64-apply time. V65 then drops it. Idempotent
+--   via IF EXISTS so a rerun (e.g., on a fresh DB that already lost the column)
+--   is a no-op.
+ALTER TABLE account_strategy DROP COLUMN IF EXISTS current_status;

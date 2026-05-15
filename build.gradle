@@ -28,8 +28,7 @@ ext {
 }
 
 dependencies {
-	dependencies {
-		// Core Spring Boot Dependencies
+	// Core Spring Boot Dependencies
 		implementation 'org.springframework.boot:spring-boot-starter'
 		implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 		implementation 'org.springframework.boot:spring-boot-starter-web'
@@ -50,6 +49,7 @@ dependencies {
 
         implementation 'org.springframework.cloud:spring-cloud-stream'
 		implementation 'org.springframework.kafka:spring-kafka'
+		implementation 'io.github.resilience4j:resilience4j-spring-boot3'
 
 		// Bucket4j — per-IP/per-email rate limiting on /login and /register.
 		implementation 'com.bucket4j:bucket4j-core:8.10.1'
@@ -58,6 +58,14 @@ dependencies {
 		implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
 
 		implementation 'org.postgresql:postgresql:42.7.4'
+
+		// Flyway — version-controlled migrations. Replaces the manual
+		// db/migration/*.sql + apply_session_migrations.sql workflow.
+		// On first run against an existing DB, baseline-on-migrate stamps
+		// the schema as V1 so pre-Flyway state is accepted; new migrations
+		// go in src/main/resources/db/flyway/V<N>__name.sql.
+		implementation 'org.flywaydb:flyway-core'
+		implementation 'org.flywaydb:flyway-database-postgresql'
 		// `org.json` retired from the hot path — Jackson (already on the
 		// classpath) replaces it. Kept as a 20231013+ bump in case a
 		// transitive consumer references it.
@@ -81,6 +89,16 @@ dependencies {
 		testCompileOnly 'org.projectlombok:lombok:1.18.32'
 		testAnnotationProcessor 'org.projectlombok:lombok:1.18.32'
 
+		// JSR-305 — silences the recurring "unknown enum constant When.MAYBE"
+		// javac warnings. Spring's @Nullable / @NonNullApi / etc. carry meta-
+		// annotations from com.google.code.findbugs:jsr305 (the
+		// javax.annotation.meta.When enum); without this on the compile
+		// classpath, javac can't resolve them and emits a warning per file
+		// that references a Spring nullability annotation transitively. The
+		// jar is annotations-only — zero runtime impact, compileOnly so it
+		// doesn't ship in the bootJar.
+		compileOnly 'com.google.code.findbugs:jsr305:3.0.2'
+
 		// Testing
 		testImplementation 'org.springframework.boot:spring-boot-starter-test'
 		testImplementation 'org.springframework.security:spring-security-test'
@@ -96,13 +114,27 @@ dependencies {
 		// Bean Validation
 		implementation 'org.springframework.boot:spring-boot-starter-validation'
 
+		// Transactional email — JavaMailSender + Spring's MimeMessageHelper.
+		// SMTP target is configurable; default wiring assumes Mailtrap.
+		implementation 'org.springframework.boot:spring-boot-starter-mail'
+
 		// JWT (JJWT 0.12.x — jjwt-impl and jjwt-jackson are runtime-only)
 		implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
 		runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
 		runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
-	}
+		// JSON Schema validation for spec-driven strategy param overrides.
+		// Backs SpecValidator — loads archetype schemas from
+		// classpath:strategy-schemas/ and validates Map<String,Object>
+		// before persisting via StrategyParamService.
+		implementation 'com.networknt:json-schema-validator:1.5.3'
 
+		// Operations telemetry — exposes /actuator/health, /actuator/metrics,
+		// /actuator/prometheus on both JVMs. Consumed by the frontend
+		// /research dashboard. Gated hasRole('ADMIN') in SecurityConfig —
+		// actuator surfaces internal state and must not be public.
+		implementation 'org.springframework.boot:spring-boot-starter-actuator'
+		implementation 'io.micrometer:micrometer-registry-prometheus'
 
 }
 
@@ -112,10 +144,28 @@ dependencyManagement {
 	}
 }
 
+// Explicitly pin the trading-service main class for bootRun and the
+// default bootJar task. Required because the project now contains two
+// @SpringBootApplication classes (BlackheartApplication for trading,
+// BlackheartResearchApplication for the research-isolated JVM).
+// Without this, ./gradlew bootRun fails with
+//   Unable to find a single main class from the following candidates
+springBoot {
+	mainClass = 'id.co.blackheart.BlackheartApplication'
+}
+
 tasks.named('bootRun') {
+	mainClass = 'id.co.blackheart.BlackheartApplication'
 	if (System.getenv('SPRING_PROFILES_ACTIVE') == null) {
 		systemProperty 'spring.profiles.active', 'dev'
 	}
+	// Add :dev-tooling to bootRun's classpath so DevAuthController is
+	// available during local development. The production tradingBootJar
+	// task does NOT include this — dev backdoor stays out of prod
+	// binaries (V14+ Stage B2-fuller). Without this, the research
+	// orchestrator's dev-bypass health check returns 404.
+	classpath += project(':dev-tooling').sourceSets.main.runtimeClasspath
+	dependsOn(project(':dev-tooling').tasks.named('classes'))
 }
 
 tasks.named('test') {
@@ -123,4 +173,138 @@ tasks.named('test') {
 	if (System.getenv('SPRING_PROFILES_ACTIVE') == null) {
 		systemProperty 'spring.profiles.active', 'test'
 	}
+}
+
+// ── Production-readiness Step 3 Stage B1 ─────────────────────────────────
+// Two distinct bootJar artifacts from the same source tree, each pinned
+// to a different @SpringBootApplication main class. This is the build-
+// time half of the trading/research split — runtime gating already in
+// place via @Profile("!research") on the live-trading singletons.
+//
+// Why same source / different jars (Stage B1) rather than full module
+// split (Stage B2)? Splitting 100+ source files into shared-domain /
+// trading-service / research-service / dev-tooling modules is genuinely
+// multi-day work, with high blast radius if any cross-module reference
+// is missed. Stage B1 ships separate deployable artifacts immediately,
+// gives operators independent release versioning per JAR, and unlocks
+// the Stage B2 work to be incremental rather than big-bang.
+//
+// Build:
+//   ./gradlew tradingBootJar         → build/libs/blackheart-trading-<v>.jar
+//   ./gradlew researchBootJar        → build/libs/blackheart-research-<v>.jar
+//   ./gradlew bootJar                → build/libs/blackheart-<v>.jar (legacy default; trading)
+//
+// Deploy:
+//   java -jar blackheart-trading-<v>.jar          (port 8080)
+//   java -jar blackheart-research-<v>.jar \
+//        --spring.profiles.active=dev,research    (port 8081)
+//
+// Once Stage B2 lands and physically excludes packages, the bootJar
+// `exclude` directives below become the natural home for build-time
+// classpath separation. They are intentionally empty for now — adding
+// excludes here without a careful cross-package audit would risk
+// runtime ClassNotFoundException. See DEPLOYMENT.md step 3 stage B2.
+
+import org.springframework.boot.gradle.tasks.bundling.BootJar
+
+tasks.register('tradingBootJar', BootJar) {
+	group = 'application'
+	description = 'Builds the trading-service JAR (BlackheartApplication main class)'
+	archiveBaseName = 'blackheart-trading'
+	mainClass = 'id.co.blackheart.BlackheartApplication'
+	classpath = sourceSets.main.runtimeClasspath
+	targetJavaVersion = JavaVersion.VERSION_21
+	dependsOn(tasks.named('classes'))
+
+	// Stage B2 — physical exclusions from the trading JAR. These class
+	// files are NOT in the resulting JAR; Spring's classpath scan won't
+	// see them; they cannot be instantiated. This is stronger than the
+	// @Profile gating from Stage A because it eliminates the bytes
+	// entirely (a CVE in DevAuthController is irrelevant if the class
+	// is not on the classpath).
+	//
+	// Why these specific exclusions: they are entry-point controllers
+	// (no other class imports them) so Spring just doesn't register the
+	// bean when the file is absent. No NoClassDefFoundError risk.
+	//
+	// NOT yet excluded (future Stage B2 work): service/backtest/**,
+	// service/research/**, service/montecarlo/** — shared strategy
+	// services in service/strategy/ import BacktestParamOverrideContext
+	// and ResearchParamService, so blanket-excluding those packages
+	// would break trading at runtime. The full module split is what
+	// untangles those imports cleanly.
+	// DevAuthController moved to :dev-tooling subproject (Stage B2-fuller).
+	// Trading bootJar's classpath is sourceSets.main.runtimeClasspath
+	// which does NOT include :dev-tooling — the class is not just
+	// excluded, it's structurally absent. Defense-in-depth excludes
+	// kept here in case someone accidentally re-introduces a copy.
+	exclude 'id/co/blackheart/controller/DevAuthController.class'
+	exclude 'id/co/blackheart/controller/DevAuthController$*.class'
+	exclude 'id/co/blackheart/controller/BacktestV1Controller.class'
+	exclude 'id/co/blackheart/controller/BacktestV1Controller$*.class'
+	exclude 'id/co/blackheart/controller/ResearchController.class'
+	exclude 'id/co/blackheart/controller/ResearchController$*.class'
+	exclude 'id/co/blackheart/controller/MonteCarloController.class'
+	exclude 'id/co/blackheart/controller/MonteCarloController$*.class'
+
+	// Stage B2-fuller (V14, 2026-04-28). After moving
+	// BacktestParamOverrideContext + ResearchParamService to
+	// service/strategy/, no shared/trading code references anything
+	// in these three packages — every remaining cross-import is
+	// inside the excluded set itself. Audit:
+	//
+	//   grep -rn "import id\.co\.blackheart\.service\.(backtest|research|montecarlo)\." src/main/java
+	//
+	// Re-run that command before adding any new code that imports from
+	// these packages — the assumption could regress.
+	exclude 'id/co/blackheart/service/backtest/**'
+	exclude 'id/co/blackheart/service/research/**'
+	exclude 'id/co/blackheart/service/montecarlo/**'
+
+	// Bug 9 mitigation (2026-04-28). MonteCarlo DTOs + entity were dead
+	// weight in the trading JAR (no controller scans them, no service
+	// imports them). Excluding so the trading JAR ships only what
+	// trading needs.
+	exclude 'id/co/blackheart/dto/montecarlo/**'
+	exclude 'id/co/blackheart/model/MonteCarloRun.class'
+	exclude 'id/co/blackheart/model/MonteCarloRun$*.class'
+	exclude 'id/co/blackheart/repository/MonteCarloRunRepository.class'
+}
+
+tasks.register('researchBootJar', BootJar) {
+	group = 'application'
+	description = 'Builds the research-service JAR (BlackheartResearchApplication main class)'
+	archiveBaseName = 'blackheart-research'
+	mainClass = 'id.co.blackheart.BlackheartResearchApplication'
+	// Pull in :dev-tooling output explicitly. The main module does NOT
+	// depend on :dev-tooling (one-way dep direction); we add the
+	// subproject's compiled classes to this bootJar's classpath so the
+	// research JAR ships DevAuthController.
+	classpath = sourceSets.main.runtimeClasspath + project(':dev-tooling').sourceSets.main.output
+	targetJavaVersion = JavaVersion.VERSION_21
+	dependsOn(tasks.named('classes'))
+	dependsOn(project(':dev-tooling').tasks.named('classes'))
+
+	// Stage B2 — exclude live-trading-only classes from the research JAR.
+	// These mirror exactly the @Profile("!research") set from Stage A,
+	// so by construction nothing on the research JVM autowires them.
+	// Audit verified (2026-04-28): the only importers are also-gated
+	// classes (SchedulerController imports SchedulerService etc.) — all
+	// excluded together below.
+	exclude 'id/co/blackheart/stream/BinanceWebSocketClient.class'
+	exclude 'id/co/blackheart/stream/BinanceWebSocketClient$*.class'
+	exclude 'id/co/blackheart/service/websocket/LivePnlPublisherService.class'
+	exclude 'id/co/blackheart/service/websocket/LivePnlPublisherService$*.class'
+	exclude 'id/co/blackheart/service/websocket/SentimentPublisherService.class'
+	exclude 'id/co/blackheart/service/websocket/SentimentPublisherService$*.class'
+	exclude 'id/co/blackheart/service/notification/TelegramBotPollingService.class'
+	exclude 'id/co/blackheart/service/notification/TelegramBotPollingService$*.class'
+	exclude 'id/co/blackheart/service/scheduler/SchedulerService.class'
+	exclude 'id/co/blackheart/service/scheduler/SchedulerService$*.class'
+	exclude 'id/co/blackheart/config/WebSocketRunner.class'
+	exclude 'id/co/blackheart/config/WebSocketRunner$*.class'
+	exclude 'id/co/blackheart/controller/SchedulerController.class'
+	exclude 'id/co/blackheart/controller/SchedulerController$*.class'
+	exclude 'id/co/blackheart/controller/SentimentWebSocketController.class'
+	exclude 'id/co/blackheart/controller/SentimentWebSocketController$*.class'
 }

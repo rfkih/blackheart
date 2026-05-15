@@ -9,6 +9,7 @@ import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import id.co.blackheart.service.trade.TradeExecutionService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -38,8 +39,12 @@ import java.util.UUID;
  *       operation and is not exposed to ordinary users.</li>
  *   <li>The client supplies {@code accountId} only; the API key and secret are
  *       loaded from the authenticated admin's account row. The request DTO
- *       {@code @JsonIgnore}s the credential fields so a malicious client cannot
- *       supply them.</li>
+ *       annotates the credential fields with
+ *       {@code @JsonProperty(access = READ_ONLY)} so a malicious client cannot
+ *       deserialize values into them — but the server-injected values still
+ *       serialise outbound to the Node Binance proxy (which validates them
+ *       as required). The earlier {@code @JsonIgnore} blocked both directions
+ *       and silently stripped credentials from the outbound call.</li>
  *   <li>Account ownership is verified against the JWT user id.</li>
  * </ul>
  */
@@ -99,15 +104,15 @@ public class TradeController {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 
     private Account resolveAccount(UUID userId, UUID accountId) {
         if (accountId == null) {
-            throw new EntityNotFoundException("Not found");
+            throw new EntityNotFoundException("Account ID must not be null");
         }
         ownershipGuard.assertOwnsAccount(userId, accountId);
         return accountRepository.findByAccountId(accountId)
-                .orElseThrow(() -> new EntityNotFoundException("Not found"));
+                .orElseThrow(() -> new EntityNotFoundException("Account not found: accountId=" + accountId));
     }
 }

@@ -6,8 +6,9 @@ import id.co.blackheart.model.MarketData;
 import id.co.blackheart.repository.MarketDataRepository;
 import id.co.blackheart.service.technicalindicator.TechnicalIndicatorService;
 import id.co.blackheart.util.MapperUtil;
-import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -21,7 +22,6 @@ import java.util.List;
 
 @Service
 @Slf4j
-@AllArgsConstructor
 public class MarketDataService {
 
     private static final long INITIAL_FETCH_CANDLE_COUNT = 300L;
@@ -30,6 +30,23 @@ public class MarketDataService {
     private final MarketDataRepository marketDataRepository;
     private final TechnicalIndicatorService technicalIndicatorService;
     private final MapperUtil mapperUtil;
+    private final RestTemplate binanceRestTemplate;
+    private final ObjectMapper objectMapper;
+
+    @Autowired
+    public MarketDataService(
+            MarketDataRepository marketDataRepository,
+            TechnicalIndicatorService technicalIndicatorService,
+            MapperUtil mapperUtil,
+            @Qualifier("binanceRestTemplate") RestTemplate binanceRestTemplate,
+            ObjectMapper objectMapper
+    ) {
+        this.marketDataRepository = marketDataRepository;
+        this.technicalIndicatorService = technicalIndicatorService;
+        this.mapperUtil = mapperUtil;
+        this.binanceRestTemplate = binanceRestTemplate;
+        this.objectMapper = objectMapper;
+    }
 
     public void backfillMissingCandlesBeforeInsert(
             String symbol,
@@ -84,10 +101,7 @@ public class MarketDataService {
         );
 
         try {
-            RestTemplate restTemplate = new RestTemplate();
-            ObjectMapper objectMapper = new ObjectMapper();
-
-            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+            ResponseEntity<String> response = binanceRestTemplate.getForEntity(url, String.class);
 
             if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
                 log.warn("Failed to fetch missing candles. symbol={} interval={} status={}",

@@ -6,6 +6,7 @@ import id.co.blackheart.service.statistics.SharpeStatistics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -63,7 +64,7 @@ public class SlippageCalibrationService {
      * calibrate against and we'd rather signal absence than fabricate.
      */
     public Optional<SlippageStats> calibrate(String symbol) {
-        if (symbol == null || symbol.isBlank()) return Optional.empty();
+        if (!StringUtils.hasText(symbol)) return Optional.empty();
         List<Trades> sample = tradesRepository.findRecentWithIntent(symbol, SAMPLE_LIMIT);
         if (sample.isEmpty()) return Optional.empty();
 

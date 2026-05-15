@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -29,26 +31,25 @@ public class JsonMapConverter implements AttributeConverter<Map<String, Object>,
 
     @Override
     public String convertToDatabaseColumn(Map<String, Object> attribute) {
-        if (attribute == null || attribute.isEmpty()) {
+        if (CollectionUtils.isEmpty(attribute)) {
             return "{}";
         }
         try {
             return MAPPER.writeValueAsString(attribute);
         } catch (Exception e) {
-            log.error("Failed to serialize param map to JSON: {}", e.getMessage());
-            return "{}";
+            throw new IllegalStateException("Failed to serialize param map to JSON — refusing to silently drop data", e);
         }
     }
 
     @Override
     public Map<String, Object> convertToEntityAttribute(String dbData) {
-        if (dbData == null || dbData.isBlank()) {
+        if (!StringUtils.hasText(dbData)) {
             return new HashMap<>();
         }
         try {
             return MAPPER.readValue(dbData, MAP_TYPE);
         } catch (Exception e) {
-            log.warn("Failed to deserialize JSON param map from DB, returning empty: {}", e.getMessage());
+            log.error("Failed to deserialize JSON param map from DB | data='{}' — returning empty map", dbData, e);
             return new HashMap<>();
         }
     }

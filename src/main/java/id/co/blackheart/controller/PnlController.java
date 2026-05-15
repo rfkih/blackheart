@@ -3,10 +3,12 @@ package id.co.blackheart.controller;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.pnl.PnlService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -53,8 +55,8 @@ public class PnlController {
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to) {
         UUID userId = extractUserId(authHeader);
-        LocalDate fromDate = (from != null && !from.isBlank()) ? LocalDate.parse(from) : null;
-        LocalDate toDate = (to != null && !to.isBlank()) ? LocalDate.parse(to) : null;
+        LocalDate fromDate = StringUtils.hasText(from) ? LocalDate.parse(from) : null;
+        LocalDate toDate = StringUtils.hasText(to) ? LocalDate.parse(to) : null;
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(pnlService.getByStrategy(userId, fromDate, toDate))
@@ -90,6 +92,6 @@ public class PnlController {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

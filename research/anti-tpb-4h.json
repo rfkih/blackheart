@@ -1,0 +1,36 @@
+{
+  "entry_type": "ANTI_PATTERN",
+  "strategy_code": "TPB",
+  "interval_name": "4h",
+  "instrument": "BTCUSDT",
+  "title": "NULL_SCREEN TPB BTCUSDT 4h -> NO_EDGE_DETECTED (n=0-3 per draw - frequency starved)",
+  "content": "Null screen on TPB (BTCUSDT 4h, n_draws=8, seed=42). Verdict: NO_EDGE_DETECTED. Max PF=0.0, n_trades=0-3 per draw. Frequency starvation CONFIRMED at 4h native interval. The TPB entry mechanism (EMA50>EMA200 stack + EMA20 pullback within ATR tolerance + reclaim candle quality score >= 0.55) generates almost no signals at 4h granularity on BTCUSDT. Root cause: 4h EMA50>EMA200 trend alignment is rare AND pullback to EMA20 within ATR is very selective at this granularity. TPB is frequency-starved at ALL tested intervals: 1h (n=2-32 cross-TF bottleneck) and 4h (n=0-3 native). Strategy must be considered DISCARDED for BTCUSDT at all available intervals.",
+  "structured_data": {
+    "kind": "null_screen",
+    "seed": 42,
+    "n_draws": 8,
+    "instrument": "BTCUSDT",
+    "interval_name": "4h",
+    "strategy_code": "TPB",
+    "completed_draws": 8,
+    "distribution": {
+      "max": 0.0,
+      "p25": 0.0,
+      "p75": 0.0,
+      "p95": 0.0,
+      "mean": 0.0,
+      "n_finite": 8,
+      "n_attempted": 8,
+      "share_pf_ge_1_0": 0.0,
+      "share_pf_ge_1_2": 0.0
+    },
+    "verdict": {
+      "verdict": "NO_EDGE_DETECTED",
+      "reason": "n_trades=0-3 per draw; frequency starvation confirmed at 4h native interval"
+    },
+    "hypothesis_falsified": "f401454a-65be-42c4-983c-88c3dc232f1e",
+    "tpb_status": "DISCARDED - frequency starved at all tested intervals (1h cross-TF n=2-32, 4h native n=0-3)"
+  },
+  "status": "ACTIVE",
+  "created_by": "quant-researcher"
+}

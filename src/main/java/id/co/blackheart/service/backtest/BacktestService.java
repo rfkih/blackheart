@@ -11,13 +11,14 @@ import id.co.blackheart.service.strategy.AccountStrategyOwnershipGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.RejectedExecutionException;
 
 @Slf4j
 @Service
@@ -34,10 +35,12 @@ public class BacktestService {
     private final BacktestRunRepository backtestRunRepository;
     private final BacktestResponseMapper backtestMapperService;
     private final AccountStrategyOwnershipGuard ownershipGuard;
-    private final BacktestAsyncRunner backtestAsyncRunner;
+    private final BacktestConcurrencyGate concurrencyGate;
+    private final BacktestKafkaProducer kafkaProducer;
     private final ObjectMapper objectMapper;
     private final BuildInfoService buildInfoService;
     private final SlippageCalibrationService slippageCalibrationService;
+    private final BacktestDataValidatorService backtestDataValidatorService;
 
     /**
      * Persist the backtest as PENDING, hand it off to the dedicated backtest
@@ -49,12 +52,19 @@ public class BacktestService {
      */
     public BacktestRunResponse runBacktest(UUID userId, BacktestRunRequest request) {
         validateRequest(request);
+        backtestDataValidatorService.validate(
+                request.getAsset(), request.getInterval(),
+                request.getStartTime(), request.getEndTime());
 
-        ownershipGuard.assertOwned(userId, request.getAccountStrategyId());
+        // Backtest is a read-only simulation — ownership is not required on the
+        // account strategy. A user may replicate a researcher's run (which
+        // carries the researcher's accountStrategyId). The resulting run is
+        // always stored under userId so it stays private to the requester.
+        ownershipGuard.assertExists(request.getAccountStrategyId());
         if (request.getStrategyAccountStrategyIds() != null) {
             for (UUID perStrategyId : request.getStrategyAccountStrategyIds().values()) {
                 if (perStrategyId != null) {
-                    ownershipGuard.assertOwned(userId, perStrategyId);
+                    ownershipGuard.assertExists(perStrategyId);
                 }
             }
         }
@@ -84,7 +94,7 @@ public class BacktestService {
         // page's "Re-run with these params" — tunings survive a page refresh.
         Map<String, Map<String, Object>> overrides = request.getStrategyParamOverrides();
         String configSnapshot = serialiseOverrides(overrides);
-        if (overrides != null && !overrides.isEmpty()) {
+        if (!CollectionUtils.isEmpty(overrides)) {
             log.info("Backtest submitted with param overrides across {} strateg(ies): {}",
                     overrides.size(), overrides.keySet());
         }
@@ -93,6 +103,7 @@ public class BacktestService {
                 .userId(userId)
                 .accountStrategyId(request.getAccountStrategyId())
                 .strategyAccountStrategyIds(request.getStrategyAccountStrategyIds())
+                .strategyParamIds(request.getStrategyParamIds())
                 .strategyName(resolvedStrategyName)
                 .strategyCode(resolvedStrategyCode)
                 .asset(request.getAsset())
@@ -105,6 +116,7 @@ public class BacktestService {
                 .riskPerTradePct(request.getRiskPerTradePct())
                 .feePct(resolvedFee)
                 .slippagePct(resolvedSlippage)
+                .fundingRateBpsPer8h(request.getFundingRateBpsPer8h())
                 .minNotional(request.getMinNotional())
                 .minQty(request.getMinQty())
                 .qtyStep(request.getQtyStep())
@@ -126,23 +138,75 @@ public class BacktestService {
                 // exactly which strategy code + defaults produced this run.
                 .gitCommitSha(buildInfoService.getGitCommitSha())
                 .appVersion(buildInfoService.getAppVersion())
+                // Phase A — multi-strategy controls. Both fields are
+                // optional; null means "no run-level cap" / "fall back to
+                // account_strategy.capital_allocation_pct" respectively.
+                .maxConcurrentStrategies(request.getMaxConcurrentStrategies())
+                .strategyAllocations(nullIfEmpty(canonicaliseAllocations(request.getStrategyAllocations())))
+                .strategyRiskPcts(nullIfEmpty(canonicaliseStrategyRiskPcts(request.getStrategyRiskPcts())))
+                .strategyAllowLong(nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyAllowLong())))
+                .strategyAllowShort(nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyAllowShort())))
+                // V62 — per-strategy risk-gate overrides. Same canonicalisation
+                // (uppercase + trim keys) as the direction overrides so the
+                // resolver lookup in BacktestCoordinatorService.resolveBoolOverride
+                // (which calls code.toUpperCase()) matches reliably regardless of
+                // how the caller cased the strategy code in the wizard / API.
+                // Without this wiring the override maps fall to NULL on the
+                // persisted backtest_run row even when the wizard supplied them,
+                // so the gate evaluator's override layer becomes a no-op.
+                .strategyKillSwitchOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyKillSwitchOverrides())))
+                .strategyRegimeOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyRegimeOverrides())))
+                .strategyCorrelationOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyCorrelationOverrides())))
+                .strategyConcurrentCapOverrides(
+                        nullIfEmpty(canonicaliseStrategyBoolMap(request.getStrategyConcurrentCapOverrides())))
+                .strategyIntervals(nullIfEmpty(canonicaliseIntervals(request.getStrategyIntervals())))
+                // Origin tag — RESEARCHER when the autonomous orchestrator
+                // submits, USER for everything else (wizard, scripts). This
+                // is a UI/operational label not a security gate, so the V32
+                // CHECK constraint is what actually bounds the value space.
+                .triggeredBy(resolveTriggeredBy(request))
                 .build();
 
-        backtestRun = backtestRunRepository.save(backtestRun);
+        // Gate: atomic advisory lock + in-flight count + INSERT in one REQUIRES_NEW tx.
+        // Throws BacktestConcurrencyLimitException (→ HTTP 429) when at capacity.
+        backtestRun = concurrencyGate.checkAndSave(backtestRun);
 
         try {
-            backtestAsyncRunner.runAsync(backtestRun.getBacktestRunId());
-        } catch (RejectedExecutionException e) {
-            // Backtest pool is saturated — mark the row FAILED immediately so
-            // the user sees the reason instead of a "stuck PENDING forever".
-            log.warn("Backtest executor rejected submission | runId={}",
-                    backtestRun.getBacktestRunId());
+            kafkaProducer.send(backtestRun.getBacktestRunId(), backtestRun.getUserId());
+        } catch (Exception e) {
+            // Kafka broker unreachable — mark the persisted row FAILED so it
+            // doesn't sit as PENDING forever, then surface a 503 to the caller
+            // so the research orchestrator can retry rather than silently losing
+            // the submission (returning HTTP 200 with status=FAILED in the body
+            // was the prior behaviour and was invisible to orchestrator retry logic).
+            log.warn("Kafka produce failed — marking run FAILED | runId={}", backtestRun.getBacktestRunId(), e);
             backtestRun.setStatus("FAILED");
-            backtestRun.setNotes("Server is at backtest capacity. Try again in a few minutes.");
+            backtestRun.setNotes("Failed to queue backtest. Try again shortly.");
             backtestRunRepository.save(backtestRun);
+            throw new id.co.blackheart.exception.ServiceUnavailableException(
+                    "Backtest queue is temporarily unavailable. Try again shortly.");
         }
 
         return backtestMapperService.toRunResponse(backtestRun);
+    }
+
+    /**
+     * Resolves the {@code triggered_by} tag for a new run. Accepts only the
+     * two whitelisted values defined by the V32 CHECK constraint and falls
+     * back to {@code USER} for null/blank/unknown — keeping the contract
+     * additive so existing clients that never set the field still work.
+     */
+    private String resolveTriggeredBy(BacktestRunRequest request) {
+        String raw = request.getTriggeredBy();
+        if (raw == null) return "USER";
+        String upper = raw.trim().toUpperCase();
+        if ("RESEARCHER".equals(upper) || "USER".equals(upper)) {
+            return upper;
+        }
+        return "USER";
     }
 
     /**
@@ -152,7 +216,7 @@ public class BacktestService {
      * to do unnecessary JSON parsing on every detail read.
      */
     private String serialiseOverrides(Map<String, Map<String, Object>> overrides) {
-        if (overrides == null || overrides.isEmpty()) return null;
+        if (CollectionUtils.isEmpty(overrides)) return null;
         try {
             return objectMapper.writeValueAsString(overrides);
         } catch (Exception e) {
@@ -163,21 +227,114 @@ public class BacktestService {
     }
 
     /**
+     * Validate + uppercase-normalize the per-strategy allocation map. Each
+     * value must be in (0, 100]. Strategy codes are stored uppercase so
+     * lookups inside the executor don't need case-insensitive matching.
+     * Returns an empty map for null/empty/all-blank input — the call site
+     * passes the result through {@link #nullIfEmpty} so the JSONB column
+     * stays SQL NULL (not {@code '{}'}) when nothing was supplied.
+     */
+    private Map<String, BigDecimal> canonicaliseAllocations(Map<String, BigDecimal> raw) {
+        Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
+        for (Map.Entry<String, BigDecimal> e : raw.entrySet()) {
+            BigDecimal v = e.getValue();
+            if (StringUtils.hasText(e.getKey()) && v != null) {
+                if (v.signum() <= 0 || v.compareTo(new BigDecimal("100")) > 0) {
+                    throw new IllegalArgumentException(
+                            "strategyAllocations[" + e.getKey() + "] must be in (0, 100], got " + v);
+                }
+                out.put(e.getKey().toUpperCase().trim(), v);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * V57 — Validate + uppercase-normalize the per-strategy risk-pct map.
+     * Values are fractional (matching {@code account_strategy.risk_pct}); the
+     * resolver enforces (0, 0.20]. Returns an empty map for null/empty input
+     * via the same contract as {@link #canonicaliseAllocations}.
+     */
+    private Map<String, BigDecimal> canonicaliseStrategyRiskPcts(Map<String, BigDecimal> raw) {
+        Map<String, BigDecimal> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
+        BigDecimal upperBound = new BigDecimal("0.20");
+        for (Map.Entry<String, BigDecimal> e : raw.entrySet()) {
+            BigDecimal v = e.getValue();
+            if (StringUtils.hasText(e.getKey()) && v != null) {
+                if (v.signum() <= 0 || v.compareTo(upperBound) > 0) {
+                    throw new IllegalArgumentException(
+                            "strategyRiskPcts[" + e.getKey() + "] must be in (0, 0.20], got " + v);
+                }
+                out.put(e.getKey().toUpperCase().trim(), v);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * V58 — uppercase-normalize a per-strategy boolean map (used by the
+     * direction-override fields strategyAllowLong / strategyAllowShort).
+     * Drops null values silently. Empty-vs-null contract matches
+     * {@link #canonicaliseAllocations}.
+     */
+    private Map<String, Boolean> canonicaliseStrategyBoolMap(Map<String, Boolean> raw) {
+        Map<String, Boolean> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
+        for (Map.Entry<String, Boolean> e : raw.entrySet()) {
+            if (StringUtils.hasText(e.getKey()) && e.getValue() != null) {
+                out.put(e.getKey().toUpperCase().trim(), e.getValue());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Validate + uppercase-normalize the per-strategy interval map. The
+     * @Pattern annotation on the DTO already validates each value matches
+     * a known interval; here we only canonicalize keys. Returns an empty
+     * map for null/empty input — see {@link #canonicaliseAllocations} for
+     * the rationale on the empty-vs-null contract.
+     */
+    private Map<String, String> canonicaliseIntervals(Map<String, String> raw) {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(raw)) return out;
+        for (Map.Entry<String, String> e : raw.entrySet()) {
+            String v = e.getValue();
+            if (StringUtils.hasText(e.getKey()) && StringUtils.hasText(v)) {
+                out.put(e.getKey().toUpperCase().trim(), v.trim());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Builder-side bridge between the canonicalise helpers (which return
+     * empty maps to satisfy Sonar S1168) and the JSONB columns (which want
+     * SQL NULL — not {@code '{}'} — when nothing was supplied, so the
+     * detail-read path can skip JSON parsing on absent values).
+     */
+    private static <K, V> Map<K, V> nullIfEmpty(Map<K, V> m) {
+        return CollectionUtils.isEmpty(m) ? null : m;
+    }
+
+    /**
      * Resolves the strategy code(s) to store on BacktestRun.
      * Multi-strategy: codes joined as comma-separated string, e.g. "LSR_V2,VCB".
      * Single-strategy: the single code, falling back to strategyName.
      */
     private String resolveStrategyCode(BacktestRunRequest request) {
         List<String> codes = request.getStrategyCodes();
-        if (codes != null && !codes.isEmpty()) {
+        if (!CollectionUtils.isEmpty(codes)) {
             List<String> valid = codes.stream()
-                    .filter(c -> c != null && !c.isBlank())
+                    .filter(StringUtils::hasText)
                     .toList();
-            if (!valid.isEmpty()) {
+            if (!CollectionUtils.isEmpty(valid)) {
                 return String.join(",", valid);
             }
         }
-        if (request.getStrategyCode() != null && !request.getStrategyCode().isBlank()) {
+        if (StringUtils.hasText(request.getStrategyCode())) {
             return request.getStrategyCode();
         }
         return request.getStrategyName();
@@ -188,10 +345,10 @@ public class BacktestService {
             throw new IllegalArgumentException("BacktestRunRequest cannot be null");
         }
 
-        boolean hasStrategyCodes = request.getStrategyCodes() != null
-                && request.getStrategyCodes().stream().anyMatch(c -> c != null && !c.isBlank());
-        boolean hasStrategyCode = request.getStrategyCode() != null && !request.getStrategyCode().isBlank();
-        boolean hasStrategyName = request.getStrategyName() != null && !request.getStrategyName().isBlank();
+        boolean hasStrategyCodes = !CollectionUtils.isEmpty(request.getStrategyCodes())
+                && request.getStrategyCodes().stream().anyMatch(StringUtils::hasText);
+        boolean hasStrategyCode = StringUtils.hasText(request.getStrategyCode());
+        boolean hasStrategyName = StringUtils.hasText(request.getStrategyName());
 
         if (!hasStrategyCodes && !hasStrategyCode && !hasStrategyName) {
             throw new IllegalArgumentException("At least one of strategyCodes, strategyCode, or strategyName must be provided");
@@ -199,10 +356,10 @@ public class BacktestService {
         if (request.getAccountStrategyId() == null) {
             throw new IllegalArgumentException("accountStrategyId is required (backtest_run.account_strategy_id is NOT NULL)");
         }
-        if (request.getAsset() == null || request.getAsset().isBlank()) {
+        if (!StringUtils.hasText(request.getAsset())) {
             throw new IllegalArgumentException("asset cannot be blank");
         }
-        if (request.getInterval() == null || request.getInterval().isBlank()) {
+        if (!StringUtils.hasText(request.getInterval())) {
             throw new IllegalArgumentException("interval cannot be blank");
         }
         if (request.getStartTime() == null || request.getEndTime() == null) {

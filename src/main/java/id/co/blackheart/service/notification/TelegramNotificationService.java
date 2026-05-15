@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
@@ -32,12 +33,12 @@ public class TelegramNotificationService {
         // No-op when the bot isn't configured (token blank) so the app stays
         // usable locally without a Telegram secret. Same guard as the polling
         // service — keeps us from calling /bot//sendMessage with an empty token.
-        if (botToken == null || botToken.isBlank()) return;
-        if (chatIds == null || chatIds.isBlank()) return;
+        if (!StringUtils.hasText(botToken)) return;
+        if (!StringUtils.hasText(chatIds)) return;
 
         List<String> recipients = Arrays.stream(chatIds.split(","))
                 .map(String::trim)
-                .filter(id -> !id.isBlank())
+                .filter(StringUtils::hasText)
                 .toList();
         if (recipients.isEmpty()) return;
 
@@ -56,11 +57,11 @@ public class TelegramNotificationService {
      * request that triggered it. Failures are logged.
      */
     public void sendMessageToChat(String chatId, String message) {
-        if (botToken == null || botToken.isBlank()) {
+        if (!StringUtils.hasText(botToken)) {
             log.warn("[Telegram] Bot disabled (no token); skipping send to {}", chatId);
             return;
         }
-        if (chatId == null || chatId.isBlank()) return;
+        if (!StringUtils.hasText(chatId)) return;
 
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
 

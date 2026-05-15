@@ -1,0 +1,25 @@
+{
+  "entry_type": "STRATEGY_OUTCOME",
+  "strategy_code": "MMR",
+  "interval_name": "4h",
+  "instrument": "ETHUSDT",
+  "title": "MMR ETHUSDT 4h CLOSED: NO_EDGE_DETECTED — worse than 1h, archetype fundamentally weak on ETH below-EMA200",
+  "content": "Null-screen for hypothesis aff00b73 (MMR ETHUSDT 4h, extremeAtrMult x stopAtrBuffer x rsiOversoldMax) returned NO_EDGE_DETECTED. All 8 draws: PF=0.435-0.593 (mean=0.505, P95=0.574). Worse than ETH 1h results (mean=0.61-0.64). Trade frequency adequate (n=87-205). STRUCTURAL DIAGNOSIS: The MomentumMeanReversionEngine fires LONG entries when price is below EMA200 by extremeAtrMult*ATR AND RSI < threshold. This is a 'buy the dip in bear market' strategy. On ETH crypto, being below EMA200 implies a bearish trend context. The probability that price recovers to EMA50 (the TP target, above current price but below EMA200) before hitting the stop-loss is systematically below 50%. On longer timeframes (4h), this gets worse: 4h ATR is larger relative to the EMA200-to-EMA50 distance, meaning the R:R at entry is less favorable. ARCHETYPE VERDICT: MMR on ETH is EXHAUSTED. Evidence: (1) ETH 1h default: PF=0.57-0.70; (2) ETH 1h extended hold: PF=0.52-0.66; (3) ETH 4h: PF=0.44-0.59. All tests systematically below 0.65. The pattern is consistent: the mechanism (fade EMA200-extreme) does not generate edge on ETH at any tested timeframe. Also note: MMR BTC 1h was DISCARDED 2026-05-01 (PF=0.41-0.47, BULL-regime bleed). MMR archetype is exhausted on all tested surfaces.",
+  "status": "ACTIVE",
+  "structured_data": {
+    "kind": "strategy_outcome",
+    "hypothesis_id": "aff00b73-f72a-48ab-a7a1-f7453e8664de",
+    "null_screen_verdict": "NO_EDGE_DETECTED",
+    "distribution": {
+      "mean": 0.505,
+      "p95": 0.574,
+      "max": 0.593,
+      "share_pf_ge_1_0": 0.0,
+      "share_pf_ge_1_2": 0.0
+    },
+    "comparison_to_eth_1h": "ETH 4h (mean=0.505) WORSE than ETH 1h (mean=0.61-0.64) — opposite of hypothesis",
+    "structural_root_cause": "MMR LONG fires in bear context (below EMA200). Probability of recovery to EMA50 before stop-loss is systematically < 50% on ETH at all tested timeframes.",
+    "archetype_status": "EXHAUSTED",
+    "surfaces_tested": ["ETH_1h_default", "ETH_1h_extended_hold", "ETH_4h_default", "BTC_1h_discarded_2026-05-01"]
+  }
+}

@@ -10,12 +10,15 @@ import id.co.blackheart.exception.UserAccountDisabledException;
 import id.co.blackheart.exception.UserAlreadyExistsException;
 import id.co.blackheart.exception.UserNotFoundException;
 import id.co.blackheart.model.User;
+import id.co.blackheart.repository.AccountRepository;
 import id.co.blackheart.repository.UserRepository;
+import id.co.blackheart.service.portfolio.PortfolioService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -33,8 +36,11 @@ import java.util.UUID;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final AccountRepository accountRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final EmailVerificationService emailVerificationService;
+    private final PortfolioService portfolioService;
 
     private static final String ROLE_USER    = "USER";
     private static final String STATUS_ACTIVE = "ACTIVE";
@@ -74,6 +80,17 @@ public class UserService {
         User saved = userRepository.save(user);
         log.info("User registered: userId={}", saved.getUserId());
 
+        // Issue an email-verification token immediately. EmailVerificationService
+        // sends via SMTP and falls back to a WARN-level URL log on send failure.
+        try {
+            emailVerificationService.issueVerificationToken(saved.getUserId());
+        } catch (RuntimeException e) {
+            // Don't fail the registration if the token issue stumbles —
+            // the user can request a resend from the dashboard banner.
+            log.warn("Failed to issue verification token at registration | userId={}",
+                    saved.getUserId(), e);
+        }
+
         return buildLoginResponse(saved);
     }
 
@@ -98,6 +115,12 @@ public class UserService {
 
         // Stamp last login without triggering a full entity dirty-check round-trip
         userRepository.updateLastLogin(user.getUserId(), user.getEmail(), LocalDateTime.now());
+
+        // Fire-and-forget balance sync for every account that has Binance credentials.
+        // Runs on taskExecutor so login response is not blocked by the Binance round-trip.
+        accountRepository.findByUserId(user.getUserId()).stream()
+                .filter(a -> StringUtils.hasText(a.getApiKey()) && StringUtils.hasText(a.getApiSecret()))
+                .forEach(portfolioService::refreshAccountBalance);
 
         log.info("Login successful: userId={}", user.getUserId());
         return buildLoginResponse(user);
@@ -136,7 +159,7 @@ public class UserService {
         User user = userRepository.findByUserId(userId)
                 .orElseThrow(() -> new UserNotFoundException("User not found: " + userId));
 
-        if (request.getFullName() != null && !request.getFullName().isBlank()) {
+        if (StringUtils.hasText(request.getFullName())) {
             user.setFullName(request.getFullName());
         }
         if (request.getPhoneNumber() != null) {

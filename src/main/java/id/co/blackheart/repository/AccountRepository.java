@@ -35,16 +35,38 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     List<Account> findByUserId(@Param("userId") UUID userId);
 
     /**
-     * Case-insensitive existence check for username. Used by account creation
-     * to enforce the schema's unique constraint with a friendly 409 rather
-     * than a raw constraint violation stack-trace.
+     * Per-user case-insensitive existence check for username. Per-user (not
+     * global) since V51 - different tenants may choose the same label, but
+     * within one user the label is unique. Used by account create/update
+     * for friendly 409s rather than constraint-violation stack traces.
      */
     @Query(value = """
     SELECT EXISTS (
         SELECT 1
         FROM accounts
-        WHERE LOWER(username) = LOWER(:username)
+        WHERE user_id = :userId
+          AND LOWER(username) = LOWER(:username)
     )
     """, nativeQuery = true)
-    boolean existsByUsernameIgnoreCase(@Param("username") String username);
+    boolean existsByUserIdAndUsernameIgnoreCase(
+            @Param("userId") UUID userId,
+            @Param("username") String username);
+
+    /**
+     * Same as above but excludes a specific account id - used during rename
+     * so the caller's own existing label doesn't trip the uniqueness check.
+     */
+    @Query(value = """
+    SELECT EXISTS (
+        SELECT 1
+        FROM accounts
+        WHERE user_id = :userId
+          AND LOWER(username) = LOWER(:username)
+          AND account_id <> :excludeAccountId
+    )
+    """, nativeQuery = true)
+    boolean existsByUserIdAndUsernameIgnoreCaseExcludingId(
+            @Param("userId") UUID userId,
+            @Param("username") String username,
+            @Param("excludeAccountId") UUID excludeAccountId);
 }

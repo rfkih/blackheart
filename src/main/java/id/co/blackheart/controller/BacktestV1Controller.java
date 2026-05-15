@@ -1,16 +1,21 @@
 package id.co.blackheart.controller;
 
+import id.co.blackheart.dto.request.ActivateBacktestStrategyRequest;
 import id.co.blackheart.dto.request.BacktestRunRequest;
+import id.co.blackheart.dto.response.AccountStrategyResponse;
 import id.co.blackheart.dto.response.BacktestRunDetailResponse;
 import id.co.blackheart.dto.response.BacktestRunResponse;
 import id.co.blackheart.dto.response.ResponseDto;
+import id.co.blackheart.service.backtest.BacktestActivationService;
 import id.co.blackheart.service.backtest.BacktestQueryService;
 import id.co.blackheart.service.backtest.BacktestService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Profile;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,11 +27,13 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/backtest")
 @RequiredArgsConstructor
+@Profile("research")
 @Tag(name = "BacktestV1Controller", description = "Backtest API v1")
 public class BacktestV1Controller {
 
     private final BacktestService backtestService;
     private final BacktestQueryService backtestQueryService;
+    private final BacktestActivationService backtestActivationService;
     private final JwtService jwtService;
 
     /**
@@ -80,16 +87,19 @@ public class BacktestV1Controller {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
             @RequestParam(required = false, defaultValue = "createdAt") String sortBy,
-            @RequestParam(required = false, defaultValue = "DESC") String sortDir) {
+            @RequestParam(required = false, defaultValue = "DESC") String sortDir,
+            @RequestParam(required = false) String triggeredBy) {
         UUID userId = extractUserId(authHeader);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(backtestQueryService.listRuns(
                         userId,
-                        page, size,
-                        status, strategyCode, symbol, intervalName,
-                        from, to,
-                        sortBy, sortDir))
+                        new BacktestQueryService.ListRunsQuery(
+                                page, size,
+                                status, strategyCode, symbol, intervalName,
+                                from, to,
+                                sortBy, sortDir,
+                                triggeredBy)))
                 .build());
     }
 
@@ -126,6 +136,25 @@ public class BacktestV1Controller {
                 .build());
     }
 
+    /**
+     * Promote a completed backtest run's parameter snapshot to a user-owned account
+     * strategy: saves the overrides as an active preset and enables the strategy.
+     * The strategy starts in paper-trading mode ({@code simulated=true}) unless it
+     * was already promoted to real capital.
+     */
+    @PostMapping("/{runId}/activate-strategy")
+    public ResponseEntity<ResponseDto> activateStrategy(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID runId,
+            @Valid @RequestBody ActivateBacktestStrategyRequest request) {
+        UUID userId = extractUserId(authHeader);
+        AccountStrategyResponse result = backtestActivationService.activate(userId, runId, request);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(result)
+                .build());
+    }
+
     @GetMapping("/{id}/candles")
     public ResponseEntity<ResponseDto> getCandles(
             @RequestHeader("Authorization") String authHeader,
@@ -138,6 +167,6 @@ public class BacktestV1Controller {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

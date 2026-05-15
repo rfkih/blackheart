@@ -1,0 +1,63 @@
+# /etc/logrotate.d/blackheart — log rotation for Blackheart on Linux.
+#
+# Install:
+#   sudo cp deploy/logrotate/blackheart /etc/logrotate.d/blackheart
+#   sudo logrotate -d /etc/logrotate.d/blackheart   # dry-run, prints plan
+#   sudo logrotate /etc/logrotate.d/blackheart      # force-run
+#
+# Defaults are conservative: weekly rotation, keep 8 weeks of history.
+# Adjust if disk pressure or audit retention requires otherwise.
+#
+# Note: when running under systemd, application stdout/stderr go to the
+# journal (StandardOutput=journal in the unit). Configure journald
+# retention separately via /etc/systemd/journald.conf:
+#   SystemMaxUse=2G
+#   MaxRetentionSec=8w
+# These logrotate rules cover only the file-based logs the orchestrator
+# writes (research-tick.log, etc.) which do NOT go through journald.
+
+# ── Research orchestrator log ─────────────────────────────────────────────
+/tmp/research-tick.log /var/log/blackheart/research-tick.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 blackheart-research blackheart-research
+    # Truncate-in-place so the orchestrator process keeps writing to the
+    # same file descriptor — no SIGHUP needed (research-tick.sh is a
+    # short-lived script, no long-running fd to invalidate).
+    copytruncate
+}
+
+# ── Trading service file logs (if any) ────────────────────────────────────
+# Only relevant if you redirect bootRun stdout/stderr to a file rather
+# than journald. systemd-managed deployments should leave this empty
+# and rely on journald + the SystemMaxUse cap above.
+/var/log/blackheart/trading.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 blackheart blackheart
+    copytruncate
+}
+
+# ── Backtest sweep result CSVs ────────────────────────────────────────────
+# These accumulate fast (one folder per sweep run, dozens of CSVs each).
+# Move to "rotate by age" rather than rotate-by-cycle since file count
+# matters more than file size.
+#
+# Implementation note: logrotate doesn't natively delete-by-age across
+# sweep run folders. Use a separate cron entry instead:
+#
+#   # /etc/cron.d/blackheart-research-cleanup
+#   0 3 * * 0  blackheart-research  find /opt/blackheart/research/sweeps \
+#                                       -mindepth 1 -maxdepth 2 -type d \
+#                                       -mtime +30 -exec rm -rf {} +
+#
+# Above is a weekly Sunday 3am task to prune sweep folders older than 30
+# days. Tune retention via -mtime to taste.

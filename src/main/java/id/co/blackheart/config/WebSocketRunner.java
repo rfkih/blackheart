@@ -5,10 +5,12 @@ import id.co.blackheart.stream.BinanceWebSocketClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 @Component
 @Slf4j
+@Profile("!research")
 public class WebSocketRunner {
 
     @Bean

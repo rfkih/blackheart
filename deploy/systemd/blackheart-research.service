@@ -1,0 +1,91 @@
+# Blackheart research service — systemd unit (Linux production reference).
+#
+# This is the research-isolated JVM (port 8081). It runs backtests, sweeps,
+# and orchestrator-driven research iterations. It does NOT trade live
+# capital. A crash here must NEVER affect the trading service on port 8080.
+#
+# Install + lifecycle: identical pattern to blackheart-trading.service.
+#
+# Critical: run as a DIFFERENT system user than blackheart-trading so OS
+# permissions enforce the boundary. Research user has no shell, no sudo,
+# and connects to Postgres as research_user (which has SELECT on
+# operational tables and DML only on research/backtest tables — V14 roles).
+
+[Unit]
+Description=Blackheart research service (backtests, sweeps, orchestrator)
+Documentation=https://github.com/yourorg/blackheart/blob/main/research/DEPLOYMENT.md
+After=network-online.target postgresql.service blackheart-trading.service
+Wants=network-online.target
+# Soft dependency — research can start without trading, but not vice versa.
+# This ordering keeps trading first in line on slow boots.
+After=blackheart-trading.service
+
+[Service]
+Type=simple
+User=blackheart-research
+Group=blackheart-research
+WorkingDirectory=/opt/blackheart
+
+# JVM heap. Research jobs are batch-heavy but cannot be allowed to
+# starve trading. -Xmx1500m hard-caps the JVM; OS MemoryMax below caps
+# again. A runaway backtest crashes the research JVM (caught by Restart
+# policy below), it cannot OOM-kill the trading JVM.
+Environment=JAVA_OPTS=-Xms512m -Xmx1500m -XX:+UseG1GC
+
+# Database credentials — research_user (least privilege).
+EnvironmentFile=/etc/blackheart/research.env
+
+ExecStart=/usr/bin/java $JAVA_OPTS -jar /opt/blackheart/blackheart-research.jar \
+    --spring.profiles.active=prod,research \
+    --server.port=8081
+
+# ── Resource isolation ────────────────────────────────────────────────────
+# Tighter caps than trading. Research yields under contention — a long
+# backtest must never delay a live trade close.
+CPUQuota=200%
+MemoryMax=2G
+TasksMax=256
+
+# Below-normal IO + CPU priority. If the host is busy, trading gets the
+# resources first.
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+Nice=10
+
+# ── Lifecycle policy ──────────────────────────────────────────────────────
+# Research can crash and restart freely — it has no trade state to lose.
+# More forgiving restart policy than trading.
+Restart=on-failure
+RestartSec=30
+StartLimitBurst=10
+StartLimitIntervalSec=600
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# ── Hardening ─────────────────────────────────────────────────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/blackheart/logs /opt/blackheart/data /opt/blackheart/research
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+
+# Research must NOT have the network capabilities used to talk to Binance.
+# Block outbound connections to exchange API hosts at the OS firewall layer
+# rather than relying on application-level discipline. Sample iptables:
+#   iptables -A OUTPUT -m owner --uid-owner blackheart-research \
+#     -d api.binance.com -j REJECT
+# That rule belongs in the host's firewall config, not here.
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=blackheart-research
+
+[Install]
+WantedBy=multi-user.target

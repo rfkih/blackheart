@@ -1,0 +1,36 @@
+{
+  "target_id": "plan:BBR:347ee074d369524c8a79f0fc7a129ca052aefb3cee1d1fa5f4ae6f22c4f572f6:71aabe12-70d5-45a1-98ba-338b3006a765",
+  "target_kind": "plan",
+  "verdict": "CONDITIONAL_APPROVAL",
+  "strategy_code": "BBR",
+  "summary_reason": "2 of 3 checks pass (pre_registration PASS, mechanism_named PASS, axis_not_recently_failed CONDITIONAL). Hypothesis pre-dates plan. Mechanism named: 'MECHANISM: The MeanReversionOscillatorEngine fires when price is at Bollinger Band extreme + RSI extreme + price crosses back inside the band.' Axis combo [rsiOversoldMax, stopAtrBuffer, minRewardRiskRatio] was used on BBR BTC 1h and produced NO_EDGE (PF=0.13-0.23). While ETH is a different instrument and the STRATEGY_OUTCOME doesn't have axis_names in structured_data (so mechanical gate doesn't fire), qualitative judgement: researcher is explicitly citing the BTC result as context. This is not p-hacking — the BBR ETH 1h has never been tested with the correct archetype. CONDITIONAL_APPROVAL: researcher should acknowledge that if ETH also shows PF < 0.5, the BBR archetype is dead. Proceed — this test is per ARCHETYPE_EXHAUSTION protocol.",
+  "summary_n_blocker_fails": 0,
+  "summary_n_warning_fails": 1,
+  "findings": [
+    {
+      "check_name": "pre_registration",
+      "severity": "blocker",
+      "passed": true,
+      "finding": "HYPOTHESIS 71aabe12-70d5-45a1-98ba-338b3006a765 predates plan RESEARCH_PLAN_2026-05-07m.md. Hypothesis created 2026-05-07T07:28:54. Pre-registration confirmed.",
+      "details": {"hypothesis_id": "71aabe12-70d5-45a1-98ba-338b3006a765"}
+    },
+    {
+      "check_name": "mechanism_named",
+      "severity": "warning",
+      "passed": true,
+      "finding": "Mechanism marker 'mechanism' found. Content states: 'MECHANISM: The MeanReversionOscillatorEngine fires when price is at Bollinger Band extreme + RSI extreme + price crosses back inside the band. On ETH 1h, ETH's higher beta means Bollinger Band extremes represent larger absolute moves.' Causal story present for why ETH may differ from BTC.",
+      "details": {"markers_found": ["mechanism"]}
+    },
+    {
+      "check_name": "axis_not_recently_failed",
+      "severity": "warning",
+      "passed": false,
+      "finding": "Axis combo [rsiOversoldMax, stopAtrBuffer, minRewardRiskRatio] was used in BBR BTC 1h null-screen (ANTI_PATTERN at 2026-05-07T06:22:31) and produced NO_EDGE (PF=0.13-0.23). The prior STRATEGY_OUTCOME (c038afbc-like) for BBR BTC 1h does not have axis_names in structured_data, so the mechanical discard gate would not fire. However, the same axis set on BTC was deeply negative. ETH is a different instrument (higher beta, more retail participation) and the BBR ETH 1h has never been properly tested. Proceeding per ARCHETYPE_EXHAUSTION protocol — this is the least-recently-tested non-broken path. Researcher should note: if ETH shows similar PF to BTC (< 0.3), BBR is dead.",
+      "details": {
+        "prior_btc_pf_range": [0.13, 0.23],
+        "prior_btc_verdict": "NO_EDGE",
+        "note": "Different instrument; first proper ETH test. ARCHETYPE_EXHAUSTION protocol requires trying this."
+      }
+    }
+  ]
+}

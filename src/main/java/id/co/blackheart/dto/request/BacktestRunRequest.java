@@ -3,6 +3,8 @@ package id.co.blackheart.dto.request;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -43,6 +45,17 @@ public class BacktestRunRequest {
     @Size(max = 10)
     private Map<String, UUID> strategyAccountStrategyIds;
 
+    /**
+     * Per-strategy pinned preset IDs. Key = uppercase strategy code,
+     * value = {@code strategy_param.param_id}. Lets a run lock onto a specific
+     * preset row (including a soft-deleted historical one) instead of "whatever
+     * preset is active right now". Falls back to the active preset for the
+     * account_strategy when a strategy code is absent from this map. Optional;
+     * the wizard does not need to send it for the existing form to keep working.
+     */
+    @Size(max = 10)
+    private Map<String, UUID> strategyParamIds;
+
     @Size(max = 150)
     private String strategyName;
 
@@ -65,9 +78,16 @@ public class BacktestRunRequest {
     @Size(max = 30)
     private String asset;
 
+    /**
+     * Primary interval for the backtest. Restricted to 5m/15m/1h/4h —
+     * the engine ticks on a 5m monitor candle so anything finer would miss
+     * bar closes, and timeframes coarser than 4h aren't part of the
+     * supported strategy set. Live trading still supports 1m via WebSocket;
+     * this restriction is backtest-only.
+     */
     @NotBlank
-    @Pattern(regexp = "^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$",
-             message = "interval must be one of: 1m/3m/5m/15m/30m/1h/2h/4h/6h/8h/12h/1d/3d/1w/1M")
+    @Pattern(regexp = "^(5m|15m|1h|4h)$",
+             message = "interval must be one of: 5m / 15m / 1h / 4h")
     private String interval;
 
     @NotNull
@@ -98,8 +118,28 @@ public class BacktestRunRequest {
     @DecimalMax(value = "0.1", inclusive = true, message = "slippageRate cannot exceed 10%")
     private BigDecimal slippageRate;
 
+    /**
+     * Phase 0 funding-cost stub. Basis points per 8h Binance funding period;
+     * applied flat across the run. Default {@code null} → 0 (legacy parity).
+     * Bounded ±50 bps/8h — beyond that you're in distressed-market territory
+     * where a single rate stub is the wrong tool anyway (use Phase 4 history).
+     */
+    @DecimalMin(value = "-50.0", inclusive = true,
+                message = "fundingRateBpsPer8h cannot be below -50 bps/8h")
+    @DecimalMax(value = "50.0", inclusive = true,
+                message = "fundingRateBpsPer8h cannot exceed 50 bps/8h")
+    private BigDecimal fundingRateBpsPer8h;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "100000", inclusive = true)
     private BigDecimal minNotional;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "100000", inclusive = true)
     private BigDecimal minQty;
+
+    @DecimalMin(value = "0.0", inclusive = true)
+    @DecimalMax(value = "100000", inclusive = true)
     private BigDecimal qtyStep;
 
     private Boolean allowLong;
@@ -114,5 +154,92 @@ public class BacktestRunRequest {
      * with thousands of arbitrary strategy codes.
      */
     @Size(max = 10)
-    private Map<String, Map<String, Object>> strategyParamOverrides;
+    private Map<String, @Size(max = 60) Map<String, Object>> strategyParamOverrides;
+
+    /**
+     * Max concurrent open trades across all strategies in this backtest. When
+     * at the cap, new entry signals are skipped so the book isn't over-allocated
+     * by all strategies firing on the same candle. Null/non-positive = no cap.
+     */
+    @Min(0)
+    @Max(20)
+    private Integer maxConcurrentStrategies;
+
+    /**
+     * Per-strategy capital allocation override for this run only, as a
+     * percentage on the 0–100 scale. Key = strategy code, value = allocation %.
+     * Strategies not in this map fall back to
+     * {@code account_strategy.capital_allocation_pct}. Sum is NOT validated
+     * against 100 — the executor's balance check enforces the ceiling.
+     */
+    @Size(max = 10)
+    private Map<String, BigDecimal> strategyAllocations;
+
+    /**
+     * V57 — per-strategy risk-pct override for this run only, as a fraction
+     * (e.g. 0.05 = 5%). Key = strategy code. Strategies not in this map fall
+     * back to {@code account_strategy.risk_pct}. Range checked at the
+     * resolver: values outside (0, 0.20] are dropped (treated as not set).
+     */
+    @Size(max = 10)
+    private Map<String, BigDecimal> strategyRiskPcts;
+
+    /**
+     * V58 — per-strategy allowLong override for this run only. Wizard-
+     * supplied for ad-hoc research ("test LSR with shorts without flipping
+     * the live row"). Missing keys fall back to the bound
+     * {@code account_strategy.allow_long}, which is the V58 default.
+     */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyAllowLong;
+
+    /** V58 — per-strategy allowShort override. See {@link #strategyAllowLong}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyAllowShort;
+
+    /**
+     * V62 — per-strategy kill-switch gate override for this run. Map of
+     * strategy_code → boolean. Missing key falls back to
+     * {@code account_strategy.kill_switch_gate_enabled}. Lets the wizard
+     * flip the gate for one research run without changing the persisted
+     * row. Same shape as {@link #strategyAllowLong}.
+     */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyKillSwitchOverrides;
+
+    /** V62 — per-strategy regime gate override. See {@link #strategyKillSwitchOverrides}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyRegimeOverrides;
+
+    /** V62 — per-strategy correlation gate override. See {@link #strategyKillSwitchOverrides}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyCorrelationOverrides;
+
+    /** V62 — per-strategy concurrent-cap gate override. See {@link #strategyKillSwitchOverrides}. */
+    @Size(max = 10)
+    private Map<String, Boolean> strategyConcurrentCapOverrides;
+
+    /**
+     * Per-strategy interval for multi-timeframe runs. Key = strategy code,
+     * value = interval string (e.g. "15m"). When non-null, the coordinator
+     * loads one candle stream per unique interval and each strategy fires
+     * only on its own bar closes. Null/empty = all strategies share the
+     * run's primary {@link #interval}.
+     */
+    @Size(max = 10)
+    private Map<String,
+            @Pattern(regexp = "^(5m|15m|1h|4h)$",
+                     message = "per-strategy interval must be one of: 5m / 15m / 1h / 4h")
+            String> strategyIntervals;
+
+    /**
+     * Origin tag — {@code USER} (default) or {@code RESEARCHER}. The
+     * autonomous research-orchestrator stamps {@code RESEARCHER}; the
+     * frontend wizard never sets it. The service defaults missing/blank
+     * values to {@code USER}. Pattern is permissive so the column's CHECK
+     * constraint catches typos at the DB layer.
+     */
+    @Pattern(regexp = "^(USER|RESEARCHER)$",
+             message = "triggeredBy must be USER or RESEARCHER")
+    private String triggeredBy;
 }

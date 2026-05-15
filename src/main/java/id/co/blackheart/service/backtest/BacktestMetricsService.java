@@ -5,11 +5,14 @@ import id.co.blackheart.dto.backtest.BacktestState;
 import id.co.blackheart.model.BacktestEquityPoint;
 import id.co.blackheart.model.BacktestRun;
 import id.co.blackheart.model.BacktestTrade;
+import id.co.blackheart.service.statistics.GeometricReturnCalculator;
 import id.co.blackheart.service.statistics.SharpeStatistics;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
@@ -86,6 +89,8 @@ public class BacktestMetricsService {
 
         BigDecimal maxDrawdownAmount = calculateMaxDrawdownAmount(state);
 
+        GeometricReturnCalculator.Result tradeReturn = computePerTradeReturnStats(trades);
+
         return BacktestExecutionSummary.builder()
                 .finalCapital(finalCapital)
                 .totalTrades(totalTrades)
@@ -105,7 +110,28 @@ public class BacktestMetricsService {
                 .avgWin(avgWin)
                 .avgLoss(avgLoss)
                 .expectancy(expectancy)
+                .avgTradeReturnPct(tradeReturn.avgTradeReturnPct())
+                .geometricReturnPctAtAlloc90(tradeReturn.geometricReturnPct())
                 .build();
+    }
+
+    /**
+     * Per-trade return rate stats — both the simple mean and the geometric
+     * compounding assuming 90% of equity per trade. Geometric compounding is
+     * order-sensitive, so we sort chronologically by entry time before walking
+     * the series. Trades with non-positive notional are skipped (degenerate
+     * setups where pnl/notional is undefined).
+     */
+    private GeometricReturnCalculator.Result computePerTradeReturnStats(List<BacktestTrade> trades) {
+        if (CollectionUtils.isEmpty(trades)) return GeometricReturnCalculator.Result.zero();
+
+        List<GeometricReturnCalculator.TradeReturn> series = trades.stream()
+                .sorted(Comparator.comparing(BacktestTrade::getEntryTime,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(t -> new GeometricReturnCalculator.TradeReturn(
+                        t.getRealizedPnlAmount(), t.getTotalEntryQuoteQty()))
+                .toList();
+        return GeometricReturnCalculator.compute(series);
     }
 
     /**
@@ -145,7 +171,7 @@ public class BacktestMetricsService {
         BigDecimal variance = dailyReturns.stream()
                 .map(r -> r.subtract(mean).pow(2))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .divide(BigDecimal.valueOf(dailyReturns.size() - 1), 10, RoundingMode.HALF_UP);
+                .divide(BigDecimal.valueOf((long) dailyReturns.size() - 1), 10, RoundingMode.HALF_UP);
 
         if (variance.compareTo(BigDecimal.ZERO) == 0) {
             return BigDecimal.ZERO;
@@ -248,7 +274,7 @@ public class BacktestMetricsService {
      * we don't need a parallel field on {@code BacktestState}.
      */
     private BigDecimal calculateMaxDrawdownAmount(BacktestState state) {
-        if (state.getEquityPoints() == null || state.getEquityPoints().isEmpty()) {
+        if (CollectionUtils.isEmpty(state.getEquityPoints())) {
             return BigDecimal.ZERO;
         }
         BigDecimal peak = BigDecimal.ZERO;

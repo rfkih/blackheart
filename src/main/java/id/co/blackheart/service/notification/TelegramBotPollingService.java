@@ -7,9 +7,11 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
@@ -21,6 +23,7 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
+@Profile("!research")
 public class TelegramBotPollingService {
 
     @Value("${telegram.bot.token}")
@@ -53,11 +56,11 @@ public class TelegramBotPollingService {
 
     @PostConstruct
     public void init() {
-        allowedChatIds = chatIdsConfig == null
+        allowedChatIds = !StringUtils.hasText(chatIdsConfig)
                 ? Set.of()
                 : Arrays.stream(chatIdsConfig.split(","))
                         .map(String::trim)
-                        .filter(s -> !s.isBlank())
+                        .filter(StringUtils::hasText)
                         .map(Long::parseLong)
                         .collect(Collectors.toSet());
         if (isBotDisabled()) {
@@ -73,7 +76,7 @@ public class TelegramBotPollingService {
      * token) every few seconds and filled the log with 404s.
      */
     private boolean isBotDisabled() {
-        return botToken == null || botToken.isBlank();
+        return !StringUtils.hasText(botToken);
     }
 
     @Scheduled(fixedDelayString = "${telegram.bot.poll.interval-ms:5000}")
@@ -95,29 +98,31 @@ public class TelegramBotPollingService {
 
             JsonNode updates = root.path("result");
             for (JsonNode update : updates) {
-                long updateId = update.path("update_id").asLong();
-                updateOffset.set(updateId + 1);
-
-                JsonNode message = update.path("message");
-                if (message.isMissingNode()) {
-                    continue;
-                }
-
-                String text = message.path("text").asText("").trim();
-                long chatId = message.path("chat").path("id").asLong();
-
-                if (!allowedChatIds.contains(chatId)) {
-                    log.warn("[TelegramBot] Rejected message from unauthorized chat {}", chatId);
-                    continue;
-                }
-
-                if (text.equalsIgnoreCase(queryKey)) {
-                    log.info("[TelegramBot] IP query key received from chat {}", chatId);
-                    handleIpQuery(chatId);
-                }
+                handleUpdate(update);
             }
         } catch (Exception e) {
             log.error("[TelegramBot] Error polling updates", e);
+        }
+    }
+
+    private void handleUpdate(JsonNode update) {
+        long updateId = update.path("update_id").asLong();
+        updateOffset.set(updateId + 1);
+
+        JsonNode message = update.path("message");
+        if (message.isMissingNode()) return;
+
+        String text = message.path("text").asText("").trim();
+        long chatId = message.path("chat").path("id").asLong();
+
+        if (!allowedChatIds.contains(chatId)) {
+            log.warn("[TelegramBot] Rejected message from unauthorized chat {}", chatId);
+            return;
+        }
+
+        if (text.equalsIgnoreCase(queryKey)) {
+            log.info("[TelegramBot] IP query key received from chat {}", chatId);
+            handleIpQuery(chatId);
         }
     }
 

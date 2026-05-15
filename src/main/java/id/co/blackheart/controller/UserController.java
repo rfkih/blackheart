@@ -8,6 +8,7 @@ import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.user.JwtCookieService;
 import id.co.blackheart.service.user.JwtService;
 import id.co.blackheart.service.user.UserService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -45,9 +46,13 @@ import java.util.UUID;
 @Tag(name = "UserController", description = "User registration, authentication, and profile management")
 public class UserController {
 
+    private static final String MESSAGE_KEY = "message";
+
     private final UserService userService;
     private final JwtService jwtService;
     private final JwtCookieService jwtCookieService;
+    private final id.co.blackheart.service.user.PasswordResetService passwordResetService;
+    private final id.co.blackheart.service.user.EmailVerificationService emailVerificationService;
 
     // ── Public ────────────────────────────────────────────────────────────────
 
@@ -61,6 +66,83 @@ public class UserController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()
                 .responseCode(HttpStatus.CREATED.value() + ResponseCode.SUCCESS.getCode())
                 .data(resp)
+                .build());
+    }
+
+    @PostMapping("/password-reset/request")
+    @Operation(
+            summary = "Request a password-reset token",
+            description = "Always returns 200 — the response is the same whether or not the email matches a real "
+                    + "account, to prevent enumeration. When the email matches, a token is issued and the reset "
+                    + "URL is delivered by email (with a WARN-level URL log on send failure for ops recovery)."
+    )
+    public ResponseEntity<ResponseDto> requestPasswordReset(
+            @Valid @RequestBody id.co.blackheart.dto.request.PasswordResetRequestRequest request) {
+        passwordResetService.requestReset(request.getEmail());
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(java.util.Map.of(
+                        MESSAGE_KEY, "If an account exists with that email, reset instructions have been issued."
+                ))
+                .build());
+    }
+
+    @PostMapping("/password-reset/confirm")
+    @Operation(
+            summary = "Confirm a password-reset token and set a new password",
+            description = "Returns 404 if the token is unknown or already used; 410 if expired; 400 on validation."
+    )
+    public ResponseEntity<ResponseDto> confirmPasswordReset(
+            @Valid @RequestBody id.co.blackheart.dto.request.PasswordResetConfirmRequest request) {
+        try {
+            passwordResetService.confirmReset(request.getToken(), request.getNewPassword());
+            return ResponseEntity.ok(ResponseDto.builder()
+                    .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                    .data(java.util.Map.of(MESSAGE_KEY, "Password updated. You can now log in."))
+                    .build());
+        } catch (id.co.blackheart.service.user.PasswordResetService.ExpiredResetTokenException e) {
+            return ResponseEntity.status(HttpStatus.GONE).body(ResponseDto.builder()
+                    .responseCode(HttpStatus.GONE.value() + ResponseCode.CUSTOM_ERROR.getCode())
+                    .data(java.util.Map.of(MESSAGE_KEY, e.getMessage()))
+                    .build());
+        }
+    }
+
+    @PostMapping("/email/verify")
+    @Operation(
+            summary = "Confirm an email-verification token",
+            description = "Public endpoint — the token itself is the auth. 404 on unknown/used; 410 on expired."
+    )
+    public ResponseEntity<ResponseDto> verifyEmail(
+            @Valid @RequestBody id.co.blackheart.dto.request.EmailVerifyRequest request) {
+        try {
+            emailVerificationService.confirm(request.getToken());
+            return ResponseEntity.ok(ResponseDto.builder()
+                    .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                    .data(java.util.Map.of(MESSAGE_KEY, "Email verified."))
+                    .build());
+        } catch (id.co.blackheart.service.user.EmailVerificationService.ExpiredVerificationTokenException e) {
+            return ResponseEntity.status(HttpStatus.GONE).body(ResponseDto.builder()
+                    .responseCode(HttpStatus.GONE.value() + ResponseCode.CUSTOM_ERROR.getCode())
+                    .data(java.util.Map.of(MESSAGE_KEY, e.getMessage()))
+                    .build());
+        }
+    }
+
+    @PostMapping("/email/resend-verification")
+    @Operation(
+            summary = "Re-issue an email-verification token for the authenticated user",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    public ResponseEntity<ResponseDto> resendVerification(
+            @RequestHeader("Authorization") String authHeader) {
+        java.util.UUID userId = jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
+        emailVerificationService.issueVerificationToken(userId);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(java.util.Map.of(
+                        MESSAGE_KEY, "Verification instructions issued."
+                ))
                 .build());
     }
 
@@ -104,8 +186,8 @@ public class UserController {
     public ResponseEntity<ResponseDto> wsTicket(
             @RequestHeader("Authorization") String authHeader) {
         UUID userId = extractUserId(authHeader);
-        String email = jwtService.extractEmail(authHeader.substring(7));
-        String role = jwtService.extractRole(authHeader.substring(7));
+        String email = jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
+        String role = jwtService.extractRole(AuthHeaderUtil.extractToken(authHeader));
         String ticket = jwtService.generateShortLivedTicket(email, userId, role);
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
@@ -143,6 +225,6 @@ public class UserController {
     // ── Helper ────────────────────────────────────────────────────────────────
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

@@ -2,9 +2,11 @@ package id.co.blackheart.controller;
 
 import id.co.blackheart.dto.request.CreateAccountRequest;
 import id.co.blackheart.dto.request.RotateAccountCredentialsRequest;
+import id.co.blackheart.dto.request.UpdateAccountRequest;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.user.AccountQueryService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -93,6 +95,42 @@ public class AccountController {
                 .build());
     }
 
+    @PatchMapping("/{accountId}")
+    @Operation(
+            summary = "Update an account's label and/or exchange",
+            description = "Partial update - either field can be null to leave unchanged. "
+                    + "Credentials rotate through /credentials, not here.",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    public ResponseEntity<ResponseDto> updateAccount(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountId,
+            @Valid @RequestBody UpdateAccountRequest request) {
+        UUID userId = extractUserId(authHeader);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .data(accountQueryService.updateAccount(userId, accountId, request))
+                .build());
+    }
+
+    @DeleteMapping("/{accountId}")
+    @Operation(
+            summary = "Soft-delete an account the caller owns",
+            description = "Sets is_active=\"0\". Blocked when the account has any "
+                    + "OPEN or PARTIALLY_CLOSED trades. Historical trade / P&L "
+                    + "rows continue to resolve the deleted account by id.",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    public ResponseEntity<ResponseDto> deleteAccount(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable UUID accountId) {
+        UUID userId = extractUserId(authHeader);
+        accountQueryService.softDeleteAccount(userId, accountId);
+        return ResponseEntity.ok(ResponseDto.builder()
+                .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                .build());
+    }
+
     @PatchMapping("/{accountId}/credentials")
     @Operation(
             summary = "Rotate the Binance API key + secret for an account the caller owns",
@@ -113,6 +151,6 @@ public class AccountController {
     }
 
     private UUID extractUserId(String authHeader) {
-        return jwtService.extractUserId(authHeader.substring(7));
+        return jwtService.extractUserId(AuthHeaderUtil.extractToken(authHeader));
     }
 }

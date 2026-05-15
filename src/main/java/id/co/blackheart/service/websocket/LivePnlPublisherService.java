@@ -4,6 +4,7 @@ import id.co.blackheart.dto.response.ActiveTradePnlResponse;
 import id.co.blackheart.service.tradequery.TradePnlQueryService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Profile;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 @Slf4j
 @Service
+@Profile("!research")
 public class LivePnlPublisherService {
 
     private final SimpMessagingTemplate messagingTemplate;

@@ -33,27 +33,35 @@ public class StrategyDailyRealizedCurveService {
     private final StrategyDailyRealizedCurveCalculator calculator;
 
     /**
-     * Self-reference injected lazily to route internal calls through the Spring proxy.
-     * Required so that @Transactional on generateForDate is honoured when called from rebuildRange.
-     * Without this, self-invocation bypasses the proxy and all days share one giant transaction.
+     * Self-reference used to route internal @Transactional calls through the
+     * Spring proxy. Required so that {@code @Transactional} on
+     * {@link #generateForDate} is honoured when called from
+     * {@link #rebuildRange} (per-day commits) and from
+     * {@link #generateForYesterday} — without it self-invocation bypasses the
+     * proxy and the inner method's transactional advice never fires.
+     *
+     * <p>Defaults to {@code this} so unit tests that build the bean without a
+     * Spring context still work; production wires the {@code @Lazy} proxy via
+     * {@link #setSelf}.
      */
-    @Lazy
+    private StrategyDailyRealizedCurveService self = this;
+
     @Autowired
-    private StrategyDailyRealizedCurveService self;
+    public void setSelf(@Lazy StrategyDailyRealizedCurveService self) {
+        this.self = self;
+    }
 
     private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Jakarta");
 
-    @Transactional
     public void generateForYesterday() {
         LocalDate curveDate = LocalDate.now(DEFAULT_ZONE).minusDays(1);
-        generateForDate(curveDate);
+        self.generateForDate(curveDate);
     }
 
     @Transactional
     public void generateForDate(LocalDate curveDate) {
         LocalDateTime startDateTime = curveDate.atStartOfDay(DEFAULT_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
         LocalDateTime endDateTime = curveDate.plusDays(1).atStartOfDay(DEFAULT_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
         log.info("Generating strategy daily realized curve for date={}", curveDate);
 
@@ -119,8 +127,7 @@ public class StrategyDailyRealizedCurveService {
                     curveDate,
                     previousCurve,
                     currentCurve,
-                    aggregate,
-                    now
+                    aggregate
             );
 
             rowsToSave.add(calculatedCurve);

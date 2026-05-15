@@ -8,6 +8,7 @@ import id.co.blackheart.model.Trades;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -56,52 +57,56 @@ public class TradeService {
     public void binanceCloseLongPositionsMarketOrder(
             Account account,
             List<TradePosition> tradePositions,
-            String asset
+            String asset,
+            String exitReason
     ) {
-        if (account == null || tradePositions == null || tradePositions.isEmpty()) {
+        if (account == null || CollectionUtils.isEmpty(tradePositions)) {
             return;
         }
 
-        tradeCloseService.closeGroupedPositions(account, tradePositions, asset, TradeType.LONG);
+        tradeCloseService.closeGroupedPositions(account, tradePositions, asset, TradeType.LONG, exitReason);
     }
 
     @Transactional
     public void binanceCloseShortPositionsMarketOrder(
             Account account,
             List<TradePosition> tradePositions,
-            String asset
+            String asset,
+            String exitReason
     ) {
-        if (account == null || tradePositions == null || tradePositions.isEmpty()) {
+        if (account == null || CollectionUtils.isEmpty(tradePositions)) {
             return;
         }
 
-        tradeCloseService.closeGroupedPositions(account, tradePositions, asset, TradeType.SHORT);
+        tradeCloseService.closeGroupedPositions(account, tradePositions, asset, TradeType.SHORT, exitReason);
     }
 
     @Transactional
     public void binanceCloseLongPositionMarketOrder(
             Account account,
             TradePosition tradePosition,
-            String asset
+            String asset,
+            String exitReason
     ) {
         if (account == null || tradePosition == null) {
             return;
         }
 
-        tradeCloseService.closeSinglePosition(account, tradePosition, asset, TradeType.LONG);
+        tradeCloseService.closeSinglePosition(account, tradePosition, asset, TradeType.LONG, exitReason);
     }
 
     @Transactional
     public void binanceCloseShortPositionMarketOrder(
             Account account,
             TradePosition tradePosition,
-            String asset
+            String asset,
+            String exitReason
     ) {
         if (account == null || tradePosition == null) {
             return;
         }
 
-        tradeCloseService.closeSinglePosition(account, tradePosition, asset, TradeType.SHORT);
+        tradeCloseService.closeSinglePosition(account, tradePosition, asset, TradeType.SHORT, exitReason);
     }
 
     @Transactional

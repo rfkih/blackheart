@@ -120,7 +120,7 @@ public class BookVolTargetingService {
             if (annualized > 0) {
                 double target = account.getBookVolTargetPct().doubleValue();
                 double raw = target / annualized;
-                volScale = Math.max(MIN_VOL_SCALE, Math.min(MAX_VOL_SCALE, raw));
+                volScale = Math.clamp(raw, MIN_VOL_SCALE, MAX_VOL_SCALE);
             }
         }
 

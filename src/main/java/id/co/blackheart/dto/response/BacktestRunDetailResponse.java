@@ -33,5 +33,33 @@ public class BacktestRunDetailResponse {
     /** Reproducibility manifest — git SHA + app version captured at submit. */
     private String gitCommitSha;
     private String appVersion;
+    /** Origin tag — USER (wizard) or RESEARCHER (autonomous orchestrator). */
+    private String triggeredBy;
+    /** Run-level config the wizard needs to faithfully reproduce a run via
+     *  "Re-run with these params". {@code paramSnapshot} only carries
+     *  per-strategy override maps; these fields carry the rest. */
+    private Boolean allowLong;
+    private Boolean allowShort;
+    private Integer maxConcurrentStrategies;
+    private Map<String, BigDecimal> strategyAllocations;
+    /** V57 — per-strategy risk-pct override map. Fractional scale matching
+     *  account_strategy.risk_pct. Null on legacy runs pre-V57. */
+    private Map<String, BigDecimal> strategyRiskPcts;
+    /** V58 — per-strategy allowLong/allowShort override map. Null on legacy
+     *  runs; populated when the operator flipped a strategy's direction in
+     *  the wizard for this run only. */
+    private Map<String, Boolean> strategyAllowLong;
+    private Map<String, Boolean> strategyAllowShort;
+    /** V62 — per-strategy risk-gate override maps. Null on legacy runs;
+     *  populated when the operator flipped a gate in the wizard for this run.
+     *  The frontend re-run flow reads these to round-trip the wizard state. */
+    private Map<String, Boolean> strategyKillSwitchOverrides;
+    private Map<String, Boolean> strategyRegimeOverrides;
+    private Map<String, Boolean> strategyCorrelationOverrides;
+    private Map<String, Boolean> strategyConcurrentCapOverrides;
+    private Map<String, String> strategyIntervals;
+    /** Flat funding-rate stub used at submit time (basis points per 8h),
+     *  applied per-position at close. Null on legacy runs that pre-date V22. */
+    private BigDecimal fundingRateBpsPer8h;
     private BacktestMetricsResponse metrics;
 }

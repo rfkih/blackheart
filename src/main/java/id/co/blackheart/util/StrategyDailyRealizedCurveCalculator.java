@@ -2,12 +2,12 @@ package id.co.blackheart.util;
 
 import id.co.blackheart.dto.DailyPositionAggregateDto;
 import id.co.blackheart.model.StrategyDailyRealizedCurve;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Component
@@ -23,14 +23,13 @@ public class StrategyDailyRealizedCurveCalculator {
             LocalDate curveDate,
             StrategyDailyRealizedCurve previousCurve,
             StrategyDailyRealizedCurve currentCurveOrNull,
-            DailyPositionAggregateDto aggregate,
-            LocalDateTime now
+            DailyPositionAggregateDto aggregate
     ) {
-        BigDecimal previousCumulativePnl = previousCurve != null
+        BigDecimal previousCumulativePnl = ObjectUtils.isNotEmpty(previousCurve)
                 ? safe(previousCurve.getCumulativeRealizedPnlAmount())
                 : ZERO;
 
-        BigDecimal previousIndex = previousCurve != null
+        BigDecimal previousIndex = ObjectUtils.isNotEmpty(previousCurve)
                 ? safe(previousCurve.getCumulativeWeightedReturnIndex())
                 : ONE;
 
@@ -46,10 +45,8 @@ public class StrategyDailyRealizedCurveCalculator {
         BigDecimal cumulativeWeightedReturnIndex = previousIndex.multiply(ONE.add(dailyWeightedReturnPct))
                 .setScale(SCALE, RoundingMode.HALF_UP);
 
-        LocalDateTime createdAt = currentCurveOrNull != null ? currentCurveOrNull.getCreatedTime() : now;
-
         return StrategyDailyRealizedCurve.builder()
-                .strategyDailyRealizedCurveId(currentCurveOrNull != null
+                .strategyDailyRealizedCurveId(ObjectUtils.isNotEmpty(currentCurveOrNull)
                         ? currentCurveOrNull.getStrategyDailyRealizedCurveId()
                         : curveId)
                 .accountId(aggregate.getAccountId())
@@ -69,10 +66,10 @@ public class StrategyDailyRealizedCurveCalculator {
     }
 
     private BigDecimal safe(BigDecimal value) {
-        return value == null ? ZERO : value;
+        return ObjectUtils.isEmpty(value) ? ZERO : value;
     }
 
     private Integer defaultInt(Integer value) {
-        return value == null ? 0 : value;
+        return ObjectUtils.isEmpty(value) ? 0 : value;
     }
 }

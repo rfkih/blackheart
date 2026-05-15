@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * JPA {@link AttributeConverter} that transparently encrypts String columns at rest using
@@ -32,7 +33,7 @@ import java.util.Base64;
  *
  * <p><b>Initialization:</b> {@link EncryptionKeyInitializer} installs the key at Spring
  * bean-ready time. JPA converters are instantiated by Hibernate (not Spring) so they cannot
- * be {@code @Autowired} — a thread-safe {@code volatile} static field is the mechanism.
+ * be {@code @Autowired} — a static {@code AtomicReference<SecretKey>} is the mechanism.
  */
 @Converter
 @Slf4j
@@ -44,7 +45,7 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
     public static final String ENVELOPE_PREFIX = "enc:v1:";
 
     private static final SecureRandom RNG = new SecureRandom();
-    private static volatile SecretKey KEY;
+    private static final AtomicReference<SecretKey> KEY = new AtomicReference<>();
 
     /**
      * Installs the symmetric key. Called exactly once at application startup by
@@ -56,11 +57,11 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
                     "EncryptedStringConverter key must be exactly 32 bytes (AES-256). Got "
                             + (keyBytes == null ? "null" : keyBytes.length) + " bytes.");
         }
-        KEY = new SecretKeySpec(keyBytes, "AES");
+        KEY.set(new SecretKeySpec(keyBytes, "AES"));
     }
 
     public static boolean isKeyInstalled() {
-        return KEY != null;
+        return KEY.get() != null;
     }
 
     @Override
@@ -121,7 +122,7 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
     }
 
     private static SecretKey requireKey() {
-        SecretKey k = KEY;
+        SecretKey k = KEY.get();
         if (k == null) {
             throw new IllegalStateException(
                     "EncryptedStringConverter has no key installed. "

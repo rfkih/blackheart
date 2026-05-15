@@ -99,6 +99,14 @@ public class StrategyRuntimeConfig {
         return Long.valueOf(String.valueOf(value));
     }
 
+    /**
+     * Lookup-style getter — returns {@code null} when the key is absent so
+     * callers can distinguish "unset" from {@code false}. Matches the contract
+     * of {@link #getInteger(String)}, {@link #getLong(String)}, etc. Use
+     * {@link #isLongAllowed()} / {@link #isShortAllowed()} for the
+     * defaulted-to-false reads.
+     */
+    @SuppressWarnings("java:S2447")
     public Boolean getBoolean(String key) {
         Object value = get(key);
         if (value == null) {

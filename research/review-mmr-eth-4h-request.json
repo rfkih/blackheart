@@ -1,0 +1,10 @@
+{
+  "target_kind": "plan",
+  "plan": {
+    "strategy_code": "MMR",
+    "axis_names": ["extremeAtrMult", "stopAtrBuffer", "rsiOversoldMax"],
+    "hypothesis_id": "aff00b73-f72a-48ab-a7a1-f7453e8664de",
+    "plan_path": "research/RESEARCH_PLAN_2026-05-07l.md",
+    "notes": "MMR ETHUSDT 4h null-screen. Hypothesis: 4h bars naturally provide 48h hold time (maxBarsHeld=12 default = 12 bars x 4h = 48h), adequate for ETH mean-reversion completion without parameter extension. Mechanistically opposite to VBO. 3D: extremeAtrMult x stopAtrBuffer x rsiOversoldMax."
+  }
+}

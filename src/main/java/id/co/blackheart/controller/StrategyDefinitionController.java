@@ -5,6 +5,7 @@ import id.co.blackheart.dto.request.UpdateStrategyDefinitionRequest;
 import id.co.blackheart.dto.response.ResponseDto;
 import id.co.blackheart.service.strategy.StrategyDefinitionService;
 import id.co.blackheart.service.user.JwtService;
+import id.co.blackheart.util.AuthHeaderUtil;
 import id.co.blackheart.util.ResponseCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -39,12 +40,25 @@ public class StrategyDefinitionController {
     private final JwtService jwtService;
 
     @GetMapping
-    @Operation(summary = "List every strategy definition",
+    @Operation(summary = "List strategy definitions — paginated, filterable, sortable",
                security = @SecurityRequirement(name = "bearerAuth"))
-    public ResponseEntity<ResponseDto> list() {
+    public ResponseEntity<ResponseDto> list(
+            @RequestParam(name = "query", required = false) String query,
+            @RequestParam(name = "sort", required = false) String sort,
+            @RequestParam(name = "page", required = false) Integer page,
+            @RequestParam(name = "size", required = false) Integer size) {
+        // No pagination params at all → preserve the legacy "every row, no
+        // envelope" shape so existing callers (strategy pickers, etc.) keep
+        // working. The /research panel always passes page/size.
+        if (query == null && sort == null && page == null && size == null) {
+            return ResponseEntity.ok(ResponseDto.builder()
+                    .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
+                    .data(service.list())
+                    .build());
+        }
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
-                .data(service.list())
+                .data(service.listPaged(query, sort, page == null ? 0 : page, size == null ? 50 : size))
                 .build());
     }
 
@@ -65,7 +79,7 @@ public class StrategyDefinitionController {
     public ResponseEntity<ResponseDto> create(
             @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody CreateStrategyDefinitionRequest request) {
-        String actor = jwtService.extractEmail(authHeader.substring(7));
+        String actor = jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
         return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()
                 .responseCode(HttpStatus.CREATED.value() + ResponseCode.SUCCESS.getCode())
                 .data(service.create(request, actor))
@@ -80,7 +94,7 @@ public class StrategyDefinitionController {
             @PathVariable UUID id,
             @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody UpdateStrategyDefinitionRequest request) {
-        String actor = jwtService.extractEmail(authHeader.substring(7));
+        String actor = jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(service.update(id, request, actor))
@@ -94,7 +108,7 @@ public class StrategyDefinitionController {
     public ResponseEntity<ResponseDto> deprecate(
             @PathVariable UUID id,
             @RequestHeader("Authorization") String authHeader) {
-        String actor = jwtService.extractEmail(authHeader.substring(7));
+        String actor = jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
         return ResponseEntity.ok(ResponseDto.builder()
                 .responseCode(HttpStatus.OK.value() + ResponseCode.SUCCESS.getCode())
                 .data(service.deprecate(id, actor))

@@ -60,4 +60,22 @@ public class CreateAccountStrategyRequest {
 
     /** Optional — defaults to false if omitted. */
     private Boolean enabled;
+
+    /**
+     * V55 — risk-based sizing toggle for LONG entries. When TRUE the strategy
+     * sizes off {@link #riskPct} with {@link #capitalAllocationPct} acting as
+     * the notional cap; when FALSE it uses the legacy direct-allocation
+     * sizing. Optional — when omitted the service defaults to TRUE so new
+     * presets adopt the unified risk model.
+     */
+    private Boolean useRiskBasedSizing;
+
+    /**
+     * V55 — per-trade risk as a fraction of cash balance. Range (0, 0.20].
+     * Used only when {@link #useRiskBasedSizing} is TRUE. Optional — when
+     * omitted the service defaults to 0.0500 (5%).
+     */
+    @DecimalMin("0.0001")
+    @DecimalMax("0.20")
+    private BigDecimal riskPct;
 }
