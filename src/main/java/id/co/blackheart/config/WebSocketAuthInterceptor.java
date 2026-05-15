@@ -7,6 +7,7 @@ import id.co.blackheart.repository.BacktestRunRepository;
 import id.co.blackheart.service.user.JwtService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -77,12 +78,12 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
     private void handleConnect(StompHeaderAccessor accessor) {
         String token = extractToken(accessor);
-        if (token == null) {
+        if (ObjectUtils.isEmpty(token)) {
             throw new IllegalArgumentException("STOMP CONNECT rejected — missing Authorization header");
         }
         try {
             String email = jwtService.extractEmail(token);
-            if (email == null || !jwtService.isTokenValid(token, email)) {
+            if (ObjectUtils.isEmpty(email) || !jwtService.isTokenValid(token, email)) {
                 throw new IllegalArgumentException("STOMP CONNECT rejected — invalid token");
             }
             UUID userId = jwtService.extractUserId(token);
@@ -108,13 +109,13 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
 
     private void handleSubscribe(StompHeaderAccessor accessor) {
         StompPrincipal principal = (accessor.getUser() instanceof StompPrincipal p) ? p : null;
-        if (principal == null) {
+        if (ObjectUtils.isEmpty(principal)) {
             log.warn("STOMP SUBSCRIBE rejected — no authenticated principal on session");
             throw new AccessDeniedException("STOMP SUBSCRIBE rejected — unauthenticated");
         }
 
         String destination = accessor.getDestination();
-        if (destination == null) {
+        if (ObjectUtils.isEmpty(destination)) {
             return;
         }
 
@@ -142,7 +143,7 @@ public class WebSocketAuthInterceptor implements ChannelInterceptor {
         }
         Optional<Account> account = accountRepository.findByAccountId(accountId);
         if (account.isEmpty()
-                || account.get().getUserId() == null
+                || ObjectUtils.isEmpty(account.get().getUserId())
                 || !account.get().getUserId().equals(principal.getUserId())) {
             log.warn(
                     "STOMP SUBSCRIBE rejected — account not owned by caller | destination={} callerUserId={}",

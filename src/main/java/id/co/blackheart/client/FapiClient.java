@@ -4,6 +4,7 @@ import id.co.blackheart.model.FundingRate;
 import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutException;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Value;
@@ -97,8 +98,8 @@ public class FapiClient {
                             .path(fundingRatePath)
                             .queryParam("symbol", symbol)
                             .queryParam("limit", boundedLimit);
-                    if (startTimeMs != null) b.queryParam("startTime", startTimeMs);
-                    if (endTimeMs != null) b.queryParam("endTime", endTimeMs);
+                    if (ObjectUtils.isNotEmpty(startTimeMs)) b.queryParam("startTime", startTimeMs);
+                    if (ObjectUtils.isNotEmpty(endTimeMs)) b.queryParam("endTime", endTimeMs);
                     return b.build();
                 })
                 .retrieve()
@@ -153,7 +154,7 @@ public class FapiClient {
 
     private static boolean hasTransientCause(Throwable t) {
         Throwable cause = t.getCause();
-        while (cause != null) {
+        while (ObjectUtils.isNotEmpty(cause)) {
             if (cause instanceof ReadTimeoutException
                     || cause instanceof TimeoutException
                     || cause instanceof SocketException

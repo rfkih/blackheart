@@ -15,6 +15,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -104,7 +105,7 @@ public class AccountStrategyController {
             @PathVariable UUID accountStrategyId,
             @RequestBody(required = false) CloneAccountStrategyRequest request) {
         UUID userId = extractUserId(authHeader);
-        UUID targetAccountId = request == null ? null : request.getTargetAccountId();
+        UUID targetAccountId = ObjectUtils.isEmpty(request) ? null : request.getTargetAccountId();
         String createdBy = jwtService.extractEmail(AuthHeaderUtil.extractToken(authHeader));
         UUID newId = accountStrategyCloneService.clone(userId, accountStrategyId, targetAccountId, createdBy);
         return ResponseEntity.status(HttpStatus.CREATED).body(ResponseDto.builder()

@@ -1,5 +1,7 @@
 package id.co.blackheart.util;
 
+import org.apache.commons.lang3.ObjectUtils;
+
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -10,7 +12,7 @@ public final class DateTimeUtil {
     }
 
     public static long toEpochMillis(LocalDateTime dateTime) {
-        if (dateTime == null) {
+        if (ObjectUtils.isEmpty(dateTime)) {
             throw new IllegalArgumentException("dateTime must not be null");
         }
 
@@ -21,10 +23,10 @@ public final class DateTimeUtil {
     }
 
     public static long toEpochMillis(LocalDateTime dateTime, ZoneId zoneId) {
-        if (dateTime == null) {
+        if (ObjectUtils.isEmpty(dateTime)) {
             throw new IllegalArgumentException("dateTime must not be null");
         }
-        if (zoneId == null) {
+        if (ObjectUtils.isEmpty(zoneId)) {
             throw new IllegalArgumentException("zoneId must not be null");
         }
 
@@ -35,7 +37,7 @@ public final class DateTimeUtil {
     }
 
     public static long toEpochSeconds(LocalDateTime dateTime) {
-        if (dateTime == null) {
+        if (ObjectUtils.isEmpty(dateTime)) {
             throw new IllegalArgumentException("dateTime must not be null");
         }
 
@@ -46,7 +48,7 @@ public final class DateTimeUtil {
     }
 
     public static long toEpochSecondsUtc(LocalDateTime dateTime) {
-        if (dateTime == null) {
+        if (ObjectUtils.isEmpty(dateTime)) {
             throw new IllegalArgumentException("dateTime must not be null");
         }
 
@@ -54,7 +56,7 @@ public final class DateTimeUtil {
     }
 
     public static long toEpochMillisUtc(LocalDateTime dateTime) {
-        if (dateTime == null) {
+        if (ObjectUtils.isEmpty(dateTime)) {
             throw new IllegalArgumentException("dateTime must not be null");
         }
 

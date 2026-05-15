@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -110,7 +111,7 @@ public class AlertEventController {
     ) {
         // Default cutoff: last 24h. Cheap query, prevents an "everything
         // since the dawn of time" count on a fresh client install.
-        LocalDateTime effectiveSince = since != null ? since : LocalDateTime.now().minusDays(1);
+        LocalDateTime effectiveSince = ObjectUtils.isNotEmpty(since) ? since : LocalDateTime.now().minusDays(1);
         Integer rank = severityRank(minSeverity);
         long count = alertEventRepository.countUnread(effectiveSince, rank);
         return ResponseEntity.ok(ResponseDto.builder()
@@ -143,7 +144,7 @@ public class AlertEventController {
         row.put("suppressed", e.isSuppressed());
         row.put("sentTelegram", e.getSentTelegram());
         row.put("sentEmail", e.getSentEmail());
-        row.put(CREATED_AT, e.getCreatedAt() == null ? null : e.getCreatedAt().toString());
+        row.put(CREATED_AT, ObjectUtils.isEmpty(e.getCreatedAt()) ? null : e.getCreatedAt().toString());
         return row;
     }
 }

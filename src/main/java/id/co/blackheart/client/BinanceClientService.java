@@ -11,6 +11,7 @@ import id.co.blackheart.exception.ServiceUnavailableException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -148,7 +149,7 @@ public class BinanceClientService {
             try {
                 BinancePriceResponse r =
                         binanceRestTemplate.getForObject(url, BinancePriceResponse.class);
-                if (r != null) {
+                if (ObjectUtils.isNotEmpty(r)) {
                     putParsedPrice(symbol, r.getPrice(), result);
                 }
             } catch (HttpStatusCodeException ignored) {
@@ -162,19 +163,19 @@ public class BinanceClientService {
     }
 
     private Map<String, BigDecimal> parsePriceArray(BinancePriceResponse[] response) {
-        if (response == null) {
+        if (ObjectUtils.isEmpty(response)) {
             return Collections.emptyMap();
         }
         Map<String, BigDecimal> result = new HashMap<>();
         for (BinancePriceResponse r : response) {
-            if (r == null || r.getSymbol() == null) continue;
+            if (ObjectUtils.isEmpty(r) || ObjectUtils.isEmpty(r.getSymbol())) continue;
             putParsedPrice(r.getSymbol(), r.getPrice(), result);
         }
         return result;
     }
 
     private void putParsedPrice(String symbol, String priceStr, Map<String, BigDecimal> sink) {
-        if (priceStr == null) return;
+        if (ObjectUtils.isEmpty(priceStr)) return;
         try {
             sink.put(symbol, new BigDecimal(priceStr));
         } catch (NumberFormatException ex) {
